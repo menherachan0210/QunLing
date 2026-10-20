@@ -19,7 +19,7 @@ Windows 与 Linux 使用同一套 Linux amd64 容器。建议预留 **8 GiB 内�
 
 ### Linux：服务器部署
 
-安装 [Docker Engine](https://docs.docker.com/engine/install/) 与 [Compose v2](https://docs.docker.com/compose/install/linux/)，然后下载源码并启动：
+先通过 `ssh 用户名@服务器IP` 登录服务器，安装 [Docker Engine](https://docs.docker.com/engine/install/) 与 [Compose v2](https://docs.docker.com/compose/install/linux/)，然后**在服务器终端**下载源码并启动：
 
 ```bash
 git clone https://github.com/menherachan0210/QunLing.git
@@ -27,13 +27,37 @@ cd QunLing
 bash bot.sh up
 ```
 
-也可以解压同一个 ZIP 后在目录中执行 `bash bot.sh up`。启动结束会显示专属设置链接。服务器默认只监听回环地址：在自己的电脑运行以下命令，并保持终端打开：
+也可以解压同一个 ZIP 后在目录中执行 `bash bot.sh up`。如果当前用户没有 Docker 权限，改用 `sudo bash bot.sh up`。启动结束会显示包含 `#token=` 的专属设置链接；打开方法见下一节。
 
-```bash
-ssh -N -L 5310:127.0.0.1:5310 用户@服务器
+### 服务器管理页：获取带令牌的链接
+
+**第一步：在自己的电脑上建立 SSH 隧道。** Windows 可以打开 CMD 或 PowerShell，macOS／Linux 打开终端，将用户名和服务器 IP 换成自己的：
+
+```text
+ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:5310:127.0.0.1:5310 用户名@服务器IP
 ```
 
-然后在电脑浏览器打开启动命令输出的完整设置链接。`bash bot.sh url` 可以再次查看链接。
+使用密码登录时，输入过程中不会显示字符，输完按回车即可。连接成功后窗口保持等待是正常的，**保持此窗口打开**。这条命令只负责端口转发，不会显示设置令牌；已有同端口的 SSH 隧道时直接复用，无需重复建立。
+
+**第二步：在电脑上再开一个终端，获取专属链接。** 下面以服务器项目目录为 `~/QunLing` 为例；其他安装位置请修改 `cd` 后的路径：
+
+```text
+ssh -t 用户名@服务器IP "cd ~/QunLing && sudo bash bot.sh url"
+```
+
+如果已经在服务器终端，也可以进入项目目录后直接执行 `sudo bash bot.sh url`。有 Docker 权限的用户可以省略 `sudo`。获取链接不需要重新部署或重启机器人。
+
+命令会输出类似下面的地址（这是格式示例，令牌以你自己的命令输出为准）：
+
+```text
+http://127.0.0.1:5310/#token=YOUR_SETUP_TOKEN
+```
+
+**第三步：复制完整链接，在自己电脑的浏览器打开。** 必须包含 `#token=` 及其后面的内容。页面解锁后再填写 AI 服务、扫码登录 QQ；SSH 隧道窗口继续保持打开。
+
+如果只看到“打开专属设置链接／设置令牌”，说明当前页面没有通过认证。重新获取并打开完整链接，或把链接中 `#token=` 后面的字符串填入“设置令牌”，点击“连接”。这里填写的是自动生成的管理令牌，不是 AI API Key 或服务器密码。本机 Windows 容器部署直接双击 `Open-Bot.cmd`，也会自动打开带令牌的链接。
+
+页面读取专属链接后会从地址栏移除令牌；重新打开普通地址仍可能要求认证，可再次使用原专属链接。请私下保存完整链接，不要发到公开聊天、Issue 或截图中。
 
 ### 完成设置
 
