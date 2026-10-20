@@ -1,0 +1,29 @@
+"""Local HTTP liveness checks that need no administrative credentials."""
+
+from __future__ import annotations
+
+import json
+import sys
+from urllib.error import HTTPError
+from urllib.request import ProxyHandler, build_opener
+
+
+def check(role: str) -> bool:
+    port = {"app": 5300, "wizard": 5310}[role]
+    opener = build_opener(ProxyHandler({}))
+    try:
+        with opener.open(f"http://127.0.0.1:{port}/healthz", timeout=3) as response:
+            if response.status != 200:
+                return False
+            body = json.loads(response.read(64 * 1024))
+            if not isinstance(body, dict):
+                return False
+            if role == "wizard":
+                return body.get("status") == "ok"
+            return body.get("code") == 0 and body.get("msg") == "ok"
+    except (HTTPError, OSError, ValueError, TypeError):
+        return False
+
+
+if __name__ == "__main__":
+    raise SystemExit(0 if check(sys.argv[1]) else 1)

@@ -1,0 +1,87 @@
+name: Public deployment checks
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-deployment-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-tests:
+    name: Public source and setup tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Install offline test dependencies
+        run: python -m pip install pytest PyYAML requests qrcode Pillow
+      - name: Check publishable files for private runtime state and credentials
+        run: python Check-Release.py
+      - name: Test setup, source isolation and patch installer
+        run: python -m pytest tests/test_public*.py tests/test_runtime_patches.py tests/test_release_check.py -q
+
+  linux-compose:
+    name: Linux image and fresh initialization
+    needs: public-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      COMPOSE_PROJECT_NAME: qqbot-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      COMPOSE_FILE: deploy/compose/compose.yaml
+      # A build record can include logs; the console is sufficient for this job.
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: Build and load the actual Linux image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: deploy/compose/Dockerfile
+          platforms: linux/amd64
+          tags: qq-ai-bot-local:4.11.0
+          load: true
+          push: false
+          cache-from: type=gha,scope=qqbot-linux-amd64
+          cache-to: type=gha,scope=qqbot-linux-amd64,mode=min
+      - name: Start a fresh deployment
+        run: |
+          docker compose pull napcat
+          docker compose up -d --no-build --wait --wait-timeout 600
+      - name: Install plugins and configure fake models without model calls or QQ login
+        run: >-
+          docker compose exec -T wizard python
+          /opt/qq-ai-bot/deploy/compose/smoke.py --timeout 1200 --configure
+          --save /tmp/qqbot-compose-smoke.json
+      - name: Rerun initialization and restart all persistent services
+        run: |
+          docker compose run --rm --no-deps init
+          docker compose restart app wizard napcat
+          docker compose up -d --no-build --no-recreate --wait --wait-timeout 600
+      - name: Verify restart preserves credentials, plugins and configured resource IDs
+        run: >-
+          docker compose exec -T wizard python
+          /opt/qq-ai-bot/deploy/compose/smoke.py --timeout 600
+          --compare /tmp/qqbot-compose-smoke.json
+      - name: Report container status without tokens or login QR output
+        if: failure()
+        run: docker compose ps --all
+      - name: Remove this job's temporary containers and volumes
+        if: always()
+        run: docker compose down --volumes --remove-orphans --timeout 30

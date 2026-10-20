@@ -1,3 +1,4 @@
+# Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
 from __future__ import annotations
 
 import pytest

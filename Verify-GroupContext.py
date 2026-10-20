@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import ast
 import copy
+import hashlib
 from datetime import datetime, timezone
 import io
 import json
@@ -25,6 +26,7 @@ from PIL import Image, ImageDraw, ImageFont
 import yaml
 
 from local_api import LocalAPI, STATE
+from chat_style import STYLE_PATH
 
 ROOT = Path(__file__).resolve().parent
 PLUGIN_ROOT = ROOT / "custom-plugins" / "QQGroupContext"
@@ -42,6 +44,16 @@ SOURCE_URLS = (
     "https://synthetic.invalid/page-a.png",
     "https://synthetic.invalid/page-b.png",
 )
+DEFAULT_CASES = ("discussion", "images", "greeting")
+EVIDENCE_CASES = ("visual_contrast", "attribution", "ambiguous")
+QUESTIONS = {
+    "discussion": "他们说的几部漫画，你觉得哪部适合我？",
+    "images": "上面两张介绍都说了什么？我想轻松点，哪部合适？保留原文书名。",
+    "greeting": "你好",
+    "visual_contrast": "锐评一下甲刚才那句话。",
+    "attribution": "刚才是谁说周六要去旧书市？是我吗？",
+    "ambiguous": "乙刚说“真厉害”，他是什么意思？",
+}
 
 
 def schemas_and_guidance():
@@ -99,7 +111,7 @@ def synthetic_images():
         ("#ac2735", "#194da3"),
         (
             ("SPRING NOTES", "LIGHT COMEDY", "SHORT STORIES"),
-            ("IRON CHRONICLE", "DARK DRAMA", "LONG SERIES"),
+            ("IRON CHRONICLE", "DARK WAR DRAMA", "LONG SERIES"),
         ),
     ):
         with Image.new("RGB", (1200, 900), color) as picture:
@@ -189,6 +201,27 @@ def history_fixture(case, timestamp):
             row(102, 22, "虚构群友乙", "", 90, [SOURCE_URLS[1]]),
             row(103, 33, "虚构提问者", "有点难选。", 60),
         ]
+    elif case == "visual_contrast":
+        rows = [
+            row(101, 11, "虚构群友甲", "", 120, [SOURCE_URLS[0]]),
+            row(102, 22, "虚构群友乙", "", 90, [SOURCE_URLS[1]]),
+            row(103, 11, "虚构群友甲", "两本都是小甜饼。", 60),
+        ]
+    elif case == "attribution":
+        rows = [
+            row(
+                101,
+                11,
+                "虚构群友甲",
+                "我周六准备去旧书市找画集。",
+                120,
+                [SOURCE_URLS[0]],
+            ),
+            row(102, 22, "虚构群友乙", "我周末留在家里拼模型。", 90, [SOURCE_URLS[1]]),
+            row(103, 33, "虚构提问者", "我还没有安排周末行程。", 60),
+        ]
+    elif case == "ambiguous":
+        rows = [row(103, 22, "虚构群友乙", "真厉害。", 60)]
     else:
         rows = []
     return {"messages": rows, "window_seconds": 3600, "truncated": False}
@@ -247,12 +280,11 @@ class SyntheticPlugin:
         return Message(role="assistant", content=message.content or "")
 
 
-async def run_case(client, model_uuid, case, schemas, guidance, fixtures):
-    questions = {
-        "discussion": "他们说的几部漫画，你觉得哪部适合我？",
-        "images": "上面两张介绍都说了什么？我想轻松点，哪部合适？保留原文书名。",
-        "greeting": "你好",
-    }
+async def run_case(
+    client, model_uuid, case, schemas, guidance, fixtures, *, style=None
+):
+    if style is None:
+        style = STYLE_PATH.read_text(encoding="utf-8").strip()
     timestamp = int(time.time())
     context = QueryContext(
         "synthetic-owner",
@@ -264,6 +296,7 @@ async def run_case(client, model_uuid, case, schemas, guidance, fixtures):
         "104",
         timestamp,
         time.monotonic(),
+        current_question=QUESTIONS[case],
     )
     plugin = SyntheticPlugin(
         client, model_uuid, history_fixture(case, timestamp), context, fixtures
@@ -272,13 +305,15 @@ async def run_case(client, model_uuid, case, schemas, guidance, fixtures):
         {
             "role": "system",
             "content": "你是群聊助手，使用简体中文自然回答，简洁说明依据。\n"
+            + style
+            + "\n"
             + guidance,
         },
-        {"role": "user", "content": questions[case]},
+        {"role": "user", "content": QUESTIONS[case]},
     ]
     report = {
         "case": case,
-        "question": questions[case],
+        "question": QUESTIONS[case],
         "tool_calls": [],
         "chat_usage": [],
         "chat_requests": 0,
@@ -400,7 +435,7 @@ async def run_case(client, model_uuid, case, schemas, guidance, fixtures):
                 ),
             }
         )
-    else:
+    elif case == "greeting":
         checks.update(
             {
                 "no_history_for_greeting": not report["tool_calls"]
@@ -408,8 +443,53 @@ async def run_case(client, model_uuid, case, schemas, guidance, fixtures):
                 "no_vision_for_greeting": plugin.vision_requests == 0,
             }
         )
+    elif case == "visual_contrast":
+        checks.update(
+            {
+                "read_context_before_vision": bool(context_calls and image_calls)
+                and context_calls[0]["round"] < image_calls[0]["round"],
+                "two_images_read_once": plugin.image_loads == 2
+                and plugin.vision_requests == 1,
+                "single_history_snapshot": plugin.platform_reads == 1,
+            }
+        )
+    elif case == "attribution":
+        checks.update(
+            {
+                "read_context": bool(context_calls),
+                "single_history_snapshot": plugin.platform_reads == 1,
+                "no_unneeded_vision": plugin.vision_requests == 0
+                and plugin.image_loads == 0,
+            }
+        )
+    elif case == "ambiguous":
+        checks.update(
+            {
+                "checked_missing_context": plugin.platform_reads == 1,
+                "no_unneeded_vision": plugin.vision_requests == 0
+                and plugin.image_loads == 0,
+            }
+        )
     report["checks"] = checks
-    report["passed"] = all(checks.values()) and "error_type" not in report
+    report["routing_passed"] = all(checks.values()) and "error_type" not in report
+    report["usage_total"] = {
+        key: sum(
+            usage.get(key, 0) for usage in report["chat_usage"] + plugin.vision_usage
+        )
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+    }
+    if case in EVIDENCE_CASES:
+        report["semantic_review"] = {
+            "status": "pending_semantic_review",
+            "criteria": {
+                "visual_contrast": "结合一轻松短篇、一沉重战争长篇识别原话与画面的反差；评价甲的说法，不改写成建议、不给提问者安上该观点。",
+                "attribution": "明确去旧书市的是甲而不是本轮提问者；不把无关图片拉进解释。",
+                "ambiguous": "资料不足以确定赞扬还是反话，保留歧义或简短询问，不编造前情和动机。",
+            }[case],
+        }
+        report["passed"] = None  # Routing assertions do not grade meaning.
+    else:
+        report["passed"] = report["routing_passed"]
     return report
 
 
@@ -421,10 +501,20 @@ async def main():
         help="Validate synthetic inputs offline; no credentials or paid calls.",
     )
     parser.add_argument(
-        "--case", choices=["all", "discussion", "images", "greeting"], default="all"
+        "--case",
+        choices=["all", "evidence", *DEFAULT_CASES, *EVIDENCE_CASES],
+        default="all",
     )
     args = parser.parse_args()
+    cases = (
+        list(DEFAULT_CASES)
+        if args.case == "all"
+        else list(EVIDENCE_CASES)
+        if args.case == "evidence"
+        else [args.case]
+    )
     schemas, guidance = schemas_and_guidance()
+    style = STYLE_PATH.read_text(encoding="utf-8").strip()
     fixtures = synthetic_images()
     if args.check_only:
         assert len(schemas) == 2 and isinstance(guidance, str) and guidance
@@ -443,6 +533,12 @@ async def main():
             ]
         )
         assert converted[0]["content"][0]["type"] == "image_url"
+        assert style
+        assert "message_refs" in schemas[1]["function"]["parameters"]["properties"]
+        for case in cases:
+            assert QUESTIONS[case]
+            history = history_fixture(case, 2_000_000_000)
+            assert all(row["time"] < 2_000_000_000 for row in history["messages"])
         print(
             json.dumps(
                 {
@@ -450,6 +546,8 @@ async def main():
                     "tool_schemas": 2,
                     "synthetic_images": 2,
                     "paid_calls": 0,
+                    "cases": cases,
+                    "current_chat_style": True,
                 }
             )
         )
@@ -465,10 +563,16 @@ async def main():
         "real_model_calls": True,
         "automatic_retries": 0,
         "maximum_chat_rounds_per_case": MAX_ROUNDS,
+        "chat_style_sha256": hashlib.sha256(style.encode()).hexdigest(),
+        "guidance_sha256": hashlib.sha256(guidance.encode()).hexdigest(),
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
         "cases": [],
     }
-    report_path = STATE / "group-context-verification.json"
+    report_path = STATE / (
+        "group-context-evidence-verification.json"
+        if any(case in EVIDENCE_CASES for case in cases)
+        else "group-context-verification.json"
+    )
 
     def save():
         STATE.mkdir(exist_ok=True)
@@ -501,11 +605,6 @@ async def main():
                 timeout=150,
                 http_client=transport,
             ) as client:
-                cases = (
-                    ["discussion", "images", "greeting"]
-                    if args.case == "all"
-                    else [args.case]
-                )
                 for case in cases:
                     result = await run_case(
                         client,
@@ -514,6 +613,7 @@ async def main():
                         schemas,
                         guidance,
                         fixtures,
+                        style=style,
                     )
                     report["cases"].append(result)
                     save()
@@ -521,13 +621,26 @@ async def main():
                         json.dumps(
                             {
                                 "case": case,
-                                "passed": result["passed"],
+                                "routing_passed": result["routing_passed"],
                                 "chat_requests": result["chat_requests"],
                                 "vision_requests": result["vision_requests"],
-                            }
+                                "tool_route": [
+                                    call["name"] for call in result["tool_calls"]
+                                ],
+                                "answer": result["answer"],
+                                "usage": result["usage_total"],
+                            },
+                            ensure_ascii=False,
                         )
                     )
-        report["passed"] = all(case["passed"] for case in report["cases"])
+        report["routing_passed"] = all(
+            case["routing_passed"] for case in report["cases"]
+        )
+        report["passed"] = (
+            None
+            if any(case["passed"] is None for case in report["cases"])
+            else all(case["passed"] for case in report["cases"])
+        )
     except Exception as exc:
         report["error_type"] = type(exc).__name__
         report["passed"] = False
@@ -538,12 +651,13 @@ async def main():
             {
                 "passed": report["passed"],
                 "synthetic_cases": len(report["cases"]),
-                "report": ".local/group-context-verification.json",
+                "report": ".local/" + report_path.name,
+                "routing_passed": report.get("routing_passed", False),
                 "qq_messages_sent": 0,
             }
         )
     )
-    return 0 if report["passed"] else 1
+    return 0 if report.get("routing_passed") else 1
 
 
 if __name__ == "__main__":

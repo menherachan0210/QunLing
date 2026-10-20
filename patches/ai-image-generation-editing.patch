@@ -1,7 +1,12 @@
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
-@@ -175,4 +175,7 @@
+@@ -1,3 +1,4 @@
++# Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
+ # Byte-compiled / optimized / DLL files
+ __pycache__/
+ *.py[cod]
+@@ -175,4 +176,7 @@
  
  /data/
  
@@ -14,7 +19,9 @@ diff --git a/.gitignore b/.gitignore
 diff --git a/README.md b/README.md
 --- a/README.md
 +++ b/README.md
-@@ -1,3 +1,5 @@
+@@ -1,3 +1,7 @@
++> Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
++
 +> This installation is a local extension of the official plugin. See [local behavior and configuration](README_LOCAL.md).
 +
  # AI Image Generation Plugin
@@ -90,17 +97,17 @@ new file mode 100644
 diff --git a/SHARED_RUNTIME.md b/SHARED_RUNTIME.md
 --- a/SHARED_RUNTIME.md
 +++ b/SHARED_RUNTIME.md
-@@ -1,34 +1,23 @@
+@@ -1,34 +1,25 @@
 -# Shared runtime source candidate (SDK >=0.7.4)
-+# Shared runtime behavior of the local extension
++> Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
  
 -This source declares `sharedRuntime: shared-runtime-v1` and `componentModel: stateless-v1`.
 -It is source-reviewed for the multi-tenant contract; it is **not certified** and makes no
 -claim of live tenant acceptance.
-+This source remains based on the official stateless shared-runtime candidate. It is a local deployment customization, not a marketplace certification.
++# Shared runtime behavior of the local extension
  
 -## What is per invocation
-+## Per invocation
++This source remains based on the official stateless shared-runtime candidate. It is a local deployment customization, not a marketplace certification.
  
 -- `openai_api_key`, `api_base_url`, `model_name`, and `image_size` are read from
 -  `self.get_plugin_config()` inside the `!draw` invocation. Nothing from tenant config is
@@ -112,25 +119,25 @@ diff --git a/SHARED_RUNTIME.md b/SHARED_RUNTIME.md
 -- `initialize()` is not overridden and no client is cached on the plugin: a shared worker
 -  attaches it once with an empty config, so a cached client would carry one installation's API
 -  key and base URL into every other installation's `!draw`.
++## Per invocation
+ 
+-## Binding-keyed state
 +- Credentials, endpoint, model, size, quality and timeout come from the active installation configuration.
 +- Each generation/edit constructs and closes its own OpenAI client. No credential or client is cached on the plugin or a Tool component.
 +- The OpenAI client has `max_retries=0`. A total 300-second deadline covers reference-image preparation and the billable API call.
 +- Tool response text excludes image bytes, signed URLs and upstream error bodies.
  
--## Binding-keyed state
-+## Scoped temporary image context
- 
 -- None. No process-local tenant cache, no Host storage rows, and no detached tasks exist, so
 -  `on_installation_revoked()` keeps the `BasePlugin` no-op.
++## Scoped temporary image context
+ 
+-## Known limits
 +- The PersonMessageReceived/GroupMessageReceived listener obtains images and sender identity from explicit serialized Host event fields; bot UUID is resolved through the current query API. The Host-only `event.query` is never read.
 +- An opaque query reference points to a cache isolated by installation/workspace/bot/conversation/sender. User-supplied Tool parameters cannot select identity or image URLs.
 +- Each scope retains only its newest source/output image; maximum 32 entries, 64 MiB total and a 30-minute TTL. Successful replies update this cache. Expiration/restart requires a new source image.
 +- Query variables hold only opaque references and operation status, never image pixels.
 +- `on_installation_revoked(binding)` removes all entries owned by that installation.
 +- A process-local lock serializes only the short Host check/claim sequence. Generation happens outside the lock, and generate/edit share the same per-query marker to prevent duplicate billing.
- 
--## Known limits
-+## Validation
  
 -- One `!draw` performs one async image request; a slow or failing provider fails only that
 -  command and the client is still closed.
@@ -140,11 +147,14 @@ diff --git a/SHARED_RUNTIME.md b/SHARED_RUNTIME.md
 -  plugin/component object. These are not live provider tests.
 -- Not certified; independent review, signer approval, and two-Workspace invocation acceptance
 -  are still required.
++## Validation
++
 +Tests use mock provider/Host APIs, including separate installation bindings, message scopes, cache bounds, revocation, repeated calls, timeout and delivery failures. They neither invoke a real image model nor send chat messages.
 diff --git a/components/commands/draw.py b/components/commands/draw.py
 --- a/components/commands/draw.py
 +++ b/components/commands/draw.py
-@@ -1,74 +1,47 @@
+@@ -1,74 +1,48 @@
++# Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
  from __future__ import annotations
  
 +import asyncio
@@ -862,7 +872,8 @@ new file mode 100644
 diff --git a/main.py b/main.py
 --- a/main.py
 +++ b/main.py
-@@ -1,32 +1,343 @@
+@@ -1,32 +1,344 @@
++# Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
  from __future__ import annotations
  
 +import asyncio
@@ -1226,7 +1237,11 @@ diff --git a/main.py b/main.py
 diff --git a/manifest.yaml b/manifest.yaml
 --- a/manifest.yaml
 +++ b/manifest.yaml
-@@ -4,10 +4,11 @@
+@@ -1,13 +1,15 @@
++# Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
+ apiVersion: v1
+ kind: Plugin
+ metadata:
    author: langbot-team
    name: AIImagePlugin
    repository: https://github.com/langbot-app/langbot-plugins/tree/main/misc/AIImagePlugin
@@ -1241,7 +1256,7 @@ diff --git a/manifest.yaml b/manifest.yaml
      zh_Hant: AI 繪圖插件，支援透過 Tool 呼叫方式觸發繪圖，同時支援多種繪圖服務商。
      ja_JP: AI画像生成プラグイン。Tool呼び出しで画像生成をトリガーし、複数の画像生成サービスに対応します。
      vi_VN: Plugin vẽ tranh AI, hỗ trợ kích hoạt vẽ tranh qua Tool call, đồng thời
-@@ -16,8 +17,8 @@
+@@ -16,8 +18,8 @@
      es_ES: Plugin de generación de imágenes con IA, soporta la generación mediante
        llamadas Tool y es compatible con múltiples proveedores de servicios.
    label:
@@ -1252,7 +1267,7 @@ diff --git a/manifest.yaml b/manifest.yaml
      zh_Hant: AI Image Generator
      ja_JP: AI Image Generator
      vi_VN: AI Image Generator
-@@ -35,55 +36,26 @@
+@@ -35,55 +37,26 @@
        en_US: Base URL for OpenAI compatible API
        zh_Hans: 兼容 OpenAI 格式的 API 地址
      required: false
@@ -1314,7 +1329,7 @@ diff --git a/manifest.yaml b/manifest.yaml
      required: false
    - name: image_size
      type: select
-@@ -128,10 +100,58 @@
+@@ -128,10 +101,58 @@
          zh_Hans: 竖版 3:4 (768x1024)
      default: 1024x1024
      required: false
@@ -2619,7 +2634,8 @@ new file mode 100644
 diff --git a/requirements.txt b/requirements.txt
 --- a/requirements.txt
 +++ b/requirements.txt
-@@ -1,3 +1,4 @@
+@@ -1,3 +1,5 @@
++# Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
  langbot-plugin
 -openai>=1.0.0
 -httpx>=0.24.0
@@ -5384,7 +5400,12 @@ new file mode 100644
 diff --git a/tests/test_shared_runtime.py b/tests/test_shared_runtime.py
 --- a/tests/test_shared_runtime.py
 +++ b/tests/test_shared_runtime.py
-@@ -19,6 +19,7 @@
+@@ -1,3 +1,4 @@
++# Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
+ """Two installations must not share one OpenAI credential or endpoint.
+ 
+ Pre-fix failure this test pins: ``AIImagePlugin.initialize()`` cached a single
+@@ -19,6 +20,7 @@
  import types
  from pathlib import Path
  from types import SimpleNamespace
@@ -5392,7 +5413,7 @@ diff --git a/tests/test_shared_runtime.py b/tests/test_shared_runtime.py
  
  import pytest
  from langbot_plugin.api.proxies.invocation import bind_invocation
-@@ -56,7 +57,9 @@
+@@ -56,7 +58,9 @@
  
  
  def _ctx(params: list[str]) -> SimpleNamespace:
@@ -5403,7 +5424,7 @@ diff --git a/tests/test_shared_runtime.py b/tests/test_shared_runtime.py
  
  
  @pytest.fixture
-@@ -80,7 +83,11 @@
+@@ -80,7 +84,11 @@
              )
  
      class _AsyncOpenAI:
@@ -5416,7 +5437,7 @@ diff --git a/tests/test_shared_runtime.py b/tests/test_shared_runtime.py
              entry = {"api_key": api_key, "base_url": base_url, "closed": False}
              created.append(entry)
              self.entry = entry
-@@ -106,9 +113,11 @@
+@@ -106,9 +114,11 @@
      draw.plugin = plugin
  
      with bind_invocation(handler, config=CONFIG_A, binding=_binding("installation-a")):
@@ -5430,7 +5451,7 @@ diff --git a/tests/test_shared_runtime.py b/tests/test_shared_runtime.py
  
      assert [(entry["api_key"], entry["base_url"]) for entry in fake_openai] == [
          ("key-a", "https://a.example/v1"),
-@@ -119,15 +128,21 @@
+@@ -119,15 +129,21 @@
          "prompt": "a cat",
          "size": "768x1280",
          "n": 1,
@@ -5454,7 +5475,7 @@ diff --git a/tests/test_shared_runtime.py b/tests/test_shared_runtime.py
      assert [entry["closed"] for entry in fake_openai] == [True, True]
  
      # Nothing on the shared object retains a single tenant's credential.
-@@ -159,7 +174,10 @@
+@@ -159,7 +175,10 @@
      # Dedicated workers attach the legacy config and call the same code path.
      plugin = AIImagePlugin()
      plugin.plugin_runtime_handler = SimpleNamespace()

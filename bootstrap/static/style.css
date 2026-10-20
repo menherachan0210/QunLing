@@ -1,0 +1,13 @@
+:root{font:16px/1.65 system-ui,"Microsoft YaHei",sans-serif;color:#162c36;background:#f2f6f5}
+*{box-sizing:border-box}body{margin:0}main{max-width:1100px;margin:56px auto;padding:0 24px}
+header{margin-bottom:28px}.badge{font-size:12px;letter-spacing:3px;color:#23796b;font-weight:700}h1{font-size:38px;letter-spacing:-1px;margin:12px 0}header p,footer,.note{color:#587079}
+#status{padding:14px 18px;border:1px solid #bddcd1;border-radius:12px;background:#e5f3ec;margin-bottom:24px}
+.columns{display:grid;grid-template-columns:1.1fr 1fr;gap:24px}section{padding:28px;background:white;border:1px solid #dbe5e2;border-radius:18px}
+h2{font-size:21px;margin:0 0 24px}h2 span{display:inline-flex;align-items:center;justify-content:center;background:#e4f1ec;color:#21735f;width:30px;height:30px;border-radius:50%;font-size:16px;margin-right:8px}
+label{display:block;font-size:14px;font-weight:600;margin:16px 0}input{display:block;width:100%;padding:12px 13px;margin-top:7px;border:1px solid #c7d6d1;border-radius:8px;font:inherit;background:#fbfdfc}
+input:focus{outline:2px solid #68b59e;outline-offset:1px}button{border:0;border-radius:9px;padding:12px 19px;font:600 15px system-ui;cursor:pointer;background:#21765f;color:#fff}
+button:disabled{opacity:.5;cursor:wait}.secondary{background:#edf4f1;color:#225f50}.note{font-size:13px;margin:20px 0}summary{cursor:pointer;color:#486a61}details{margin:22px 0}
+.qr-frame{min-height:280px;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#f7faf8;border-radius:12px}
+#qr{width:230px;height:230px;object-fit:contain}#qq-status{padding:0 20px;text-align:center;color:#587079}#ready{margin:25px 0;padding:16px;background:#e8f5ec;border-radius:12px}#ready h3{margin:0}
+pre{white-space:pre-wrap;word-break:break-word;font-size:13px}code{background:#e8efed;padding:2px 6px;border-radius:4px}a{color:#176c54}footer{text-align:center;font-size:13px;padding:30px}#form-message{font-size:14px;color:#a63737}
+[hidden]{display:none!important}@media(max-width:760px){main{margin:28px auto;padding:0 16px}.columns{grid-template-columns:1fr}h1{font-size:30px}section{padding:22px}}

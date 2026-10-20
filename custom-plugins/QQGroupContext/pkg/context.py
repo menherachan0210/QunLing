@@ -59,6 +59,8 @@ class QueryContext:
     history: dict | None = None
     image_urls: dict[str, str] = field(default_factory=dict)
     shown_images: set[str] = field(default_factory=set)
+    shown_messages: dict[str, dict] = field(default_factory=dict, repr=False)
+    current_question: str = field(default="", repr=False)
     vision_used: bool = False
     vision_inflight: bool = False
     image_read_attempts: int = 0

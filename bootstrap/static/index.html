@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>QQ AI Bot · 开始使用</title><link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+  <header><span class="badge">QQ AI BOT</span><h1>接上 AI，登录 QQ。</h1><p>聊天、记忆、看图、改图、文件和联网工具，已为你准备好。</p></header>
+  <div id="status" role="status">正在连接设置服务…</div>
+  <section id="unlock" hidden><h2>打开专属设置链接</h2><p>运行启动命令，或执行 <code>./bot.sh url</code>，使用显示的链接访问此页。</p><label>设置令牌<input id="token" type="password" autocomplete="off"></label><button id="unlock-button">连接</button></section>
+  <div class="columns">
+  <section><h2><span>1</span> 填写 AI 服务</h2>
+    <form id="settings">
+      <label>API 地址<input name="base_url" type="url" placeholder="https://api.example.com/v1" required></label>
+      <label>API Key<input name="api_key" type="password" placeholder="只保存在自己的部署中" autocomplete="off"></label>
+      <label>聊天模型<input name="chat_model" placeholder="填写服务提供的准确模型名" required></label>
+      <label>图片生成 / 编辑模型<input name="image_model" placeholder="填写图片模型名" required></label>
+      <details><summary>历史图片、漫画和联网使用不同模型</summary>
+        <label>视觉模型<input name="vision_model" placeholder="留空使用聊天模型"></label>
+        <label>联网模型<input name="search_model" placeholder="留空使用聊天模型"></label>
+      </details>
+      <p class="note">聊天模型需支持工具调用和识图；生图/改图需 Images 接口，联网搜索需 Responses 的 web_search。各功能共用这里的地址和密钥。保存不会产生模型调用费用。</p>
+      <button id="save" disabled>保存并启用全部功能</button><p id="form-message" role="alert"></p>
+    </form>
+  </section>
+  <section><h2><span>2</span> 用 QQ 扫码登录</h2>
+    <div class="qr-frame"><img id="qr" alt="QQ 登录二维码" hidden><p id="qq-status">正在等待 QQ 登录服务…</p></div>
+    <button id="refresh" class="secondary">刷新二维码</button>
+    <p class="note">登录后自动连接，无需填写 WebSocket、Token 或群号。QQ 可能要求你在手机上确认新设备。</p>
+    <div id="ready" hidden><h3>可以开始聊了</h3><p>群聊中 <code>@机器人</code> 或以 <code>/ai</code> 开头；私聊直接发送。发图、发文件，再用自然语言说明想做什么。</p></div>
+    <details><summary>高级管理</summary><p><a href="http://127.0.0.1:5300/" target="_blank" rel="noreferrer">打开 LangBot 管理页</a></p><button id="admin" class="secondary">查看本地管理账号</button><pre id="admin-info"></pre></details>
+  </section>
+  </div>
+  <footer>基于 LangBot 与 NapCat · 配置、记忆和 QQ 登录数据保存在自己的数据卷中。</footer>
+</main><script src="/app.js"></script>
+</body></html>

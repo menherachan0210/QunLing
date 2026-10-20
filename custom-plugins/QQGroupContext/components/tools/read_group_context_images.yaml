@@ -24,11 +24,20 @@ spec:
         type: string
         minLength: 1
         maxLength: 1500
-        description: The user's image question, with relevant discussion context if needed.
+        description: The actual analysis goal. Explain what evidence is needed; do not rewrite someone's statement into a different request.
+      message_refs:
+        type: array
+        maxItems: 8
+        uniqueItems: true
+        items:
+          type: string
+        description: Optional m_N refs of the original statements being analyzed, as returned by read_recent_group_context during THIS query. The tool carries their exact text and speaker relationships to vision.
     required: [image_refs, question]
     additionalProperties: false
   llm_prompt: |
-    Analyze, translate or compare the actual pixels of 1 to 4 selected recent group images. First call read_recent_group_context in THIS query to obtain image_refs, including images posted by other members. Submit all needed images in a single call; only one vision call per query to avoid repeated billing. A pre-model image-read failure reports stage, code, failed_refs and retryable; retry at most once only when retryable is true. Never retry after a vision-stage error or while another call is in progress. This describes existing images, not image generation or editing. No URL, group ID, recipient or arbitrary file path is accepted. Do not claim to know unreadable text. Tool returns a textual analysis to integrate with the discussion; it does not send QQ messages itself.
+    Read the actual pixels whenever answering depends on visual evidence that has not been inspected, including the relationship between a statement and its visual context. Do not wait for a literal request to "look at an image". Skip vision when text already supplies the needed evidence or the question is unrelated to the picture.
+    First call read_recent_group_context in THIS query to obtain image_refs. State the actual analysis goal in question; when interpreting someone's statement, also select its message_refs from that same context result so the vision model receives the original words and speaker relationships. Nearby messages are context candidates, not proof of relevance. Distinguish observations from interpretations and uncertainty; do not assume sarcasm or invent motives.
+    Submit all needed images in a single call, 1 to 4 images; only one vision call per query to avoid repeated billing. A pre-model image-read failure reports stage, code, failed_refs and retryable; retry at most once only when retryable is true. Never retry after a vision-stage error or while another call is in progress. This analyzes existing images, not image generation or editing. No URL, group ID, recipient or arbitrary file path is accepted. Do not claim to know unreadable text. Tool returns a textual analysis to integrate with the discussion; it does not send QQ messages itself.
 execution:
   python:
     path: read_group_context_images.py

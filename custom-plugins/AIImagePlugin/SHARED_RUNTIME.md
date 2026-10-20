@@ -1,3 +1,5 @@
+> Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
+
 # Shared runtime behavior of the local extension
 
 This source remains based on the official stateless shared-runtime candidate. It is a local deployment customization, not a marketplace certification.

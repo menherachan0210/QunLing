@@ -1,3 +1,4 @@
+# Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
 """Two installations must not share one OpenAI credential or endpoint.
 
 Pre-fix failure this test pins: ``AIImagePlugin.initialize()`` cached a single

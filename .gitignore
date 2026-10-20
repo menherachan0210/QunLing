@@ -4,6 +4,8 @@
 /downloads/
 /langbot/
 /napcat/
+/packages/
+/backups/
 
 # Environment secrets; keep distributable configuration examples.
 .env
@@ -30,3 +32,6 @@ build/
 node_modules/
 *.lbpkg
 *.log
+*.db
+*.sqlite
+*.sqlite3

@@ -1,6 +1,11 @@
+diff --git a/manifest.yaml b/manifest.yaml
 --- a/manifest.yaml
 +++ b/manifest.yaml
-@@ -4,7 +4,7 @@
+@@ -1,10 +1,11 @@
++# Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
+ apiVersion: v1
+ kind: Plugin
+ metadata:
    author: langbot-team
    name: LongTermMemory
    repository: https://github.com/langbot-app/langbot-plugins/tree/main/KnowledgeEngine/LongTermMemory
@@ -9,9 +14,15 @@
    description:
      en_US: Long-term memory plugin for LangBot. Dual-layer architecture - L1 core
        profile (system prompt) + L2 episodic memory (RAG via vectorDB).
+diff --git a/components/event_listener/memory_injector.py b/components/event_listener/memory_injector.py
 --- a/components/event_listener/memory_injector.py
 +++ b/components/event_listener/memory_injector.py
-@@ -18,10 +18,8 @@
+@@ -1,3 +1,4 @@
++# Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
+ from __future__ import annotations
+ 
+ import logging
+@@ -18,10 +19,8 @@
      - L1 core profile is injected into the system prompt (default_prompt).
      - L2 episodic memory is retrieved from the memory KB and injected into
        the conversation context (prompt) so the LLM has automatic recall.
@@ -24,7 +35,7 @@
      """
  
      def __init__(self):
-@@ -81,30 +79,10 @@
+@@ -81,30 +80,10 @@
              )
              return
  
@@ -58,7 +69,7 @@
  
          # --- L2 episodic memory retrieval ---
          retrieved_episodes: list[dict] = []
-@@ -229,7 +207,7 @@
+@@ -229,7 +208,7 @@
                      "kb_id": kb_id,
                      "isolation": isolation,
                      "speaker": {"id": sender_id, "name": sender_name},
@@ -67,9 +78,15 @@
                      "session_profile": _profile_summary(session_profile),
                      "speaker_profile": _profile_summary(speaker_profile),
                      "episodes": retrieved_episodes,
+diff --git a/components/tools/forget.py b/components/tools/forget.py
 --- a/components/tools/forget.py
 +++ b/components/tools/forget.py
-@@ -54,11 +54,13 @@
+@@ -1,3 +1,4 @@
++# Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
+ from __future__ import annotations
+ 
+ import logging
+@@ -54,11 +55,13 @@
              operation="forget",
              target_type="episode",
              target_id=str(episode_id),
@@ -84,9 +101,15 @@
 +        if not deleted:
 +            return f"No episode {episode_id} found in the current memory scope."
          return f"Deleted episode {episode_id}."
+diff --git a/store/memory_store.py b/store/memory_store.py
 --- a/store/memory_store.py
 +++ b/store/memory_store.py
-@@ -1348,6 +1348,7 @@
+@@ -1,3 +1,4 @@
++# Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
+ from __future__ import annotations
+ 
+ import copy
+@@ -1348,6 +1349,7 @@
          )
  
          metadata = {
@@ -94,7 +117,7 @@
              "content": content,
              "tags": ",".join(tags),
              "importance": str(importance),
-@@ -1752,6 +1753,7 @@
+@@ -1752,6 +1754,7 @@
              episode_id = uuid.uuid4().hex[:12]
  
              metadata = {
@@ -102,7 +125,7 @@
                  "content": content,
                  "tags": ",".join(tags),
                  "importance": str(importance),
-@@ -2011,21 +2013,52 @@
+@@ -2011,21 +2014,52 @@
          user_key: str,
      ) -> int:
          """Delete a single episode by its ID, scoped to user_key for safety."""
@@ -157,7 +180,7 @@
  
      def _episode_from_vector_item(self, item: dict[str, Any]) -> dict[str, Any]:
          meta = item.get("metadata", {})
-@@ -2090,6 +2123,7 @@
+@@ -2090,6 +2124,7 @@
              return None
  
          meta = dict(episode.get("metadata", {}))
@@ -165,7 +188,7 @@
          content = episode.get("content", "")
          meta["content"] = content
          meta["status"] = normalized_status
-@@ -2266,14 +2300,14 @@
+@@ -2266,14 +2301,14 @@
          except Exception as exc:
              add("probe", "ERROR", f"metadata filter probe failed: {exc}")
          finally:
@@ -182,6 +205,8 @@
                          ),
                          "Host vector_delete outcome unknown",
                      )
+diff --git a/tests/event_listener/test_memory_pipeline_authorization.py b/tests/event_listener/test_memory_pipeline_authorization.py
+new file mode 100644
 --- /dev/null
 +++ b/tests/event_listener/test_memory_pipeline_authorization.py
 @@ -0,0 +1,99 @@
@@ -284,6 +309,8 @@
 +        assert recalled.startswith("Error: memory knowledge base is not configured")
 +        plugin.memory_store.add_episode.assert_not_awaited()
 +        plugin.memory_store.search_episodes.assert_not_awaited()
+diff --git a/tests/store/test_memory_delete_chroma.py b/tests/store/test_memory_delete_chroma.py
+new file mode 100644
 --- /dev/null
 +++ b/tests/store/test_memory_delete_chroma.py
 @@ -0,0 +1,127 @@
@@ -414,9 +441,15 @@
 +        await store.delete_episode_by_id("memory-kb", episode["id"], "scope-a")
 +
 +    assert await store.get_episode_by_id("memory-kb", episode["id"], "scope-a") is not None
+diff --git a/tests/store/test_memory_store_episode_lifecycle.py b/tests/store/test_memory_store_episode_lifecycle.py
 --- a/tests/store/test_memory_store_episode_lifecycle.py
 +++ b/tests/store/test_memory_store_episode_lifecycle.py
-@@ -89,6 +89,7 @@
+@@ -1,3 +1,4 @@
++# Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
+ from __future__ import annotations
+ 
+ import pytest
+@@ -89,6 +90,7 @@
      content: str | None = None,
  ) -> dict:
      metadata = {
@@ -424,6 +457,8 @@
          "content": content or f"memory {item_id}",
          "tags": "",
          "importance": "2",
+diff --git a/本地修复说明.md b/本地修复说明.md
+new file mode 100644
 --- /dev/null
 +++ b/本地修复说明.md
 @@ -0,0 +1,39 @@

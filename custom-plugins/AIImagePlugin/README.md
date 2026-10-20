@@ -1,3 +1,5 @@
+> Modified by qq-ai-bot contributors on 2026-10-20; local changes, see NOTICE.
+
 > This installation is a local extension of the official plugin. See [local behavior and configuration](README_LOCAL.md).
 
 # AI Image Generation Plugin

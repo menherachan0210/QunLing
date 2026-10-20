@@ -1,0 +1,35 @@
+{
+  "langbot": {
+    "version": "4.11.0",
+    "url": "https://github.com/langbot-app/LangBot/releases/download/v4.11.0/langbot-v4.11.0-all.zip",
+    "size": 21080065,
+    "sha256": "c14de9152fa95d514ce76a2f63782042912f6f07550ccf890a48e127af171878"
+  },
+  "upstream_plugins": {
+    "commit": "3016b5c763bb3f3c7df942d470df08b8ba643f5d",
+    "url": "https://codeload.github.com/langbot-app/langbot-plugins/zip/3016b5c763bb3f3c7df942d470df08b8ba643f5d",
+    "size": 3405704,
+    "sha256": "a286b9f59ffb85521c56531acd69be93a6bae5acc935640a212b2b6a14c2dda8",
+    "local_agent_version": "0.2.1",
+    "local_agent_prefix": "langbot-plugins-3016b5c763bb3f3c7df942d470df08b8ba643f5d/Runner/LocalAgent/"
+  },
+  "plugin_sdk_source": {
+    "version": "0.7.11",
+    "commit": "e10d8385b2843a25e30219f9153f3227c8a0009f",
+    "url": "https://codeload.github.com/langbot-app/langbot-plugin-sdk/zip/e10d8385b2843a25e30219f9153f3227c8a0009f",
+    "size": 928830,
+    "sha256": "808ba1a32c931efd53e44de5ed17ae548fef39f8f86b3d81393ca53adea9e02d",
+    "prefix": "langbot-plugin-sdk-e10d8385b2843a25e30219f9153f3227c8a0009f/"
+  },
+  "python": {
+    "image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+    "registry_source": "https://hub.docker.com/v2/repositories/library/python/tags/3.12.12-slim-bookworm"
+  },
+  "napcat": {
+    "version": "v4.18.37",
+    "platform": "linux/amd64",
+    "image": "mlikiowa/napcat-docker:v4.18.37@sha256:132448a544ed5cfa948dff8ae19e80bf4e17896e8ab2ba1c6cbcd86f8ad3e56e",
+    "registry_source": "https://hub.docker.com/v2/repositories/mlikiowa/napcat-docker/tags/v4.18.37",
+    "official_repository": "https://github.com/NapNeko/NapCat-Docker"
+  }
+}

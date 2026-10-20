@@ -1,0 +1,13 @@
+LongTermMemory local compatibility revision for qq-ai-bot
+
+Based on langbot-team/LongTermMemory 0.2.7 from:
+https://github.com/langbot-app/langbot-plugins/tree/main/KnowledgeEngine/LongTermMemory
+License: Apache License 2.0 (see LICENSE).
+
+This is a modified distribution, not an official upstream release.
+Local changes through 2026-10-20 remove obsolete pipeline suppression and
+correct scoped memory deletion/compatibility behavior. The local version is
+0.2.7+local.2. The exact upstream commit was not recorded with the original
+local copy; no commit identity is asserted here.
+Original upstream attribution and author/name installation identity are retained.
+See the local repair documentation and the repository's compatibility patches.

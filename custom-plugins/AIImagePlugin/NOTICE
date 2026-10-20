@@ -1,0 +1,14 @@
+AIImagePlugin local extension for qq-ai-bot
+
+Based on langbot-team/AIImagePlugin from:
+https://github.com/langbot-app/langbot-plugins
+Commit: 3016b5c763bb3f3c7df942d470df08b8ba643f5d
+Subdirectory: misc/AIImagePlugin
+Upstream base version: 0.1.6
+License: Apache License 2.0 (see LICENSE).
+
+This is a modified distribution, not an official upstream release.
+Local changes through 2026-10-20 add image editing, multiple scoped references,
+bounded public image downloads, cancellation/error handling and runtime
+compatibility. See README_LOCAL.md and upstream-source.json.
+Original upstream attribution and author/name installation identity are retained.

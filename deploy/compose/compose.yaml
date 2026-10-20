@@ -1,0 +1,107 @@
+name: qq-ai-bot
+
+x-app-image: &app-image
+  image: qq-ai-bot-local:4.11.0
+  platform: linux/amd64
+  build:
+    context: ../..
+    dockerfile: deploy/compose/Dockerfile
+
+services:
+  init:
+    <<: *app-image
+    command: ["init"]
+    restart: "no"
+    environment:
+      QQBOT_STATE_DIR: /var/lib/qqbot-setup
+      QQBOT_NAPCAT_CONFIG_DIR: /var/lib/napcat-config
+    volumes:
+      - setup-state:/var/lib/qqbot-setup
+      - napcat-config:/var/lib/napcat-config
+
+  app:
+    <<: *app-image
+    command: ["app"]
+    init: true
+    restart: unless-stopped
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    environment:
+      TZ: Asia/Shanghai
+      API__HOST: 0.0.0.0
+      API__PORT: "5300"
+      BOX__ENABLED: "false"
+      ANONYMIZED_TELEMETRY: "False"
+    ports:
+      - "127.0.0.1:5300:5300"
+    volumes:
+      - langbot-data:/opt/qq-ai-bot/langbot/data
+    healthcheck:
+      test: ["CMD", "python", "/opt/qq-ai-bot/deploy/compose/healthcheck.py", "app"]
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 12
+    stop_grace_period: 60s
+
+  napcat:
+    image: mlikiowa/napcat-docker:v4.18.37@sha256:132448a544ed5cfa948dff8ae19e80bf4e17896e8ab2ba1c6cbcd86f8ad3e56e
+    platform: linux/amd64
+    hostname: qqbot-napcat
+    restart: unless-stopped
+    init: true
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    environment:
+      TZ: Asia/Shanghai
+      NAPCAT_UID: "1000"
+      NAPCAT_GID: "1000"
+    ports:
+      - "127.0.0.1:6099:6099"
+    volumes:
+      - napcat-qq:/app/.config/QQ
+      - napcat-config:/app/napcat/config
+      - napcat-plugins:/app/napcat/plugins
+    shm_size: 512mb
+    stop_grace_period: 30s
+
+  wizard:
+    <<: *app-image
+    command: ["wizard"]
+    init: true
+    restart: unless-stopped
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      app:
+        condition: service_healthy
+      napcat:
+        condition: service_started
+    environment:
+      TZ: Asia/Shanghai
+      QQBOT_STATE_DIR: /var/lib/qqbot-setup
+      QQBOT_LANGBOT_URL: http://app:5300
+      QQBOT_NAPCAT_URL: http://napcat:6099
+      QQBOT_PACKAGES_DIR: /opt/qq-ai-bot/packages
+      QQBOT_ARCHIVE_PATH: /opt/qq-ai-bot/.local/tools/7zip/linux-x64/7zz
+      QQBOT_BIND: 0.0.0.0
+      QQBOT_PORT: "5310"
+    ports:
+      - "127.0.0.1:5310:5310"
+    volumes:
+      - setup-state:/var/lib/qqbot-setup
+    healthcheck:
+      test: ["CMD", "python", "/opt/qq-ai-bot/deploy/compose/healthcheck.py", "wizard"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+
+volumes:
+  langbot-data:
+  setup-state:
+  napcat-qq:
+  napcat-config:
+  napcat-plugins:

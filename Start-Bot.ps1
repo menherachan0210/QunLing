@@ -1,5 +1,9 @@
 $ErrorActionPreference = 'Stop'
 $taskRoot = $PSScriptRoot
+if (!(Test-Path -LiteralPath (Join-Path $taskRoot 'langbot\.venv\Scripts\python.exe')) -or !(Test-Path -LiteralPath (Join-Path $taskRoot 'napcat\Start-NapCat.ps1'))) {
+    & (Join-Path $taskRoot 'Public-Bot.ps1') -Action up -OpenBrowser
+    return
+}
 & (Join-Path $taskRoot 'Start-LangBot.ps1')
 $langBotReady = $false
 $taskReadyDeadline = [DateTime]::UtcNow.AddSeconds(180)

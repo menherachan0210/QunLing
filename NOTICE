@@ -1,0 +1,28 @@
+qq-ai-bot
+
+The original scripts, configuration, documentation and independent plugins in
+this repository are made available under Apache License 2.0, as selected by the
+project maintainer. This notice does not replace upstream license terms.
+
+This project uses LangBot and plugins maintained by the langbot-app project.
+AIImagePlugin and LongTermMemory include modified upstream source. Their
+original author/name identities and attribution are retained. Local changes
+include image generation/editing, bounded downloads, conversation scope,
+memory authorization and deletion compatibility. See THIRD_PARTY_NOTICES.md
+and the plugin-specific notices for source and modification details.
+
+The LangBot plugin infrastructure has separate licenses:
+SDK/API/CLI portions are Apache-2.0; src/langbot_plugin/runtime/ is AGPLv3.
+Patches affecting Runtime code retain the Runtime's AGPL terms. Applying the
+root Apache license to this repository does not relicense those portions.
+Local Runtime modifications were made for this deployment on 2026-10-20;
+the upstream v0.7.11 source, patches and installation/build scripts identify
+the modified source. Preserve them when distributing the modified runtime.
+
+NapCatQQ, 7-Zip, QQ and other dependencies retain their respective licenses.
+This repository does not claim ownership of or endorsement by those projects.
+NapCatQQ's Limited Redistribution License is not Apache-2.0.
+
+Copyright and attribution notices in upstream files remain in force.
+License texts, source locations and scope are in licenses/ and
+THIRD_PARTY_NOTICES.md.
