@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: send_comic_translation_result
+  label:
+    en_US: send_comic_translation_result
+    zh_Hans: 发送漫画翻译结果
+  description:
+    en_US: Send or resend the finished/partial LabelPlus TXT of this sender's latest comic job to this same conversation.
+    zh_Hans: 发送漫画翻译结果；只操作本会话当前发送者的任务。
+spec:
+  parameters:
+    type: object
+    properties: {}
+    additionalProperties: false
+  llm_prompt: |
+    Send or resend the finished/partial LabelPlus TXT of this sender's latest comic job to this same conversation. Use only when the user requests the result/file or explicitly asks to resend. A partial file marks every missing page; do not claim all pages translated. No invented links.
+    Call with {} only; never pass URLs, paths, identities, recipients, or file IDs.
+execution:
+  python:
+    path: send_comic_translation_result.py
+    attr: SendComicTranslationResult

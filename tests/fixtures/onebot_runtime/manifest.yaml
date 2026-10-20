@@ -1,0 +1,15 @@
+spec:
+  platform_specific_apis:
+    - action: get_record
+      description: { en_US: "Get voice file", zh_Hans: "获取语音文件" }
+    - action: get_image
+      description: { en_US: "Get image file", zh_Hans: "获取图片文件" }
+    - action: can_send_image
+      description: { en_US: "Check whether images can be sent", zh_Hans: "检查是否可以发送图片" }
+    - action: can_send_record
+      description: { en_US: "Check whether voice messages can be sent", zh_Hans: "检查是否可以发送语音" }
+
+execution:
+  python:
+    path: ./adapter.py
+    attr: AiocqhttpAdapter

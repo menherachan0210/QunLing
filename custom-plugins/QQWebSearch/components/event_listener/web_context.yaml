@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: EventListener
+metadata:
+  name: web_context
+  label:
+    en_US: Natural web tool guidance
+    zh_Hans: 自然语言联网工具提示
+spec:
+  events:
+    - PromptPreProcessing
+execution:
+  python:
+    path: web_context.py
+    attr: WebContextListener

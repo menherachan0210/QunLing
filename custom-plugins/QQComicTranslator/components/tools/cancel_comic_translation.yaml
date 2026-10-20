@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: cancel_comic_translation
+  label:
+    en_US: cancel_comic_translation
+    zh_Hans: 取消漫画翻译
+  description:
+    en_US: Cancel this sender's running comic translation; completed page checkpoints remain.
+    zh_Hans: 取消漫画翻译；只操作本会话当前发送者的任务。
+spec:
+  parameters:
+    type: object
+    properties: {}
+    additionalProperties: false
+  llm_prompt: |
+    Cancel this sender's running comic translation; completed page checkpoints remain. Use when the user asks to cancel/stop the translation. An upstream request already sent may still be billed.
+    Call with {} only; never pass URLs, paths, identities, recipients, or file IDs.
+execution:
+  python:
+    path: cancel_comic_translation.py
+    attr: CancelComicTranslation

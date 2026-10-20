@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: start_comic_translation
+  label:
+    en_US: start_comic_translation
+    zh_Hans: 开始压缩包漫画翻译
+  description:
+    en_US: Start translation of a current, quoted, or recent ZIP, RAR or 7z comic archive into Simplified Chinese LabelPlus TXT.
+    zh_Hans: 翻译 ZIP、RAR、7z 漫画压缩包；只操作本会话当前发送者的任务。
+spec:
+  parameters:
+    type: object
+    properties: {}
+    additionalProperties: false
+  llm_prompt: |
+    Start translation of a current, quoted, or recent ZIP, RAR or 7z comic archive (CBZ/CBR aliases supported) into Simplified Chinese LabelPlus TXT. Use only when the user explicitly requests translation of the archive images. This starts a bounded background job and returns promptly; it is NOT completion. No fixed trigger phrase. Do not use for generating/editing images or reading TXT. The tool resolves sender/conversation/files itself. Completed pages are checkpointed. A finished job will send a real TXT file automatically. Do not invent links, claim completion from queued/running, or repeatedly call start. A same-archive task is deduplicated; use resume only if the user asks to continue/retry. 40 MiB archive, 100 image pages maximum. Password-protected, multipart and self-extracting executables are unsupported.
+    Call with {} only; never pass URLs, paths, identities, recipients, or file IDs.
+execution:
+  python:
+    path: start_comic_translation.py
+    attr: StartComicTranslation

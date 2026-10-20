@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: search_web_images
+  label:
+    en_US: Find existing images online
+    zh_Hans: 搜索网上已有图片
+  description:
+    en_US: Find, download and visually inspect existing public images; return query-bound image refs.
+    zh_Hans: 按要求找网上现成图片，读取实际像素核对内容，返回可发送的图片编号。
+spec:
+  parameters:
+    type: object
+    properties:
+      query:
+        type: string
+        maxLength: 1000
+        description: Image subject, character/work name and required composition such as full-body.
+    required: [query]
+    additionalProperties: false
+  llm_prompt: |
+    Use when the user asks to find/show/send EXISTING pictures, character art or photos from the web.
+    Preserve the user's subject and constraints. Do not fabricate identity or full-body status.
+    This searches source pages and checks real downloaded pixels; it does not generate images.
+    If matched image_refs are returned, use send_web_images to send up to two requested images.
+    No matches means give sources/limitations, never substitute generated content.
+    Only once per query; do not retry on failure or empty results.
+execution:
+  python:
+    path: search_web_images.py
+    attr: SearchWebImages

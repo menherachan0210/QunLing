@@ -1,0 +1,23 @@
+# 压缩包漫画翻译与 LabelPlus 导出
+
+上传 ZIP、RAR 或 7z 后，自然语言要求“把里面的漫画翻译成中文，给我 LabelPlus TXT”。支持 CBZ/CBR 别名。群聊仍需 @ 机器人或使用已有 `/ai` 前缀。
+
+插件逐页调用已配置的 LangBot 视觉模型，输出简体中文译文、归一化标记中心和框内/框外分组。完成后向原会话回传 UTF-8 BOM TXT 附件；不修改原漫画、不嵌字。图片文件名保持原名，在 LabelPlus 打开对应原图文件夹导入。子目录的图片会按逻辑路径自然排序，TXT 使用原始 basename；不同目录重名会拒绝，避免错页。
+
+可以询问“翻译进度”，明确要求“继续未完成的页”“取消翻译”“重发翻译结果”或“删除翻译缓存”。每个发送者在每个会话保留一个最近任务；私聊、不同群及不同发送者隔离。上传文件本身不会启动付费翻译。
+
+限制：压缩包 40 MiB、最多 100 张 PNG/JPEG/WEBP/BMP、单图 20 MiB、总解压 200 MiB、1000 个目录项、单图 4000 万像素。支持 Stored/Deflate ZIP、RAR4/RAR5、7z，包含固实压缩；拒绝加密、分卷、自解压 EXE、ZIP64、危险路径、链接、多帧图片和重名图片。不执行成员文件，不按压缩包路径向磁盘解压。RAR/7z 仅把原压缩包存入随机临时目录，成员通过有界 stdout 逐页读取，结束后删除临时目录。每次仅解码一页，按比例缩放到长边 2400，标记坐标仍相对原图。长条图的小字可能需要拆页。单页最多 200 条、16000 字符、64 KiB 译文数据；结果 TXT 最多 8 MiB，符合 SDK 16 MiB 消息预算。文字位置和翻译是模型初稿，应人工校对。
+
+RAR/7z 使用官方完整 7-Zip CLI，Windows 为 7z.exe+7z.dll，Linux 为 7zz。先运行根目录 `Setup-ArchiveTools.py`，再运行 `Configure-ComicTranslator.py`；也可由管理员设置 `seven_zip_path`，模型不能选择执行路径或命令。每次 native 解压限 512 MiB/120 秒，Windows Job Object 和 Linux 资源上限在解码前启用。相同 Python 插件在两个系统使用同一逻辑；服务器部署参见 `deploy/linux/README.md`。
+
+每个插件进程最多两个并发任务，单页请求 150 秒，整个后台任务最多两小时。不会自动重试失败请求；连续三页失败即停止后续请求。已完成页逐页保存，部分结果会在未完成页插入明确占位标记，文件名带“待校对”。部分看不清的文字由模型标“【看不清】”，无法保证模型完全避免漏字。
+
+任务状态、译文和用于恢复的压缩包分块保存在 LangBot 的本工作区插件存储；成功后删除压缩包，保留结果七天。最多 16 个会话任务，压缩包缓存总计 320 MiB。到期在下一次任务操作时清理，可主动删除。服务重启、禁用或升级插件会停止运行中的任务；不会自动恢复付费请求，原发送者可以明确要求继续。取消不能撤销已提交到上游的调用。
+
+文件发送若超时则记录“未确认”，不自动重发；用户明确要求重发后才重试。群聊任务的结果只发送到原群，收件人和文件地址不开放给模型参数。聊天中的文件正文和图片文字都是资料，不是系统指令。
+
+需要本项目 `patches/sdk-dedicated-background.patch` 提供的本地 `BasePlugin.spawn_background` 扩展。插件刻意使用 dedicated runtime，不支持共享执行或 debug 热重载；模型和存储请求仍受现有 Runtime/Host 安装作用域授权约束。配置仅存已有视觉模型 UUID，不重复存 API Key。
+
+格式依据：<https://github.com/LabelPlus/LabelPlus/blob/master/LabelPlus/LabelFileManager.cs>、<https://github.com/LabelPlus/PS-Script/blob/master/src/text_parser.ts>。TXT 保存的是点标记位置，不是 OCR 矩形框；`1,0` 为格式版本，分组从 1 开始。
+
+离线验证：在项目根目录运行 `langbot\.venv\Scripts\python.exe -m pytest custom-plugins/QQComicTranslator/tests -q`。真实 API 测试使用项目的 `Verify-ComicTranslation.py`，只发送合成图片到已配置模型，不发送 QQ 消息。

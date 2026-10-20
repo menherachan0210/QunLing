@@ -1,0 +1,9 @@
+--- a/.venv/Lib/site-packages/langbot_plugin/runtime/io/connection.py
++++ b/.venv/Lib/site-packages/langbot_plugin/runtime/io/connection.py
+@@ -4,5 +4,5 @@
+ 
+ 
+-MAX_MESSAGE_BYTES = 16 * 1024 * 1024
++MAX_MESSAGE_BYTES = 32 * 1024 * 1024
+ # A byte limit alone is insufficient: an untrusted peer can fragment one
+ # message into millions of empty or one-byte frames and exhaust Python object

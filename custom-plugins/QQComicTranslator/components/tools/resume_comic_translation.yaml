@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: resume_comic_translation
+  label:
+    en_US: resume_comic_translation
+    zh_Hans: 继续未完成的漫画翻译
+  description:
+    en_US: Resume only missing/failed pages of this sender's latest comic job, keeping completed pages.
+    zh_Hans: 继续未完成的漫画翻译；只操作本会话当前发送者的任务。
+spec:
+  parameters:
+    type: object
+    properties: {}
+    additionalProperties: false
+  llm_prompt: |
+    Resume only missing/failed pages of this sender's latest comic job, keeping completed pages. Only when the user explicitly asks to continue or retry; may incur new model usage for unfinished pages. Never resume merely because a status check shows failure or a service restart occurred.
+    Call with {} only; never pass URLs, paths, identities, recipients, or file IDs.
+execution:
+  python:
+    path: resume_comic_translation.py
+    attr: ResumeComicTranslation

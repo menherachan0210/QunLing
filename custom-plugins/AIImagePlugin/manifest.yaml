@@ -4,7 +4,7 @@ metadata:
   author: langbot-team
   name: AIImagePlugin
   repository: https://github.com/langbot-app/langbot-plugins/tree/main/misc/AIImagePlugin
-  version: 0.1.7-local.3
+  version: 0.1.7-local.5
   description:
     en_US: 'Local extension: generate and edit images through an OpenAI-compatible
       image API.'

@@ -1,0 +1,19 @@
+[Unit]
+Description=QQ AI Bot - LangBot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qqbot
+Group=qqbot
+WorkingDirectory=/opt/qq-ai-bot
+ExecStart=/bin/sh /opt/qq-ai-bot/Start-LangBot.sh
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

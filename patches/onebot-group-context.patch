@@ -1,0 +1,782 @@
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/platform_api.py
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/platform_api.py
+@@ -5,4 +5,8 @@
+ 
+ import aiocqhttp
++
++import asyncio
++import time
++import unicodedata
+ 
+ 
+@@ -141,2 +145,314 @@
+     'can_send_record': can_send_record,
+ }
++
++
++def _history_integer(value: typing.Any, *, signed: bool = False) -> int:
++    if isinstance(value, bool) or not isinstance(value, (str, int)):
++        raise ValueError('Invalid group context parameters')
++    text = str(value)
++    digits = text[1:] if signed and text.startswith('-') else text
++    if not digits or not digits.isascii() or not digits.isdecimal() or len(digits) > 20:
++        raise ValueError('Invalid group context parameters')
++    result = int(text)
++    if signed:
++        if result == 0 or not -(2**31) <= result < 2**31:
++            raise ValueError('Invalid group context parameters')
++    elif result <= 0:
++        raise ValueError('Invalid group context parameters')
++    return result
++
++
++def _history_image_url(value: typing.Any) -> str | None:
++    if (
++        not isinstance(value, str)
++        or not value
++        or len(value) > 8192
++        or '\\' in value
++        or any(char.isspace() or unicodedata.category(char) in {'Cc', 'Cs'} for char in value)
++    ):
++        return None
++    try:
++        parsed = urlsplit(value)
++        if (
++            parsed.scheme not in {'http', 'https'}
++            or not parsed.hostname
++            or parsed.username is not None
++            or parsed.password is not None
++            or parsed.fragment
++        ):
++            return None
++        _ = parsed.port
++    except ValueError:
++        return None
++    return value
++
++
++def _history_text(value: typing.Any, limit: int, *, single_line: bool = False) -> str:
++    if not isinstance(value, str):
++        return ''
++    # Bound work before sanitizing; no content is ever interpreted as instructions.
++    return ''.join(
++        char
++        if unicodedata.category(char) not in {'Cc', 'Cf', 'Cs', 'Zl', 'Zp'} or (not single_line and char in '\n\t')
++        else ' '
++        for char in value[:limit]
++    )
++
++
++_HISTORY_IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'}
++_HISTORY_IMAGE_MAX_BYTES = 10 * 1024 * 1024
++_HISTORY_FILE_LOOKUP_LIMIT = 8
++
++
++def _history_file_image(data: dict) -> tuple[bool, str | None, str | None, str | None]:
++    """Recognize image attachments by filename; actual pixels are checked downstream."""
++    name = data.get('name') or data.get('file')
++    if not isinstance(name, str) or len(name) > 512 or '.' not in name:
++        return False, None, None, None
++    if name.rsplit('.', 1)[-1].lower() not in {ext[1:] for ext in _HISTORY_IMAGE_SUFFIXES}:
++        return False, None, None, None
++    if any(char in name for char in '/\\:') or any(not char.isprintable() for char in name):
++        return True, None, None, 'invalid_metadata'
++    size = data.get('file_size', data.get('size'))
++    if size is not None:
++        if type(size) is str and size.isascii() and size.isdecimal() and len(size) <= 20:
++            size = int(size)
++        if type(size) is not int or size <= 0:
++            return True, None, None, 'invalid_metadata'
++        if size > _HISTORY_IMAGE_MAX_BYTES:
++            return True, None, None, 'too_large'
++    url = _history_image_url(data.get('url'))
++    if url:
++        return True, url, None, None
++    file_id = data.get('file_id') or data.get('id')
++    if (
++        isinstance(file_id, str)
++        and file_id
++        and file_id == file_id.strip()
++        and len(file_id) <= 4096
++        and all(char.isprintable() for char in file_id)
++    ):
++        return True, None, file_id, None
++    return True, None, None, 'missing_url'
++
++
++async def _resolve_history_file_images(bot, result: dict, group_id: int, *, deadline: float) -> None:
++    """Resolve only filtered recent candidates, under the original read deadline."""
++    # Keep partial text/images usable when a file service stalls. The whole
++    # batch, including semaphore waits, shares three seconds with a return margin.
++    deadline = min(deadline - 0.05, time.monotonic() + 3)
++    pending = []
++    for item in reversed(result['messages']):
++        for candidate in reversed(item.pop('_pending_image_files', [])):
++            if len(pending) >= _HISTORY_FILE_LOOKUP_LIMIT:
++                item.setdefault('unavailable_images', []).append(
++                    {'index': candidate['index'], 'reason': 'budget_exceeded'}
++                )
++            else:
++                pending.append((item, candidate))
++    semaphore = asyncio.Semaphore(2)
++
++    async def resolve(item, candidate):
++        try:
++            async with semaphore:
++                remaining = deadline - time.monotonic()
++                if remaining <= 0:
++                    raise TimeoutError
++                async with asyncio.timeout(min(3, remaining)):
++                    response = await get_group_file_url(
++                        bot, {'group_id': str(group_id), 'file_id': candidate['file_id']}
++                    )
++                url = _history_image_url(response.get('url'))
++                if not url:
++                    raise ValueError
++            item['images'].append({'index': candidate['index'], 'url': url, 'source': 'image_file'})
++        except Exception:
++            item.setdefault('unavailable_images', []).append({'index': candidate['index'], 'reason': 'lookup_failed'})
++
++    await asyncio.gather(*(resolve(item, candidate) for item, candidate in pending))
++    for item in result['messages']:
++        item['images'].sort(key=lambda image: image['index'])
++
++
++def _group_context_result(raw: typing.Any, group_id: int, anchor_id: int, before_time: int, *, deadline: float) -> dict:
++    def check_deadline() -> None:
++        # asyncio timeouts cannot interrupt synchronous parsing of native data.
++        if time.monotonic() >= deadline:
++            raise TimeoutError('OneBot group context lookup timed out')
++
++    check_deadline()
++    window_start = before_time - 3600
++    messages = raw.get('messages') if isinstance(raw, dict) else None
++    if not isinstance(messages, list) or len(messages) > 100:
++        raise RuntimeError('OneBot group context response is invalid')
++    rows = []
++    for position, message in enumerate(messages):
++        check_deadline()
++        if not isinstance(message, dict) or message.get('message_type') != 'group':
++            continue
++        try:
++            if _history_integer(message.get('group_id')) != group_id:
++                continue
++            message_id = _history_integer(message.get('message_id'), signed=True)
++            timestamp = _history_integer(message.get('time'))
++        except ValueError:
++            continue
++        rows.append((position, message_id, timestamp, message))
++
++    # NapCat keeps native ordering. Infer descending batches from distinct times;
++    # equal timestamps retain native order, which is the only available tie-break.
++    descending = len(rows) > 1 and rows[0][2] > rows[-1][2]
++    anchors = [row for row in rows if row[1] == anchor_id]
++    anchor_position = None
++    if anchors:
++        anchor = max(anchors) if descending else min(anchors)
++        anchor_position = anchor[0]
++        before_time = min(before_time, anchor[2])
++    eligible, seen = [], set()
++    for position, message_id, timestamp, message in rows:
++        if message_id == anchor_id or message_id in seen:
++            continue
++        if not window_start <= timestamp <= before_time:
++            continue
++        if timestamp == before_time:
++            # Without the anchor, second-resolution timestamps cannot distinguish
++            # a preceding message from a later message in that same second.
++            if anchor_position is None:
++                continue
++            if (not descending and position >= anchor_position) or (descending and position <= anchor_position):
++                continue
++        seen.add(message_id)
++        eligible.append((timestamp, position, message_id, message))
++    eligible.sort(key=lambda row: (row[0], -row[1] if descending else row[1]))
++    valid_message_ids = {str(row[2]) for row in eligible}
++    output = []
++    truncated = False
++    # Allocate shared budgets while parsing newest content first, rather than
++    # validating every URL and discarding older content afterwards.
++    text_remaining, images_remaining = 16000, 100
++    segments_remaining, image_inspections_remaining = 5000, 200
++    for timestamp, _, message_id, message in reversed(eligible):
++        check_deadline()
++        sender = message.get('sender')
++        sender = sender if isinstance(sender, dict) else {}
++        try:
++            sender_id = str(_history_integer(sender.get('user_id', message.get('user_id'))))
++        except ValueError:
++            sender_id = ''
++        sender_name = _history_text(sender.get('card') or sender.get('nickname'), 80, single_line=True)
++        text, images, reply_id = '', [], None
++        pending_files, unavailable_images = [], []
++        segments = message.get('message')
++        if not isinstance(segments, list):
++            continue
++        segment_limit = min(2000, segments_remaining)
++        text_limit = min(1000, text_remaining)
++        truncated |= len(segments) > segment_limit
++        for index, segment in enumerate(segments[:segment_limit]):
++            check_deadline()
++            segments_remaining -= 1
++            if not isinstance(segment, dict) or not isinstance(segment.get('data'), dict):
++                continue
++            data = segment['data']
++            kind = segment.get('type')
++            if kind == 'text':
++                content = data.get('text')
++                if isinstance(content, str):
++                    truncated |= len(text) + len(content) > text_limit
++                    if len(text) < text_limit:
++                        text += _history_text(content, text_limit - len(text))
++            elif kind == 'at':
++                placeholder = '[提及用户]'
++                truncated |= len(text) + len(placeholder) > text_limit
++                text += placeholder[: max(0, text_limit - len(text))]
++            elif kind == 'image':
++                if images_remaining <= 0 or image_inspections_remaining <= 0:
++                    truncated = True
++                    continue
++                image_inspections_remaining -= 1
++                url = _history_image_url(data.get('url')) or _history_image_url(data.get('file'))
++                if url is not None:
++                    images.append({'index': index, 'url': url})
++                    images_remaining -= 1
++                else:
++                    unavailable_images.append({'index': index, 'reason': 'missing_url'})
++            elif kind == 'file':
++                if images_remaining <= 0 or image_inspections_remaining <= 0:
++                    truncated = True
++                    continue
++                image_inspections_remaining -= 1
++                is_image, url, file_id, reason = _history_file_image(data)
++                if not is_image:
++                    continue
++                if reason:
++                    unavailable_images.append({'index': index, 'reason': reason})
++                elif url:
++                    images.append({'index': index, 'url': url, 'source': 'image_file'})
++                    images_remaining -= 1
++                elif file_id:
++                    pending_files.append({'index': index, 'file_id': file_id})
++                    images_remaining -= 1
++            elif kind == 'reply':
++                try:
++                    candidate = str(_history_integer(data.get('id'), signed=True))
++                except ValueError:
++                    continue
++                if candidate in valid_message_ids and candidate != str(message_id):
++                    reply_id = candidate
++        text_remaining -= len(text)
++        item = {
++            'message_id': str(message_id),
++            'time': timestamp,
++            'sender_name': sender_name,
++            'sender_id': sender_id,
++            'text': text,
++            'images': images,
++        }
++        if reply_id is not None:
++            item['reply_message_id'] = reply_id
++        if pending_files:
++            item['_pending_image_files'] = pending_files
++        if unavailable_images:
++            item['unavailable_images'] = unavailable_images
++        output.append(item)
++
++    check_deadline()
++    output.reverse()
++    return {'messages': output, 'scanned_messages': len(messages), 'window_seconds': 3600, 'truncated': truncated}
++
++
++async def get_group_recent_context(bot: aiocqhttp.CQHttp, params: dict) -> dict:
++    """Return bounded direct content around a caller's trusted group message."""
++    if not isinstance(params, dict) or set(params) != {'group_id', 'before_message_id', 'before_time'}:
++        raise ValueError('Invalid group context parameters')
++    group_id = _history_integer(params['group_id'])
++    anchor_id = _history_integer(params['before_message_id'], signed=True)
++    before_time = _history_integer(params['before_time'])
++    now = int(time.time())
++    if before_time < 1577836800 or not now - 900 <= before_time <= now + 60:
++        raise ValueError('Invalid group context time boundary')
++    try:
++        deadline = time.monotonic() + 12
++        async with asyncio.timeout(12):
++            raw = await _call(
++                bot,
++                'get_group_msg_history',
++                {
++                    'group_id': str(group_id),
++                    'message_seq': str(anchor_id),
++                    'count': 100,
++                    # NapCat uses this flag to walk backwards from the anchor;
++                    # False walks forwards and can include later group messages.
++                    'reverse_order': True,
++                    'disable_get_url': False,
++                    'parse_mult_msg': False,
++                },
++            )
++            result = _group_context_result(raw, group_id, anchor_id, before_time, deadline=deadline)
++            await _resolve_history_file_images(bot, result, group_id, deadline=deadline)
++            return result
++    except Exception:
++        raise RuntimeError('OneBot group context lookup failed') from None
++
++
++PLATFORM_API_MAP['get_group_recent_context'] = get_group_recent_context
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/manifest.yaml
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/manifest.yaml
+@@ -148,4 +148,7 @@
+       description: { en_US: "Check whether voice messages can be sent", zh_Hans: "检查是否可以发送语音" }
+ 
++    - action: get_group_recent_context
++      description: { en_US: "Read bounded direct group context before a trusted message", zh_Hans: "读取可信消息之前有限的群聊文本和图片上下文" }
++
+ execution:
+   python:
+--- a/tests/unit_tests/platform/test_aiocqhttp_eba_adapter.py
++++ b/tests/unit_tests/platform/test_aiocqhttp_eba_adapter.py
+@@ -582,4 +582,12 @@
+             result = await adapter.call_platform_api(action, params)
+             assert result == {'url': 'https://example.test/file'}
++        elif action == 'get_group_recent_context':
++            import time
++
++            bot.call_action.return_value = {'messages': []}
++            result = await adapter.call_platform_api(
++                action, {'group_id': '20001', 'before_message_id': '-101', 'before_time': int(time.time())}
++            )
++            assert result == {'messages': [], 'scanned_messages': 0, 'window_seconds': 3600, 'truncated': False}
+         else:
+             bot.call_action.return_value = {'ok': True}
+@@ -588,5 +596,7 @@
+ 
+     called_actions = [call.args[0] for call in bot.call_action.await_args_list]
+-    assert called_actions == list(PLATFORM_API_MAP)
++    assert called_actions == [
++        'get_group_msg_history' if action == 'get_group_recent_context' else action for action in PLATFORM_API_MAP
++    ]
+ 
+     with pytest.raises(NotSupportedError):
+--- /dev/null
++++ b/tests/unit_tests/platform/test_onebot_group_image_history.py
+@@ -0,0 +1,419 @@
++"""Scoped recent-context bridge tests using synthetic OneBot payloads only."""
++
++import asyncio
++from unittest.mock import AsyncMock
++
++import pytest
++
++from langbot.pkg.platform.adapters.aiocqhttp import platform_api as api
++
++
++NOW = 1800000000
++GROUP = '20001'
++ANCHOR = '-500'
++
++
++@pytest.fixture(autouse=True)
++def freeze_clock(monkeypatch):
++    monkeypatch.setattr(api.time, 'time', lambda: NOW)
++
++
++def params(**changes):
++    return {'group_id': GROUP, 'before_message_id': ANCHOR, 'before_time': NOW, **changes}
++
++
++def message(message_id, timestamp=NOW - 1, *, group=GROUP, segments=None, **changes):
++    return {
++        'message_id': message_id,
++        'time': timestamp,
++        'message_type': 'group',
++        'group_id': group,
++        'sender': {'user_id': '30001', 'nickname': 'Synthetic member'},
++        'message': segments if segments is not None else [text('Synthetic discussion')],
++        **changes,
++    }
++
++
++def text(value):
++    return {'type': 'text', 'data': {'text': value}}
++
++
++def image(value='https://example.test/image.png?signature=test'):
++    return {'type': 'image', 'data': {'url': value, 'file': 'unused-file', 'summary': 'not returned'}}
++
++
++def image_file(**changes):
++    return {
++        'type': 'file',
++        'data': {
++            'file': 'synthetic.PNG',
++            'file_id': 'captured-file-id',
++            'file_size': '4096',
++            'url': 'https://example.test/download?signed=yes',
++            **changes,
++        },
++    }
++
++
++@pytest.mark.asyncio
++async def test_group_file_image_and_http_image_file_fallback_preserve_order():
++    result, bot = await lookup(
++        [
++            message(
++                '1',
++                segments=[
++                    image_file(),
++                    {'type': 'image', 'data': {'file': 'https://example.test/ordinary.png'}},
++                ],
++            )
++        ]
++    )
++    assert result['messages'][0]['images'] == [
++        {'index': 0, 'url': 'https://example.test/download?signed=yes', 'source': 'image_file'},
++        {'index': 1, 'url': 'https://example.test/ordinary.png'},
++    ]
++    assert bot.call_action.await_count == 1
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('name', ['notes.txt', 'pages.zip', 'pages.rar', 'pages.7z', 'image.png.exe'])
++async def test_non_image_files_never_trigger_download_url_lookup(name):
++    result, bot = await lookup([message('1', segments=[image_file(file=name, url=None)])])
++    assert result['messages'][0]['images'] == []
++    assert 'unavailable_images' not in result['messages'][0]
++    assert bot.call_action.await_count == 1
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    'changes,reason',
++    [
++        ({'file_size': 10 * 1024 * 1024 + 1}, 'too_large'),
++        ({'file_size': -1}, 'invalid_metadata'),
++        ({'file_size': True}, 'invalid_metadata'),
++        ({'file': '../private.png'}, 'invalid_metadata'),
++        ({'file': 'C:\\private.png'}, 'invalid_metadata'),
++        ({'url': None, 'file_id': None}, 'missing_url'),
++    ],
++)
++async def test_bad_image_file_is_reported_without_lookup_or_old_image_fallback(changes, reason):
++    result, bot = await lookup([message('1', segments=[image_file(**changes)])])
++    row = result['messages'][0]
++    assert row['images'] == []
++    assert row['unavailable_images'] == [{'index': 0, 'reason': reason}]
++    assert '_pending_image_files' not in row
++    assert bot.call_action.await_count == 1
++
++
++@pytest.mark.asyncio
++async def test_file_resolution_uses_only_scoped_pre_anchor_metadata():
++    bot = AsyncMock()
++    batch = [
++        message('1', segments=[image_file(url=None)]),
++        message('2', group='20002', segments=[image_file(url=None, file_id='other-group')]),
++        message(ANCHOR, NOW),
++        message('3', NOW, segments=[image_file(url=None, file_id='after-question')]),
++    ]
++
++    async def call(action, **parameters):
++        if action == 'get_group_msg_history':
++            return {'messages': batch}
++        assert action == 'get_group_file_url'
++        assert parameters == {'group_id': GROUP, 'file_id': 'captured-file-id'}
++        return {'url': 'https://example.test/resolved.png'}
++
++    bot.call_action.side_effect = call
++    result = await api.get_group_recent_context(bot, params())
++    assert [row['message_id'] for row in result['messages']] == ['1']
++    assert result['messages'][0]['images'][0]['url'] == 'https://example.test/resolved.png'
++    assert '_pending_image_files' not in repr(result)
++    assert 'captured-file-id' not in repr(result)
++    assert bot.call_action.await_count == 2
++
++
++@pytest.mark.asyncio
++async def test_unresolved_file_reports_failure_without_leaking_endpoint_exception():
++    bot = AsyncMock()
++    bot.call_action.side_effect = [
++        {'messages': [message('1', segments=[image_file(url=None)])]},
++        RuntimeError('secret signed URL'),
++    ]
++    result = await api.get_group_recent_context(bot, params())
++    assert result['messages'][0]['unavailable_images'] == [{'index': 0, 'reason': 'lookup_failed'}]
++    assert 'secret' not in repr(result)
++    assert result['messages'][0]['images'] == []
++
++
++@pytest.mark.asyncio
++async def test_only_newest_eight_file_urls_are_resolved_and_budget_is_visible():
++    bot = AsyncMock()
++
++    async def call(action, **parameters):
++        if action == 'get_group_msg_history':
++            return {
++                'messages': [
++                    message(str(i + 1), NOW - 20 + i, segments=[image_file(url=None, file_id=f'file-{i}')])
++                    for i in range(12)
++                ]
++            }
++        return {'url': 'https://example.test/resolved.png'}
++
++    bot.call_action.side_effect = call
++    result = await api.get_group_recent_context(bot, params())
++    lookups = [
++        call.kwargs['file_id'] for call in bot.call_action.await_args_list if call.args == ('get_group_file_url',)
++    ]
++    assert set(lookups) == {f'file-{i}' for i in range(4, 12)}
++    assert all(row['unavailable_images'][0]['reason'] == 'budget_exceeded' for row in result['messages'][:4])
++    assert all(len(row['images']) == 1 for row in result['messages'][4:])
++
++
++async def lookup(messages, **changes):
++    bot = AsyncMock()
++    bot.call_action.return_value = {'messages': messages}
++    return await api.get_group_recent_context(bot, params(**changes)), bot
++
++
++@pytest.mark.asyncio
++async def test_exact_read_only_action_and_minimal_output():
++    row = message(
++        -101,
++        segments=[text('Discuss this'), image(), {'type': 'at', 'data': {'qq': '39999', 'name': 'ignored'}}],
++        raw_message='private raw marker',
++        sender={'user_id': 30001, 'card': 'Card name', 'nickname': 'unused', 'private': 'not returned'},
++    )
++    result, bot = await lookup([row, message(ANCHOR, NOW)])
++    bot.call_action.assert_awaited_once_with(
++        'get_group_msg_history',
++        group_id=GROUP,
++        message_seq=ANCHOR,
++        count=100,
++        reverse_order=True,
++        disable_get_url=False,
++        parse_mult_msg=False,
++    )
++    assert result == {
++        'messages': [
++            {
++                'message_id': '-101',
++                'time': NOW - 1,
++                'sender_name': 'Card name',
++                'sender_id': '30001',
++                'text': 'Discuss this[提及用户]',
++                'images': [{'index': 1, 'url': 'https://example.test/image.png?signature=test'}],
++            }
++        ],
++        'scanned_messages': 2,
++        'window_seconds': 3600,
++        'truncated': False,
++    }
++    assert api.PLATFORM_API_MAP['get_group_recent_context'] is api.get_group_recent_context
++    assert 'get_group_msg_history' not in api.PLATFORM_API_MAP
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    'payload',
++    [
++        None,
++        {},
++        {**params(), 'count': 1000},
++        params(group_id=True),
++        params(group_id=0),
++        params(group_id=-1),
++        params(group_id='２０００１'),
++        params(group_id='1' * 21),
++        params(group_id=' 20001'),
++        params(before_message_id=True),
++        params(before_message_id=0),
++        params(before_message_id=2**31),
++        params(before_message_id=-(2**31) - 1),
++        params(before_message_id='-１２３'),
++        params(before_message_id='message-id'),
++        params(before_time=True),
++        params(before_time=NOW + 61),
++        params(before_time=NOW - 901),
++        params(before_time=NOW + 0.5),
++    ],
++)
++async def test_invalid_scope_or_cursor_never_calls_onebot(payload):
++    bot = AsyncMock()
++    with pytest.raises(ValueError):
++        await api.get_group_recent_context(bot, payload)
++    bot.call_action.assert_not_awaited()
++
++
++@pytest.mark.asyncio
++async def test_filters_other_groups_private_current_duplicate_and_time_window():
++    result, _ = await lookup(
++        [
++            message('1', NOW - 3601),
++            message('2', NOW - 3600),
++            message('3', group='20002'),
++            message('4', message_type='private'),
++            message('5'),
++            message(5, segments=[text('duplicate must not replace first')]),
++            message(ANCHOR, NOW),
++            message('6', NOW + 1),
++        ]
++    )
++    assert [item['message_id'] for item in result['messages']] == ['2', '5']
++    assert result['messages'][1]['text'] == 'Synthetic discussion'
++    assert result['scanned_messages'] == 8
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('descending', [False, True])
++async def test_anchor_position_excludes_later_same_second_messages(descending):
++    batch = [message('1', NOW - 1), message('2', NOW), message(ANCHOR, NOW), message('3', NOW)]
++    if descending:
++        batch.reverse()
++    result, _ = await lookup(batch)
++    assert [item['message_id'] for item in result['messages']] == ['1', '2']
++
++
++@pytest.mark.asyncio
++async def test_equal_timestamp_batch_preserves_native_order_and_anchor_cutoff():
++    result, _ = await lookup([message('2', NOW), message('1', NOW), message(ANCHOR, NOW), message('3', NOW)])
++    assert [item['message_id'] for item in result['messages']] == ['2', '1']
++
++
++@pytest.mark.asyncio
++async def test_absent_anchor_excludes_ambiguous_same_second_messages():
++    result, _ = await lookup([message('1', NOW - 1), message('2', NOW), message('3', NOW + 1)])
++    assert [item['message_id'] for item in result['messages']] == ['1']
++
++
++@pytest.mark.asyncio
++async def test_old_anchor_cannot_move_the_window_into_old_history():
++    result, _ = await lookup([message('1', NOW - 7200), message(ANCHOR, NOW - 7100)])
++    assert result['messages'] == []
++
++
++@pytest.mark.asyncio
++async def test_direct_segments_only_and_reply_links_only_within_verified_batch():
++    result, _ = await lookup(
++        [
++            message('1', segments=[image('https://example.test/direct.png')]),
++            message(
++                '2',
++                segments=[
++                    text('Reply'),
++                    {'type': 'reply', 'data': {'id': 1, 'content': [image('https://example.test/quoted.png')]}},
++                    {'type': 'forward', 'data': {'content': [image('https://example.test/forward.png')]}},
++                    {'type': 'node', 'data': {'content': [text('nested text')]}},
++                ],
++            ),
++            message('3', group='20002'),
++            message('4', segments=[{'type': 'reply', 'data': {'id': 3}}]),
++        ]
++    )
++    assert result['messages'][1]['reply_message_id'] == '1'
++    assert result['messages'][1]['text'] == 'Reply'
++    assert result['messages'][1]['images'] == []
++    assert 'reply_message_id' not in result['messages'][2]
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    'url',
++    [
++        None,
++        '',
++        42,
++        'file:///private.png',
++        'javascript:alert(1)',
++        'https://',
++        'https://user:secret@example.test/image',
++        'https://example.test/image#fragment',
++        'https://example.test:bad/image',
++        'https://example.test/image\nsecret',
++        'https://example.test/\x7fimage',
++        'https://example.test\\image',
++        'https://example.test/' + 'x' * 8192,
++    ],
++)
++async def test_invalid_image_url_is_not_returned(url):
++    result, _ = await lookup([message('1', segments=[image(url)])])
++    assert result['messages'][0]['images'] == []
++
++
++@pytest.mark.asyncio
++async def test_text_sender_and_global_budgets_prefer_recent_content():
++    batch = [
++        message(
++            str(index + 1),
++            NOW - 100 + index,
++            segments=[text('x' * 1001), image()],
++            sender={'user_id': '30001', 'card': 'a' * 100 + '\n', 'private': 'not returned'},
++        )
++        for index in range(100)
++    ]
++    result, _ = await lookup(batch)
++    assert sum(len(item['text']) for item in result['messages']) == 16000
++    assert all(len(item['text']) <= 1000 and len(item['sender_name']) == 80 for item in result['messages'])
++    assert result['messages'][0]['text'] == ''
++    assert len(result['messages'][-1]['text']) == 1000
++    assert sum(len(item['images']) for item in result['messages']) == 100
++    assert result['truncated'] is True
++
++
++@pytest.mark.asyncio
++async def test_image_budget_is_shared_across_messages_and_keeps_recent_images():
++    result, _ = await lookup([message('1', NOW - 2, segments=[image()] * 100), message('2', segments=[image()] * 4)])
++    assert [len(item['images']) for item in result['messages']] == [96, 4]
++    assert result['truncated'] is True
++
++
++@pytest.mark.asyncio
++async def test_control_characters_are_sanitized_and_raw_cq_strings_are_not_parsed():
++    result, _ = await lookup(
++        [
++            message(
++                '1', segments=[text('line\nnext\x00\u202eend')], sender={'user_id': False, 'nickname': 'name\n\x00'}
++            ),
++            message('2', segments='[CQ:image,url=https://example.test/hidden.png]'),
++        ]
++    )
++    assert len(result['messages']) == 1
++    assert result['messages'][0]['text'] == 'line\nnext  end'
++    assert result['messages'][0]['sender_name'] == 'name  '
++    assert result['messages'][0]['sender_id'] == ''
++
++
++@pytest.mark.asyncio
++async def test_endpoint_exception_is_fixed_and_does_not_expose_signed_urls():
++    bot = AsyncMock()
++    bot.call_action.side_effect = RuntimeError('https://example.test/image?signature=private')
++    with pytest.raises(RuntimeError, match='^OneBot group context lookup failed$'):
++        await api.get_group_recent_context(bot, params())
++
++
++@pytest.mark.asyncio
++async def test_timeout_is_twelve_seconds_and_cancels_the_call(monkeypatch):
++    original_timeout = asyncio.timeout
++    deadlines = []
++
++    def immediate_timeout(seconds):
++        deadlines.append(seconds)
++        return original_timeout(0)
++
++    monkeypatch.setattr(api.asyncio, 'timeout', immediate_timeout)
++    bot = AsyncMock()
++
++    async def blocked(*args, **kwargs):
++        await asyncio.Event().wait()
++
++    bot.call_action.side_effect = blocked
++    with pytest.raises(RuntimeError, match='^OneBot group context lookup failed$'):
++        await api.get_group_recent_context(bot, params())
++    assert deadlines == [12]
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('payload', [None, {}, {'messages': 'invalid'}, {'messages': [message('1')] * 101}])
++async def test_malformed_native_response_is_sanitized(payload):
++    bot = AsyncMock()
++    bot.call_action.return_value = payload
++    with pytest.raises(RuntimeError, match='^OneBot group context lookup failed$'):
++        await api.get_group_recent_context(bot, params())

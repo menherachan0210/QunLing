@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: delete_comic_translation
+  label:
+    en_US: delete_comic_translation
+    zh_Hans: 删除漫画翻译缓存
+  description:
+    en_US: Delete the stored ZIP/checkpoints/result of this sender's latest comic job in this conversation only when they explicitly request deletion.
+    zh_Hans: 删除漫画翻译缓存；只操作本会话当前发送者的任务。
+spec:
+  parameters:
+    type: object
+    properties: {}
+    additionalProperties: false
+  llm_prompt: |
+    Delete the stored ZIP/checkpoints/result of this sender's latest comic job in this conversation only when they explicitly request deletion. Running jobs must be canceled first. Does not remove files already sent to QQ.
+    Call with {} only; never pass URLs, paths, identities, recipients, or file IDs.
+execution:
+  python:
+    path: delete_comic_translation.py
+    attr: DeleteComicTranslation

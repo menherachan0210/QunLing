@@ -1,6 +1,7 @@
 """Configure the local QQ bot after the official plugins have been installed."""
 
 import json
+from chat_style import styled_prompts
 from local_api import LocalAPI, STATE
 
 api = LocalAPI()
@@ -66,6 +67,7 @@ runner['prompt'] = [{'role': 'system', 'content': (
     '仅讨论或描述图片时不要生成图片；修改目标不明确时请用户指定或引用图片。'
     '图片工具成功后已经直接发送图片，不要编造图片链接或重复发送。'
 )}]
+runner['prompt'] = styled_prompts(runner['prompt'])
 api.call('PUT', '/api/v1/pipelines/' + state['pipeline_uuid'], {'config': config})
 
 bots = api.call('GET', '/api/v1/platform/bots')['bots']

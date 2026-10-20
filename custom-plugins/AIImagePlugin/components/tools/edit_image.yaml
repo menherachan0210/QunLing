@@ -6,8 +6,8 @@ metadata:
     en_US: Edit an image
     zh_Hans: 修改图片
   description:
-    en_US: Edit one current, quoted, or recent image for the same sender and send the result.
-    zh_Hans: 修改当前、引用或同一发送者近期的一张图片，并发送修改结果。
+    en_US: Edit or combine one to four query-bound reference images and send one result.
+    zh_Hans: 修改或组合本轮选定的1至4张参考图片，并发送一张结果。
 spec:
   parameters:
     type: object
@@ -16,22 +16,36 @@ spec:
         type: string
         minLength: 1
         maxLength: 8000
-        description: The user's requested changes to one existing image, preserving all unspecified details.
+        description: Requested changes; for multiple references describe image 1, image 2 etc. in image_refs order.
+      image_refs:
+        type: array
+        minItems: 1
+        maxItems: 4
+        uniqueItems: true
+        items:
+          type: string
+        description: Optional exact edit_ref_ values from this query's list_edit_image_references or current image prompt.
     required:
       - prompt
     additionalProperties: false
   llm_prompt: |
-    Edit one EXISTING image and send the result directly to the current conversation.
+    Edit or combine one to four EXISTING reference images and send one result to the current conversation.
     Infer the user's intent from natural language; no fixed trigger word is required.
     Use when the user requests a change to an existing image, for example a different
     background, color, style, or object, or a follow-up revision to a recently generated image.
     Do not use for merely describing, recognizing, analyzing or reading text in an image.
     Do not call for a hypothetical request or your own example or suggestion.
-    Pass only the requested changes as prompt, at most 8000 characters. Never provide
+    Pass the requested changes as prompt, at most 8000 characters. Never provide
     image URLs, image bytes, account IDs, recipients, credentials, or model names.
-    The tool selects the current or quoted image, otherwise the same sender's most
-    recent upload or successfully delivered plugin image in the same chat, within 30 minutes.
-    Multiple current images are ambiguous: ask the user to send or quote exactly one.
+    With image_refs, use only exact edit_ref_ values listed in THIS query by
+    list_edit_image_references or its current-image prompt. Other tools' img_ references
+    are incompatible. For prior group images including another member's uploads, list references first.
+    For multiple references preserve their order and specify requested changes per image.
+    A clear request to combine two pictures or swap their characters' clothing is supported
+    without making the user create a collage. If the objects are ambiguous, ask which pictures.
+    Without image_refs, legacy single-image selection uses the current or quoted image,
+    otherwise this sender's latest upload or delivered plugin image in the same chat within 30 minutes.
+    Multiple current images require explicit image_refs, not a forced single-image workflow.
     Do not invent a source image or silently switch to generating a new image when none is available.
     Generate and edit tools together allow at most one paid request per user message.
     Never retry either tool after an error, timeout, unconfirmed result or delivery failure.

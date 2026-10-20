@@ -55,6 +55,9 @@ def tool_env(monkeypatch):
             self.handler.variables.setdefault(self.ref, {})[key] = value
             await asyncio.sleep(0)
 
+        async def get_bot_uuid(self):
+            return "bot"
+
         async def reply(self, chain):
             self.handler.attempts.append(chain)
             if self.handler.send_hangs:
@@ -65,6 +68,10 @@ def tool_env(monkeypatch):
 
     context_state = SimpleNamespace(
         selected=SimpleNamespace(base64="data:image/png;base64/source", url=None),
+        selected_refs=[
+            SimpleNamespace(base64="data:image/png;base64/first", url=None),
+            SimpleNamespace(base64="data:image/png;base64/second", url=None),
+        ],
         error=None,
     )
     remember_output = AsyncMock()
@@ -79,6 +86,12 @@ def tool_env(monkeypatch):
             raise context_state.error
         return context_state.selected
 
+    def select_references(plugin, variables, query_id, query_uuid, refs, *, bot=None):
+        assert bot == "bot"
+        if context_state.error:
+            raise context_state.error
+        return context_state.selected_refs
+
     modules = {
         "langbot_plugin.api.definition.components.tool.tool": {"Tool": Tool},
         "langbot_plugin.api.entities.builtin.platform.message": {
@@ -92,6 +105,7 @@ def tool_env(monkeypatch):
             "remember_output": remember_output,
             "select_image": select_image,
         },
+        "pkg.edit_references": {"select_references": select_references},
     }
     for name, attributes in modules.items():
         module = types.ModuleType(name)
@@ -364,6 +378,42 @@ async def test_generate_and_edit_share_one_concurrent_billing_claim(tool_env):
         call(env), call(env, edit=True), call(env), call(env, edit=True)
     )
     assert env.generator.await_count + env.editor.await_count == 1
+    assert len(env.handler.attempts) == 1
+    assert all(result in {env.module.SENT, env.module.GENERATING} for result in results)
+
+
+@pytest.mark.asyncio
+async def test_multi_edit_uses_selected_list_and_shares_generate_claim(tool_env):
+    env = tool_env
+    params = {"prompt": "交换衣服", "image_refs": ["edit_ref_first", "edit_ref_second"]}
+    first = await call(env, params, edit=True)
+    assert first == env.module.SENT
+    env.editor.assert_awaited_once_with("交换衣服", env.context_state.selected_refs)
+    assert await call(env) == env.module.SENT
+    env.generator.assert_not_awaited()
+    assert len(env.handler.delivered) == 1
+
+
+@pytest.mark.asyncio
+async def test_multi_edit_invalid_refs_do_not_claim_or_generate(tool_env):
+    env = tool_env
+    env.context_state.error = env.error("本轮参考图不属于当前问题")
+    result = await call(env, {"prompt": "edit", "image_refs": ["img_1"]}, edit=True)
+    assert "不属于" in result
+    assert env.handler.writes == []
+    env.editor.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_parallel_multi_edit_and_generate_issue_at_most_one_request(tool_env):
+    env = tool_env
+    params = {"prompt": "交换衣服", "image_refs": ["edit_ref_first", "edit_ref_second"]}
+    results = await asyncio.gather(
+        call(env, params, edit=True),
+        call(env),
+        call(env, params, edit=True),
+    )
+    assert env.editor.await_count + env.generator.await_count == 1
     assert len(env.handler.attempts) == 1
     assert all(result in {env.module.SENT, env.module.GENERATING} for result in results)
 

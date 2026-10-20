@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Runner
+metadata:
+  name: group_upload
+  label:
+    en_US: QQ comic archive upload capture
+    zh_Hans: QQ 漫画压缩包 上传记录
+  description:
+    en_US: Capture bounded group upload metadata without downloading, replying or invoking a model.
+    zh_Hans: 仅记录有界群文件上传信息，不下载、不回复、不调用模型。
+spec:
+  usages:
+    - event
+  events:
+    - platform.specific
+  config: []
+execution:
+  python:
+    path: group_upload.py
+    attr: GroupUpload

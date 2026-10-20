@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: read_group_context_images
+  label:
+    en_US: Understand group discussion images
+    zh_Hans: 理解群聊图片内容
+  description:
+    en_US: Read actual pixels of selected images from the current group context.
+    zh_Hans: 读取本轮群聊前文中选定的图片，识字、解释或比较内容。
+spec:
+  parameters:
+    type: object
+    properties:
+      image_refs:
+        type: array
+        minItems: 1
+        maxItems: 4
+        uniqueItems: true
+        items:
+          type: string
+        description: Use only img_N refs returned by read_recent_group_context during THIS query.
+      question:
+        type: string
+        minLength: 1
+        maxLength: 1500
+        description: The user's image question, with relevant discussion context if needed.
+    required: [image_refs, question]
+    additionalProperties: false
+  llm_prompt: |
+    Analyze, translate or compare the actual pixels of 1 to 4 selected recent group images. First call read_recent_group_context in THIS query to obtain image_refs, including images posted by other members. Submit all needed images in a single call; only one vision call per query to avoid repeated billing. A pre-model image-read failure reports stage, code, failed_refs and retryable; retry at most once only when retryable is true. Never retry after a vision-stage error or while another call is in progress. This describes existing images, not image generation or editing. No URL, group ID, recipient or arbitrary file path is accepted. Do not claim to know unreadable text. Tool returns a textual analysis to integrate with the discussion; it does not send QQ messages itself.
+execution:
+  python:
+    path: read_group_context_images.py
+    attr: ReadGroupContextImages

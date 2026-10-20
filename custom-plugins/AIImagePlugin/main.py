@@ -13,6 +13,23 @@ DEFAULT_BASE_URL = "https://ai.qlht.uk/v1"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_PROMPT_CHARS = 8000
 QUALITY_VALUES = {"auto", "low", "medium", "high", "xhigh", "max"}
+CONTENT_REFUSAL_CODES = frozenset(
+    {
+        "content_filter",
+        "content_filtered",
+        "content_policy_violation",
+        "content_policy_rejected",
+        "image_generation_content_policy_violation",
+        "moderation_blocked",
+        "safety_violation",
+        "safety_rejection",
+    }
+)
+REFERENCE_TOO_LARGE = "参考图片超过 10 MiB，未提交图片编辑请求；请上传更小的图片。"
+REFERENCE_INVALID = "参考图片数据无效或格式不支持，未提交图片编辑请求；请重新上传 PNG、JPEG、GIF 或 WebP 图片。"
+PROVIDER_TIMEOUT = (
+    "图片生成服务请求超时，已停止等待且未自动重试；上游可能仍在生成或计费。"
+)
 
 
 class ImageGenerationError(Exception):
@@ -45,34 +62,45 @@ def _timeout(config: dict) -> float:
     return timeout
 
 
+def _base64_data_url(payload: str, *, reference: bool = False) -> str:
+    invalid_message = (
+        REFERENCE_INVALID if reference else "生成服务返回了无效的图片数据。"
+    )
+    size_message = (
+        REFERENCE_TOO_LARGE if reference else "生成图片超过 10 MiB，无法发送。"
+    )
+    if not isinstance(payload, str):
+        raise ImageGenerationError(invalid_message)
+    if len(payload) > ((MAX_IMAGE_BYTES + 2) // 3) * 4:
+        raise ImageGenerationError(size_message)
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        raise ImageGenerationError(invalid_message) from None
+    if len(raw) > MAX_IMAGE_BYTES:
+        raise ImageGenerationError(size_message)
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        mime = "image/png"
+    elif raw.startswith(b"\xff\xd8\xff"):
+        mime = "image/jpeg"
+    elif raw.startswith((b"GIF87a", b"GIF89a")):
+        mime = "image/gif"
+    elif raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
+        mime = "image/webp"
+    else:
+        raise ImageGenerationError(
+            REFERENCE_INVALID if reference else "生成服务返回了不支持的图片格式。"
+        )
+    return f"data:{mime};base64,{payload}"
+
+
 def _image_result(response) -> GeneratedImage:
     if not response.data:
         raise ImageGenerationError("生成服务没有返回图片，请检查服务状态。")
     item = response.data[0]
     payload = getattr(item, "b64_json", None)
     if payload:
-        if (
-            not isinstance(payload, str)
-            or len(payload) > ((MAX_IMAGE_BYTES + 2) // 3) * 4
-        ):
-            raise ImageGenerationError("生成图片超过 10 MiB，无法发送。")
-        try:
-            raw = base64.b64decode(payload, validate=True)
-        except (binascii.Error, ValueError):
-            raise ImageGenerationError("生成服务返回了无效的图片数据。") from None
-        if len(raw) > MAX_IMAGE_BYTES:
-            raise ImageGenerationError("生成图片超过 10 MiB，无法发送。")
-        if raw.startswith(b"\x89PNG\r\n\x1a\n"):
-            mime = "image/png"
-        elif raw.startswith(b"\xff\xd8\xff"):
-            mime = "image/jpeg"
-        elif raw.startswith((b"GIF87a", b"GIF89a")):
-            mime = "image/gif"
-        elif raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
-            mime = "image/webp"
-        else:
-            raise ImageGenerationError("生成服务返回了不支持的图片格式。")
-        return GeneratedImage(base64=f"data:{mime};base64,{payload}")
+        return GeneratedImage(base64=_base64_data_url(payload))
     image_url = getattr(item, "url", None)
     if isinstance(image_url, str):
         try:
@@ -89,49 +117,123 @@ def _image_result(response) -> GeneratedImage:
     raise ImageGenerationError("生成服务没有返回可用的图片数据或下载链接。")
 
 
+def _content_refused(exc: Exception) -> bool:
+    """Only trust exact machine-readable codes, never free-form error text."""
+    body = getattr(exc, "body", None)
+    if not isinstance(body, dict):
+        return False
+    error = body.get("error", body)
+    if not isinstance(error, dict):
+        return False
+    return any(
+        isinstance(value := error.get(field), str)
+        and len(value) <= 80
+        and value.strip().lower() in CONTENT_REFUSAL_CODES
+        for field in ("code", "type")
+    )
+
+
+def _provider_error(exc: Exception) -> ImageGenerationError:
+    from openai import APIConnectionError, APIStatusError, APITimeoutError
+
+    # No exception text, response bodies, headers, URLs, or prompts reach the result.
+    if isinstance(exc, (APITimeoutError, TimeoutError)):
+        return ImageGenerationError(PROVIDER_TIMEOUT)
+    if isinstance(exc, APIConnectionError):
+        return ImageGenerationError(
+            "图片生成服务连接失败，未自动重试；请检查服务网络。上游是否收到请求尚未确认。"
+        )
+    if isinstance(exc, APIStatusError):
+        status = exc.status_code
+        if status == 401:
+            message = "图片生成服务认证失败（HTTP 401）；请检查图片插件的 API Key。"
+        elif status == 429:
+            message = "图片生成服务限流或额度不足（HTTP 429）；请检查服务配额。"
+        elif isinstance(status, int) and 500 <= status <= 599:
+            message = f"图片生成服务暂时异常（HTTP {status}）；请检查上游服务。"
+        elif status in {400, 403, 422} and _content_refused(exc):
+            message = f"图片生成服务明确拒绝了本次内容（HTTP {status}，内容审核拒绝）。"
+        elif status == 403:
+            message = "图片生成服务拒绝访问（HTTP 403）；请检查账号或模型权限。"
+        elif status == 404:
+            message = (
+                "图片生成服务接口或模型不存在（HTTP 404）；请检查接口地址及模型名。"
+            )
+        elif status == 413:
+            message = "图片生成服务拒绝了过大的请求（HTTP 413）；请缩小参考图片。"
+        elif status in {400, 422}:
+            message = (
+                f"图片生成服务不接受本次请求（HTTP {status}）；"
+                "请检查模型、图片格式及接口参数兼容性。"
+            )
+        elif isinstance(status, int) and 100 <= status <= 599:
+            message = f"图片生成服务返回 HTTP {status}；请检查上游服务与插件配置。"
+        else:
+            message = "图片生成服务返回异常状态；请检查上游服务与插件配置。"
+        return ImageGenerationError(message + " 未自动重试。")
+    return ImageGenerationError(
+        "图片生成请求失败，未自动重试；请检查生成服务与插件配置。"
+    )
+
+
 async def image_data_url(image: GeneratedImage) -> str:
     """Normalize one trusted message image without sending API credentials to its URL."""
     if image.base64:
         payload = image.base64
+        if not isinstance(payload, str):
+            raise ImageGenerationError(REFERENCE_INVALID)
         if payload.startswith("data:"):
             prefix, separator, payload = payload.partition(",")
             if not separator or ";base64" not in prefix:
-                raise ImageGenerationError("参考图片数据格式无效，请重新上传。")
-        return _image_result(
-            SimpleNamespace(data=[SimpleNamespace(b64_json=payload)])
-        ).base64
+                raise ImageGenerationError(REFERENCE_INVALID)
+        return _base64_data_url(payload, reference=True)
     if not image.url:
         raise ImageGenerationError("请先发送或引用要修改的图片。")
-    _image_result(SimpleNamespace(data=[SimpleNamespace(url=image.url)]))
-    import httpx
+    try:
+        _image_result(SimpleNamespace(data=[SimpleNamespace(url=image.url)]))
+    except ImageGenerationError:
+        raise ImageGenerationError(
+            "参考图片链接无效，未提交图片编辑请求；请重新上传或引用图片。"
+        ) from None
+    from pkg.remote_image import RemoteImageError, fetch_reference_image
 
-    async with httpx.AsyncClient(
-        timeout=20.0, follow_redirects=True, trust_env=False
-    ) as client:
-        async with client.stream("GET", image.url) as response:
-            response.raise_for_status()
-            if int(response.headers.get("content-length", 0)) > MAX_IMAGE_BYTES:
-                raise ImageGenerationError("参考图片超过 10 MiB，请上传更小的图片。")
-            raw = bytearray()
-            async for chunk in response.aiter_bytes():
-                raw.extend(chunk)
-                if len(raw) > MAX_IMAGE_BYTES:
-                    raise ImageGenerationError(
-                        "参考图片超过 10 MiB，请上传更小的图片。"
-                    )
+    try:
+        raw = await fetch_reference_image(image.url)
+    except RemoteImageError as exc:
+        if exc.code == "http_status":
+            message = f"参考图片下载失败（HTTP {exc.status}），未提交图片编辑请求且未自动重试；请重新上传或引用图片。"
+        else:
+            message = {
+                "timeout": "参考图片下载超时，未提交图片编辑请求且未自动重试；请重新上传或引用图片。",
+                "network": "参考图片下载网络失败，未提交图片编辑请求且未自动重试；请检查图片网络或重新上传图片。",
+                "invalid_url": "参考图片链接无效或不是公共网络地址，未提交图片编辑请求；请重新上传或引用图片。",
+                "invalid_response": "参考图片下载响应无效，未提交图片编辑请求；请重新上传或引用图片。",
+                "too_large": REFERENCE_TOO_LARGE,
+                "invalid_body": REFERENCE_INVALID,
+            }.get(
+                exc.code,
+                "参考图片读取失败，未提交图片编辑请求且未自动重试；请重新上传或引用图片。",
+            )
+        raise ImageGenerationError(message) from None
+    except ImageGenerationError:
+        raise
+    except Exception:
+        raise ImageGenerationError(
+            "参考图片读取失败，未提交图片编辑请求且未自动重试；请重新上传或引用图片。"
+        ) from None
     payload = base64.b64encode(raw).decode("ascii")
-    return _image_result(
-        SimpleNamespace(data=[SimpleNamespace(b64_json=payload)])
-    ).base64
+    return _base64_data_url(payload, reference=True)
 
 
 class AIImagePlugin(BasePlugin):
     """Read all credentials and settings per invocation; never cache clients."""
 
     async def on_installation_revoked(self, binding) -> None:
-        from pkg.image_context import revoke_installation
+        from pkg.image_context import _binding_owner, revoke_installation
+        from pkg.edit_references import STORE
 
         revoke_installation(binding)
+        STORE.revoke(_binding_owner(binding))
 
     def create_client(self):
         config = self.get_config()
@@ -152,13 +254,24 @@ class AIImagePlugin(BasePlugin):
     async def generate_image(self, prompt: str) -> GeneratedImage:
         return await self._request_image(prompt)
 
-    async def edit_image(self, prompt: str, image: GeneratedImage) -> GeneratedImage:
+    async def edit_image(
+        self, prompt: str, image: GeneratedImage | list[GeneratedImage]
+    ) -> GeneratedImage:
         return await self._request_image(prompt, image=image)
 
     async def _request_image(
-        self, prompt: str, image: GeneratedImage | None = None
+        self, prompt: str, image: GeneratedImage | list[GeneratedImage] | None = None
     ) -> GeneratedImage:
         prompt = validate_prompt(prompt)
+        references = None
+        if image is not None:
+            references = image if isinstance(image, list) else [image]
+            if not 1 <= len(references) <= 4 or any(
+                not isinstance(item, GeneratedImage) for item in references
+            ):
+                raise ImageGenerationError(
+                    "一次编辑请选择 1–4 张有效参考图片；未提交生成请求。"
+                )
         config = self.get_config()
         timeout = _timeout(config)
         quality = config.get("quality", "auto")
@@ -184,11 +297,34 @@ class AIImagePlugin(BasePlugin):
                     "n": 1,
                     "response_format": "b64_json",
                 }
-                if image is None:
+                if references is None:
                     return await client.images.generate(**body)
                 from openai.types import ImagesResponse
 
-                body["images"] = [{"image_url": await image_data_url(image)}]
+                # Fetch every source before the first paid POST. Never silently
+                # degrade a two-image request to whichever source was readable.
+                try:
+                    async with asyncio.timeout(25):
+                        data_urls = await asyncio.gather(
+                            *(image_data_url(reference) for reference in references),
+                            return_exceptions=True,
+                        )
+                except TimeoutError:
+                    raise ImageGenerationError(
+                        "参考图片读取超时，尚未提交图片编辑请求；没有使用剩余图片替代。"
+                    ) from None
+                for value in data_urls:
+                    if isinstance(value, ImageGenerationError):
+                        raise value
+                    if isinstance(value, BaseException):
+                        raise ImageGenerationError(
+                            "所选参考图片中有图片读取失败，尚未提交图片编辑请求；没有使用剩余图片替代。"
+                        )
+                if sum(len(value) for value in data_urls) > 40 * 1024 * 1024:
+                    raise ImageGenerationError(
+                        "多图参考总大小超过限制，未提交图片编辑请求；请缩小图片。"
+                    )
+                body["images"] = [{"image_url": value} for value in data_urls]
                 return await client.post(
                     "/images/edits", cast_to=ImagesResponse, body=body
                 )
@@ -197,19 +333,8 @@ class AIImagePlugin(BasePlugin):
             return _image_result(response)
         except ImageGenerationError:
             raise
-        except TimeoutError:
-            raise ImageGenerationError(
-                "图片生成超时，已停止等待且未自动重试；上游可能仍在生成或计费。"
-            ) from None
         except Exception as exc:
-            # Never expose provider response bodies, URLs, API keys, or image bytes.
-            if type(exc).__name__ == "APITimeoutError":
-                raise ImageGenerationError(
-                    "图片生成超时，已停止等待且未自动重试；上游可能仍在生成或计费。"
-                ) from None
-            raise ImageGenerationError(
-                "图片生成请求失败，未自动重试；请检查生成服务与插件配置。"
-            ) from None
+            raise _provider_error(exc) from None
         finally:
             if client is not None:
                 try:

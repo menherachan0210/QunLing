@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: EventListener
+metadata:
+  name: group_context
+  label:
+    en_US: Group discussion context
+    zh_Hans: 群聊讨论上下文
+  description:
+    en_US: Capture trusted query anchors without reading history or invoking models.
+    zh_Hans: 记录可信群会话锚点，普通消息不读取历史或调用模型。
+spec:
+execution:
+  python:
+    path: context.py
+    attr: GroupContextListener

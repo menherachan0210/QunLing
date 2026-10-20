@@ -83,6 +83,72 @@ async def test_edit_uses_json_image_data_not_model_supplied_url(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_multi_edit_sends_all_ordered_references_in_one_paid_request(monkeypatch):
+    plugin, client = plugin_with_client(monkeypatch, response(b64_json=PAYLOAD))
+    inputs = [
+        GeneratedImage(base64=DATA_URL),
+        GeneratedImage(url="https://example.test/second"),
+    ]
+    normalized = [DATA_URL, "data:image/png;base64,c2Vjb25k"]
+    loader = AsyncMock(side_effect=normalized)
+    monkeypatch.setattr(main, "image_data_url", loader)
+    assert await plugin.edit_image(
+        "交换两个角色的衣服并合成一张", inputs
+    ) == GeneratedImage(base64=DATA_URL)
+    client.post.assert_awaited_once()
+    client.images.generate.assert_not_awaited()
+    body = client.post.await_args.kwargs["body"]
+    assert body["images"] == [{"image_url": value} for value in normalized]
+    assert body["n"] == 1
+    assert [call.args[0] for call in loader.await_args_list] == inputs
+
+
+@pytest.mark.asyncio
+async def test_any_failed_reference_prevents_entire_upstream_request(monkeypatch):
+    plugin, client = plugin_with_client(monkeypatch, response(b64_json=PAYLOAD))
+    loader = AsyncMock(
+        side_effect=[DATA_URL, ImageGenerationError("参考图片下载失败，未提交")]
+    )
+    monkeypatch.setattr(main, "image_data_url", loader)
+    with pytest.raises(ImageGenerationError, match="未提交"):
+        await plugin.edit_image("合成两张", [GeneratedImage(base64=DATA_URL)] * 2)
+    assert loader.await_count == 2
+    client.post.assert_not_awaited()
+    client.images.generate.assert_not_awaited()
+    client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sources", [[], [GeneratedImage()] * 5, ["https://example.test/image"], [None]]
+)
+async def test_invalid_multi_reference_count_or_type_never_creates_client(
+    monkeypatch, sources
+):
+    plugin, client = plugin_with_client(monkeypatch)
+    with pytest.raises(ImageGenerationError, match="1–4"):
+        await plugin.edit_image("edit", sources)
+    client.post.assert_not_awaited()
+    client.images.generate.assert_not_awaited()
+    client.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_multi_reference_global_download_deadline_prevents_post(monkeypatch):
+    plugin, client = plugin_with_client(monkeypatch)
+
+    async def never_finishes(image):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(main, "image_data_url", never_finishes)
+    original_timeout = asyncio.timeout
+    monkeypatch.setattr(main.asyncio, "timeout", lambda seconds: original_timeout(0.01))
+    with pytest.raises(ImageGenerationError, match="尚未提交"):
+        await plugin.edit_image("edit", [GeneratedImage(base64=DATA_URL)] * 2)
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error",
     [TimeoutError("SECRET"), RuntimeError("SECRET https://private.example/?key=x")],
@@ -228,17 +294,18 @@ async def test_edit_without_source_never_calls_provider(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_reference_url_download_is_bounded_and_has_no_api_auth(monkeypatch):
-    import httpx
+    from pkg import remote_image
 
     calls = []
 
     class Reply:
-        headers = {"content-length": str(len(PNG))}
+        headers = {"Content-Length": str(len(PNG))}
+        status = 200
 
-        def raise_for_status(self):
-            pass
+        def __init__(self):
+            self.content = self
 
-        async def aiter_bytes(self):
+        async def iter_chunked(self, size):
             yield PNG
 
         async def __aenter__(self):
@@ -249,11 +316,10 @@ async def test_reference_url_download_is_bounded_and_has_no_api_auth(monkeypatch
 
     class Client:
         def __init__(self, **kwargs):
-            assert kwargs == {
-                "timeout": 20.0,
-                "follow_redirects": True,
-                "trust_env": False,
-            }
+            assert kwargs["trust_env"] is False
+            assert kwargs["timeout"].total == 20
+            assert kwargs["auto_decompress"] is False
+            assert "Authorization" not in kwargs["headers"]
 
         async def __aenter__(self):
             return self
@@ -261,11 +327,13 @@ async def test_reference_url_download_is_bounded_and_has_no_api_auth(monkeypatch
         async def __aexit__(self, *args):
             pass
 
-        def stream(self, method, url):
-            calls.append((method, url))
+        def get(self, url, *, allow_redirects):
+            assert allow_redirects is False
+            calls.append(("GET", url))
             return Reply()
 
-    monkeypatch.setattr(httpx, "AsyncClient", Client)
+    monkeypatch.setattr(remote_image.aiohttp, "TCPConnector", lambda **kwargs: object())
+    monkeypatch.setattr(remote_image.aiohttp, "ClientSession", Client)
     assert (
         await image_data_url(GeneratedImage(url="https://image.example.test/signed"))
         == DATA_URL

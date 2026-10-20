@@ -303,5 +303,11 @@ async def remember_output(plugin: Any, reply_api: Any, image: GeneratedImage) ->
         variables = await reply_api.get_query_vars()
         descriptor = _context(plugin, variables)
         _CACHE.put(descriptor["owner"], descriptor["scope"], image)
+        try:
+            from pkg.edit_references import remember_delivered
+
+            remember_delivered(plugin, variables, image)
+        except Exception:
+            pass
     except Exception:
         pass

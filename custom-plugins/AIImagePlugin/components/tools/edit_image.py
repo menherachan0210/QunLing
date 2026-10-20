@@ -25,7 +25,7 @@ from pkg.image_context import query_claim_lock, remember_output, select_image
 
 
 class EditImage(Tool):
-    """Edit one scoped source image without trusting model-provided image URLs."""
+    """Edit scoped references without trusting model-provided image URLs."""
 
     async def call(
         self,
@@ -34,7 +34,11 @@ class EditImage(Tool):
         query_id: int,
         query_uuid: str | None = None,
     ) -> str:
-        if not isinstance(params, dict) or set(params) != {"prompt"}:
+        if (
+            not isinstance(params, dict)
+            or "prompt" not in params
+            or set(params) - {"prompt", "image_refs"}
+        ):
             return INVALID_PROMPT
         prompt = params["prompt"]
         if (
@@ -60,7 +64,19 @@ class EditImage(Tool):
                         if isinstance(state, str)
                         else GENERATING
                     )
-                image = select_image(self.plugin, variables)
+                if "image_refs" in params:
+                    from pkg.edit_references import select_references
+
+                    image = select_references(
+                        self.plugin,
+                        variables,
+                        query_id,
+                        query_uuid,
+                        params["image_refs"],
+                        bot=await reply_api.get_bot_uuid(),
+                    )
+                else:
+                    image = select_image(self.plugin, variables)
                 await reply_api.set_query_var(QUERY_STATE_KEY, "started")
         except ImageGenerationError as exc:
             return str(exc)

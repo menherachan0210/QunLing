@@ -1,0 +1,748 @@
+--- a/.venv/Lib/site-packages/langbot_plugin/api/definition/plugin.py
++++ b/.venv/Lib/site-packages/langbot_plugin/api/definition/plugin.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+ import abc
++import asyncio
+ import typing
+ 
+ from langbot_plugin.api.proxies import langbot_api
+@@ -45,6 +46,25 @@
+     async def initialize(self) -> None:
+         pass
+ 
++    def spawn_background(
++        self,
++        coro_factory: typing.Callable[
++            [], typing.Coroutine[typing.Any, typing.Any, typing.Any]
++        ],
++        *,
++        timeout: float = 7200,
++    ) -> asyncio.Task:
++        """Start bounded installation-owned work from a dedicated component call.
++
++        The worker owns cancellation and creates a new installation capability.
++        Query/Runner APIs are unavailable: snapshot trusted routing information
++        before submission and use send_message() for a later reply. Tasks are
++        not durable; plugins must checkpoint work and explicitly resume it.
++        """
++        return self.plugin_runtime_handler.spawn_background(
++            self, coro_factory, timeout=timeout
++        )
++
+     async def on_installation_revoked(self, binding: InstallationBinding) -> None:
+         """Release process-local state held for one revoked installation.
+ 
+--- a/.venv/Lib/site-packages/langbot_plugin/cli/run/handler.py
++++ b/.venv/Lib/site-packages/langbot_plugin/cli/run/handler.py
+@@ -2,6 +2,8 @@
+ 
+ import asyncio
+ import contextlib
++import contextvars
++import math
+ import os
+ import mimetypes
+ import typing
+@@ -13,7 +15,11 @@
+ from langbot_plugin.api.entities.builtin.pipeline.query import provider_session
+ from langbot_plugin.runtime.io import connection
+ from langbot_plugin.entities.io.resp import ActionResponse
+-from langbot_plugin.runtime.plugin.container import PluginContainer, ComponentContainer
++from langbot_plugin.runtime.plugin.container import (
++    PluginContainer,
++    ComponentContainer,
++    RuntimeContainerStatus,
++)
+ from langbot_plugin.runtime.io.handler import Handler
+ from langbot_plugin.api.entities import events
+ from langbot_plugin.api.definition.components.base import NoneComponent
+@@ -21,7 +27,13 @@
+ from langbot_plugin.entities.io.actions.enums import CommonAction, PluginToRuntimeAction
+ from langbot_plugin.entities.io.actions.enums import RuntimeToPluginAction
+ from langbot_plugin.entities.io.context import InstallationBinding
+-from langbot_plugin.api.proxies.invocation import bind_invocation, thaw_config
++from langbot_plugin.api.proxies.invocation import (
++    Invocation,
++    bind_invocation,
++    current_invocation,
++    thaw_config,
++)
++from langbot_plugin.runtime.bounded_executor import blocking_work_scope
+ from langbot_plugin.runtime.plugin.container import PluginInstallationSlot
+ from langbot_plugin.api.definition.components.tool.tool import Tool
+ from langbot_plugin.api.definition.components.command.command import Command
+@@ -44,6 +56,29 @@
+ 
+ logger = logging.getLogger(__name__)
+ MAX_RUNTIME_UI_FILE_BYTES = 4 * 1024 * 1024
++MAX_BACKGROUND_TASKS = 2
++MAX_BACKGROUND_SECONDS = 7200
++_BACKGROUND_APIS = frozenset(
++    action.value
++    for action in (
++        PluginToRuntimeAction.GET_LANGBOT_VERSION,
++        PluginToRuntimeAction.GET_BOTS,
++        PluginToRuntimeAction.GET_BOT_INFO,
++        PluginToRuntimeAction.SEND_MESSAGE,
++        PluginToRuntimeAction.CALL_PLATFORM_API,
++        PluginToRuntimeAction.GET_LLM_MODELS,
++        PluginToRuntimeAction.INVOKE_LLM,
++        PluginToRuntimeAction.INVOKE_LLM_STREAM,
++        PluginToRuntimeAction.SET_PLUGIN_STORAGE,
++        PluginToRuntimeAction.GET_PLUGIN_STORAGE,
++        PluginToRuntimeAction.GET_PLUGIN_STORAGE_KEYS,
++        PluginToRuntimeAction.DELETE_PLUGIN_STORAGE,
++        PluginToRuntimeAction.GET_CONFIG_FILE,
++        CommonAction.FILE_CHUNK,
++        CommonAction.CANCEL_ACTION,
++        CommonAction.STREAM_ACK,
++    )
++)
+ 
+ 
+ async def _read_runtime_ui_file_limited(path: str | Path) -> bytes:
+@@ -159,6 +194,8 @@
+         super().__init__(connection)
+         self.name = "FromRuntime"
+         self._shutdown_task: asyncio.Task[None] | None = None
++        self._background_tasks: dict[asyncio.Task, Invocation | None] = {}
++        self._background_closing = False
+         self._slot_containers: dict[str, PluginInstallationSlot] = {}
+         self._slot_generations: dict[str, int] = {}
+         self._slot_initialize_callback: (
+@@ -637,6 +674,7 @@
+             In debug mode (when shutdown_callback is set), this will trigger reconnection.
+             In production mode, this will just acknowledge the shutdown.
+             """
++            await self._stop_background_tasks()
+             if self.shutdown_callback is not None:
+                 if self._shutdown_task is None or self._shutdown_task.done():
+                     self._shutdown_task = asyncio.create_task(self.shutdown_callback())
+@@ -807,6 +845,172 @@
+             result = await parser_instance.parse(parse_context)
+ 
+             return ActionResponse.success(result.model_dump(mode="json"))
++
++    def spawn_background(self, plugin, coro_factory, *, timeout=7200) -> asyncio.Task:
++        """Admit a new revocable capability, never prolong the caller's lease."""
++        invocation = current_invocation(self)
++        binding = self.bound_action_context
++        container = self.plugin_container
++        task = asyncio.current_task()
++        if (
++            invocation is None
++            or invocation.api is not None
++            or not isinstance(binding, InstallationBinding)
++            or invocation.binding != binding
++            or self._action_task_contexts.get(task) != binding
++            or container.plugin_instance is not plugin
++            or container.debug
++            or not container.enabled
++            or container.status != RuntimeContainerStatus.INITIALIZED
++            or container.manifest.execution.shared_runtime is not None
++            or self._slot_containers
++        ):
++            raise RuntimeError(
++                "Background work requires an installed dedicated component invocation"
++            )
++        if self._background_closing or self._closed or task.cancelling():
++            raise RuntimeError("Plugin worker is stopping")
++        if (
++            isinstance(timeout, bool)
++            or not isinstance(timeout, (int, float))
++            or not 0 < timeout <= MAX_BACKGROUND_SECONDS
++            or not math.isfinite(timeout)
++        ):
++            raise ValueError(
++                "Background timeout must be greater than 0 and at most 7200 seconds"
++            )
++        if not callable(coro_factory):
++            raise TypeError("Background work requires a coroutine factory")
++        if (
++            sum(not item.done() for item in self._background_tasks)
++            >= MAX_BACKGROUND_TASKS
++        ):
++            raise RuntimeError("Plugin background task limit reached")
++        config = thaw_config(invocation.config or {})
++
++        async def execute():
++            if (
++                self._background_closing
++                or self._closed
++                or self.bound_action_context != binding
++            ):
++                raise RuntimeError("Plugin worker is stopping")
++            owned_task = asyncio.current_task()
++            token = self._current_action_context.set(binding)
++            try:
++                with bind_invocation(self, config=config, binding=binding):
++                    capability = current_invocation(self)
++                    self._background_tasks[owned_task] = capability
++                    expired = False
++
++                    def expire():
++                        nonlocal expired
++                        expired = True
++                        capability.active = False
++                        owned_task.cancel()
++
++                    timer = asyncio.get_running_loop().call_later(timeout, expire)
++                    try:
++                        with blocking_work_scope(binding.workspace_uuid):
++                            result = await coro_factory()
++                        if expired:
++                            raise TimeoutError("Plugin background task timed out")
++                        capability.require_active()
++                        return result
++                    except asyncio.CancelledError:
++                        if expired:
++                            raise TimeoutError(
++                                "Plugin background task timed out"
++                            ) from None
++                        raise
++                    finally:
++                        timer.cancel()
++            finally:
++                self._current_action_context.reset(token)
++
++        # Admission above authorizes a fresh installation lease. No caller
++        # context (including a captured Runner API) is inherited by the task.
++        owned_task = asyncio.create_task(
++            execute(), name="plugin-background", context=contextvars.Context()
++        )
++        self._background_tasks[owned_task] = None
++        owned_task.add_done_callback(
++            self._background_done, context=contextvars.Context()
++        )
++        return owned_task
++
++    def _background_done(self, task):
++        self._background_tasks.pop(task, None)
++        if not task.cancelled():
++            error = task.exception()
++            if error is not None:
++                # Exception messages can contain credentials, URLs or user text.
++                logger.warning(
++                    "Plugin background task failed (%s)", type(error).__name__
++                )
++
++    def _revoke_background_tasks(self):
++        self._background_closing = True
++        for task, capability in tuple(self._background_tasks.items()):
++            if capability is not None:
++                capability.active = False
++            if not task.done() and task is not asyncio.current_task():
++                task.cancel()
++
++    async def _stop_background_tasks(self):
++        self._revoke_background_tasks()
++        tasks = [
++            task
++            for task in self._background_tasks
++            if task is not asyncio.current_task()
++        ]
++        if tasks:
++            _, pending = await asyncio.wait(tasks, timeout=5)
++            if pending:
++                logger.warning("Plugin background cleanup exceeded its grace period")
++
++    def _fail_pending(self, error):
++        # Natural disconnects reach this before production's os._exit callback.
++        self._revoke_background_tasks()
++        super()._fail_pending(error)
++
++    async def close(self):
++        await self._stop_background_tasks()
++        await super().close()
++
++    async def run(self):
++        try:
++            await super().run()
++        finally:
++            await self._stop_background_tasks()
++
++    def _check_background_action(self, action, data):
++        invocation = current_invocation(self)
++        if invocation is not None and any(
++            capability is invocation for capability in self._background_tasks.values()
++        ):
++            if action.value not in _BACKGROUND_APIS or {
++                "query_id",
++                "query_uuid",
++                "run_id",
++                "target_run_id",
++                "session",
++            }.intersection(data):
++                raise RuntimeError(
++                    "Background work cannot use query or Runner authority"
++                )
++
++    async def call_action(self, action, data, *args, **kwargs):
++        self._check_background_action(action, data)
++        return await super().call_action(action, data, *args, **kwargs)
++
++    async def call_action_generator(self, action, data, *args, **kwargs):
++        self._check_background_action(action, data)
++        async with contextlib.aclosing(
++            super().call_action_generator(action, data, *args, **kwargs)
++        ) as stream:
++            async for item in stream:
++                yield item
+ 
+     def _uses_reserved_admission(self, req_data):
+         return req_data.get(
+--- /dev/null
++++ b/tests/unit_tests/plugin/test_sdk_background_tasks.py
+@@ -0,0 +1,450 @@
++"""Exercise bounded worker-owned jobs without network requests or model calls."""
++
++import asyncio
++import contextvars
++import json
++from contextlib import contextmanager
++from types import SimpleNamespace
++from unittest.mock import AsyncMock, Mock
++
++import pytest
++
++from langbot_plugin.api.definition.plugin import BasePlugin
++from langbot_plugin.api.definition.components.tool.tool import Tool
++from langbot_plugin.api.entities.builtin.provider.message import Message
++from langbot_plugin.api.proxies.invocation import bind_invocation, current_invocation
++from langbot_plugin.api.proxies.query_based_api import QueryBasedAPIProxy
++from langbot_plugin.cli.run.handler import PluginRuntimeHandler
++from langbot_plugin.entities.io.actions.enums import PluginToRuntimeAction, RuntimeToPluginAction
++from langbot_plugin.entities.io.context import InstallationBinding
++from langbot_plugin.entities.io.errors import ConnectionClosedError
++from langbot_plugin.entities.io.req import ActionRequest
++from langbot_plugin.entities.io.resp import ActionResponse
++from langbot_plugin.runtime.plugin.container import RuntimeContainerStatus
++from langbot_plugin.runtime.security import PLUGIN_FILE_STORAGE_DIR_ENV
++
++
++class Connection:
++    def __init__(self):
++        self.sent = []
++        self.close = AsyncMock()
++        self.receive = AsyncMock(side_effect=ConnectionClosedError('disconnected'))
++
++    async def send(self, data):
++        request = json.loads(data)
++        self.sent.append(request)
++        if 'action' in request:
++            payload = {'version': 'test-version', 'vars': {}}
++            if request['action'] == PluginToRuntimeAction.INVOKE_LLM.value:
++                payload = {'message': {'role': 'assistant', 'content': 'synthetic-model-result'}}
++            response = ActionResponse.success(payload)
++            response.seq_id = request['seq_id']
++            await self.handler._route_response(response.seq_id, response.model_dump())
++
++
++@pytest.fixture
++def worker(tmp_path, monkeypatch):
++    monkeypatch.setenv(PLUGIN_FILE_STORAGE_DIR_ENV, str(tmp_path / 'transfers'))
++    connection = Connection()
++    handler = PluginRuntimeHandler(connection, AsyncMock())
++    connection.handler = handler
++    plugin = BasePlugin()
++    plugin.plugin_runtime_handler = handler
++    binding = InstallationBinding(
++        instance_uuid='test-instance',
++        workspace_uuid='test-workspace',
++        installation_uuid='test-installation',
++        placement_generation=1,
++        runtime_revision=1,
++        artifact_digest='a' * 64,
++    )
++    handler.bind_action_context(binding)
++    handler.plugin_container = SimpleNamespace(
++        plugin_instance=plugin,
++        debug=False,
++        enabled=True,
++        status=RuntimeContainerStatus.INITIALIZED,
++        manifest=SimpleNamespace(execution=SimpleNamespace(shared_runtime=None)),
++        plugin_config={},
++    )
++    return handler, plugin, binding, connection
++
++
++@contextmanager
++def component(worker, *, api=None, binding=None, config=None):
++    handler, _, expected, _ = worker
++    binding = expected if binding is None else binding
++    task = asyncio.current_task()
++    handler._action_task_contexts[task] = binding
++    token = handler._current_action_context.set(binding)
++    try:
++        with bind_invocation(handler, api, config=config or {}, binding=binding):
++            yield current_invocation(handler)
++    finally:
++        handler._current_action_context.reset(token)
++        handler._action_task_contexts.pop(task, None)
++
++
++@pytest.mark.asyncio
++async def test_job_has_fresh_authority_and_survives_component_return(worker):
++    handler, plugin, binding, connection = worker
++    gate = asyncio.Event()
++    marker = contextvars.ContextVar('caller-query', default=None)
++    marker_token = marker.set('must-not-follow-job')
++    config = {'nested': {'value': 'original'}}
++    seen = {}
++
++    async def job():
++        await gate.wait()
++        seen['invocation'] = current_invocation(handler)
++        seen['config'] = plugin.get_config()['nested']['value']
++        seen['marker'] = marker.get()
++        return await plugin.get_langbot_version()
++
++    try:
++        with component(worker, config=config) as original:
++            task = plugin.spawn_background(job)
++        config['nested']['value'] = 'changed'
++        assert not original.active
++        gate.set()
++        assert await task == 'test-version'
++        assert seen['invocation'] is not original
++        assert seen['invocation'].api is None
++        assert not seen['invocation'].active
++        assert seen['config'] == 'original'
++        assert seen['marker'] is None
++        assert connection.sent[0]['context'] == binding.model_dump()
++    finally:
++        marker.reset(marker_token)
++        await handler.close()
++
++
++@pytest.mark.asyncio
++async def test_real_tool_dispatch_allows_nested_sdk_llm_calls_after_return(worker):
++    handler, plugin, binding, connection = worker
++    jobs = []
++
++    async def job():
++        return await plugin.invoke_llm(
++            llm_model_uuid='synthetic-model',
++            messages=[Message(role='user', content='synthetic input')],
++            funcs=[],
++            timeout=150,
++        )
++
++    async def execute(tool):
++        jobs.append(tool.plugin.spawn_background(job))
++        return 'queued'
++
++    class Submit(Tool):
++        async def call(self, params, session, query_id, query_uuid=None):
++            return await execute(self)
++
++    tool = Submit()
++    tool.plugin = plugin
++    handler.plugin_container.components = [
++        SimpleNamespace(
++            manifest=SimpleNamespace(kind='Tool', metadata=SimpleNamespace(name='submit')),
++            component_instance=tool,
++        )
++    ]
++    request = ActionRequest.make_request(
++        123,
++        RuntimeToPluginAction.CALL_TOOL.value,
++        {
++            'tool_name': 'submit',
++            'tool_parameters': {},
++            'session': {'launcher_type': 'person', 'launcher_id': 'synthetic-chat'},
++            'query_id': 1,
++            'query_uuid': 'synthetic-query',
++        },
++        binding,
++    )
++    try:
++        await handler._handle_action(request.model_dump())
++        assert connection.sent[0]['data'] == {'tool_response': 'queued'}
++        assert (await jobs[0]).content == 'synthetic-model-result'
++        outbound = [item for item in connection.sent if item.get('action') == 'invoke_llm']
++        assert len(outbound) == 1
++        assert outbound[0]['data']['timeout'] == 150
++        assert not {'query_id', 'query_uuid', 'run_id'}.intersection(outbound[0]['data'])
++        assert outbound[0]['context'] == binding.model_dump()
++    finally:
++        await handler.close()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    'mode', ['outside', 'runner', 'shared', 'slot', 'debug', 'disabled', 'initializing', 'wrong-binding']
++)
++async def test_ineligible_invocations_never_start_factory(worker, mode):
++    handler, plugin, binding, _ = worker
++    factory = Mock()
++    if mode == 'shared':
++        handler.plugin_container.manifest.execution.shared_runtime = 'shared-runtime-v1'
++    if mode == 'slot':
++        handler._slot_containers['test-slot'] = object()
++    if mode == 'debug':
++        handler.plugin_container.debug = True
++    if mode == 'disabled':
++        handler.plugin_container.enabled = False
++    if mode == 'initializing':
++        handler.plugin_container.status = RuntimeContainerStatus.MOUNTED
++    if mode == 'wrong-binding':
++        binding = binding.model_copy(update={'runtime_revision': 2})
++    try:
++        if mode == 'outside':
++            with pytest.raises(RuntimeError):
++                plugin.spawn_background(factory)
++        else:
++            with component(worker, api=object() if mode == 'runner' else None, binding=binding):
++                with pytest.raises(RuntimeError):
++                    plugin.spawn_background(factory)
++        factory.assert_not_called()
++    finally:
++        await handler.close()
++
++
++@pytest.mark.asyncio
++async def test_ended_invocation_cannot_start_job(worker):
++    handler, plugin, _, _ = worker
++    gate = asyncio.Event()
++    factory = Mock()
++
++    async def escaped():
++        await gate.wait()
++        plugin.spawn_background(factory)
++
++    try:
++        with component(worker):
++            escaped_task = asyncio.create_task(escaped())
++        gate.set()
++        with pytest.raises(RuntimeError, match='invocation has ended'):
++            await escaped_task
++        factory.assert_not_called()
++    finally:
++        await handler.close()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('timeout', [True, False, 0, -1, 7201, 10**1000, float('inf'), float('nan'), '10', None])
++async def test_timeout_limits_are_checked_before_factory(worker, timeout):
++    handler, plugin, _, _ = worker
++    factory = Mock()
++    try:
++        with component(worker):
++            with pytest.raises(ValueError):
++                plugin.spawn_background(factory, timeout=timeout)
++        factory.assert_not_called()
++    finally:
++        await handler.close()
++
++
++@pytest.mark.asyncio
++async def test_limit_includes_jobs_not_started_yet(worker):
++    handler, plugin, _, _ = worker
++    factory = AsyncMock()
++    try:
++        with component(worker):
++            first = plugin.spawn_background(factory)
++            second = plugin.spawn_background(factory)
++            with pytest.raises(RuntimeError, match='limit'):
++                plugin.spawn_background(factory)
++        await handler.close()
++        assert first.cancelled() and second.cancelled()
++        factory.assert_not_called()
++    finally:
++        await handler.close()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('stop', ['shutdown', 'close', 'disconnect'])
++async def test_stopping_revokes_before_cancellation_cleanup(worker, stop):
++    handler, plugin, _, connection = worker
++    started = asyncio.Event()
++    cleanup = []
++    lease = []
++
++    async def job():
++        lease.append(current_invocation(handler))
++        started.set()
++        try:
++            await asyncio.Event().wait()
++        finally:
++            cleanup.append(lease[0].active)
++            with pytest.raises(RuntimeError, match='invocation has ended'):
++                await plugin.get_langbot_version()
++
++    try:
++        with component(worker):
++            task = plugin.spawn_background(job)
++        await started.wait()
++        if stop == 'shutdown':
++            await handler.actions[RuntimeToPluginAction.SHUTDOWN.value]({})
++        elif stop == 'close':
++            await handler.close()
++        else:
++
++            async def disconnected(_handler):
++                assert not lease[0].active
++                assert task.cancelling()
++                return False
++
++            handler.set_disconnect_callback(disconnected)
++            await handler.run()
++        assert task.cancelled()
++        assert cleanup == [False]
++        assert connection.sent == []
++        with component(worker):
++            with pytest.raises(RuntimeError, match='stopping'):
++                plugin.spawn_background(job)
++    finally:
++        await handler.close()
++
++
++@pytest.mark.asyncio
++async def test_deadline_revokes_before_finally_and_reports_timeout(worker):
++    handler, plugin, _, connection = worker
++    cleanup = []
++
++    async def job():
++        lease = current_invocation(handler)
++        try:
++            await asyncio.Event().wait()
++        finally:
++            cleanup.append(lease.active)
++            with pytest.raises(RuntimeError):
++                await plugin.get_langbot_version()
++
++    try:
++        with component(worker):
++            task = plugin.spawn_background(job, timeout=0.01)
++        with pytest.raises(TimeoutError):
++            await asyncio.wait_for(task, 1)
++        assert cleanup == [False]
++        assert connection.sent == []
++    finally:
++        await handler.close()
++
++
++@pytest.mark.asyncio
++async def test_catching_timeout_cancellation_does_not_restore_authority(worker):
++    handler, plugin, _, connection = worker
++
++    async def job():
++        try:
++            await asyncio.Event().wait()
++        except asyncio.CancelledError:
++            with pytest.raises(RuntimeError, match='invocation has ended'):
++                await plugin.get_langbot_version()
++            return 'cannot-turn-expiration-into-success'
++
++    try:
++        with component(worker):
++            task = plugin.spawn_background(job, timeout=0.01)
++        with pytest.raises(TimeoutError):
++            await asyncio.wait_for(task, 1)
++        assert connection.sent == []
++    finally:
++        await handler.close()
++
++
++@pytest.mark.asyncio
++async def test_background_job_cannot_renew_itself_with_another_job(worker):
++    handler, plugin, _, _ = worker
++    factory = Mock()
++
++    async def job():
++        with pytest.raises(RuntimeError, match='component invocation'):
++            plugin.spawn_background(factory)
++
++    try:
++        with component(worker):
++            task = plugin.spawn_background(job)
++        await task
++        factory.assert_not_called()
++    finally:
++        await handler.close()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('kind', ['query-proxy', 'query-id', 'run-id', 'target-run', 'stream-run', 'admin-action'])
++async def test_background_rejects_captured_query_and_runner_authority(worker, kind):
++    handler, plugin, _, connection = worker
++    query_proxy = QueryBasedAPIProxy(query_id=1, query_uuid='test-query', plugin_runtime_handler=handler)
++
++    async def job():
++        if kind == 'query-proxy':
++            await query_proxy.get_query_vars()
++        elif kind == 'stream-run':
++            async for _ in handler.call_action_generator(PluginToRuntimeAction.INVOKE_LLM_STREAM, {'run_id': 'old'}):
++                pass
++        elif kind == 'admin-action':
++            await handler.call_action(PluginToRuntimeAction.RUN_LIST, {})
++        else:
++            field = {'query-id': 'query_id', 'run-id': 'run_id', 'target-run': 'target_run_id'}[kind]
++            await handler.call_action(PluginToRuntimeAction.INVOKE_LLM, {field: 'old'})
++
++    try:
++        with component(worker):
++            task = plugin.spawn_background(job)
++        with pytest.raises(RuntimeError, match='query or Runner'):
++            await task
++        assert connection.sent == []
++    finally:
++        await handler.close()
++
++
++@pytest.mark.asyncio
++async def test_ordinary_query_api_remains_available(worker):
++    handler, _, _, connection = worker
++    proxy = QueryBasedAPIProxy(query_id=1, plugin_runtime_handler=handler)
++    try:
++        with component(worker):
++            assert await proxy.get_query_vars() == {}
++        assert connection.sent[0]['data'] == {'query_id': 1}
++    finally:
++        await handler.close()
++
++
++@pytest.mark.asyncio
++async def test_exception_is_observed_without_sensitive_message(worker, caplog):
++    handler, plugin, _, _ = worker
++
++    async def job():
++        raise ValueError('synthetic-secret-must-not-be-logged')
++
++    try:
++        with component(worker):
++            task = plugin.spawn_background(job)
++        with pytest.raises(ValueError):
++            await task
++        assert 'ValueError' in caplog.text
++        assert 'synthetic-secret' not in caplog.text
++    finally:
++        await handler.close()
++
++
++@pytest.mark.asyncio
++async def test_child_cannot_keep_authority_after_job_completes(worker):
++    handler, plugin, _, connection = worker
++    gate = asyncio.Event()
++    children = []
++
++    async def escaped():
++        await gate.wait()
++        await plugin.get_langbot_version()
++
++    async def job():
++        children.append(asyncio.create_task(escaped()))
++
++    try:
++        with component(worker):
++            task = plugin.spawn_background(job)
++        await task
++        gate.set()
++        with pytest.raises(RuntimeError, match='invocation has ended'):
++            await children[0]
++        assert connection.sent == []
++    finally:
++        await handler.close()

@@ -1,0 +1,242 @@
+--- a/src/langbot/pkg/agent/runner/orchestrator.py
++++ b/src/langbot/pkg/agent/runner/orchestrator.py
+@@ -10,6 +10,7 @@
+ 
+ from langbot_plugin.api.entities.builtin.provider import message as provider_message
+ from langbot_plugin.api.entities.builtin.provider import prompt as provider_prompt
++from langbot_plugin.api.entities.builtin.provider import session as provider_session
+ from langbot_plugin.api.entities.builtin.pipeline import query as pipeline_query
+ 
+ from langbot_plugin.entities.io.actions.enums import PluginToRuntimeAction
+@@ -555,6 +556,12 @@
+         query: pipeline_query.Query,
+     ) -> bool:
+         """Claim a query as steering input for an active run when possible."""
++        # Group sessions are shared by multiple senders. The scheduler offers
++        # queued input here before trigger checks, so absorbing it can replace
++        # another member's request with an unaddressed message. Keep each group
++        # query queued for its own normal trigger checks and execution instead.
++        if query.launcher_type == provider_session.LauncherTypes.GROUP:
++            return False
+         plan = self.query_bridge.build_plan(query)
+         event = plan.event
+         binding = plan.binding
+--- a/src/langbot/pkg/pipeline/aggregator.py
++++ b/src/langbot/pkg/pipeline/aggregator.py
+@@ -159,7 +159,9 @@
+             pipeline_uuid=pipeline_uuid,
+         )
+         enabled, delay = await self._get_aggregation_config(execution_context, pipeline_uuid)
+-        if variables:
++        # Group triggers run after this buffer. Merging here can mix senders or
++        # make an unaddressed message inherit a previous message's mention.
++        if variables or launcher_type == provider_session.LauncherTypes.GROUP:
+             enabled = False
+ 
+         # Preserve ingress identity across the queue and detached debounce task.
+--- /dev/null
++++ b/tests/unit_tests/pipeline/test_group_message_isolation.py
+@@ -0,0 +1,203 @@
++"""Concurrent group inputs stay independent until their own trigger checks."""
++
++from __future__ import annotations
++
++import asyncio
++from types import SimpleNamespace
++from unittest.mock import AsyncMock, Mock
++
++import pytest
++
++from langbot_plugin.api.entities.builtin.platform import message as platform_message
++from langbot_plugin.api.entities.builtin.provider import session as provider_session
++
++from langbot.pkg.agent.runner.orchestrator import AgentRunOrchestrator
++from langbot.pkg.api.http.context import ExecutionContext
++from langbot.pkg.pipeline.aggregator import MessageAggregator
++from langbot.pkg.pipeline.controller import Controller
++from langbot.pkg.pipeline.entities import ResultType
++from langbot.pkg.pipeline.pool import QueryPool
++from langbot.pkg.pipeline.resprule.resprule import GroupRespondRuleCheckStage
++from langbot.pkg.pipeline.resprule.rules.atbot import AtBotRule
++from langbot.pkg.pipeline.resprule.rules.prefix import PrefixRule
++from tests.factories import friend_message_event, group_message_event
++
++
++def chain(content, *, mention=None, image=False):
++    parts = [platform_message.Plain(text=content)]
++    if mention is not None:
++        parts.insert(0, platform_message.At(target=mention))
++    if image:
++        parts.append(platform_message.Image(url='https://example.test/synthetic.png'))
++    return platform_message.MessageChain(parts)
++
++
++def make_app():
++    context = ExecutionContext(instance_uuid='test-instance', workspace_uuid='test-workspace', placement_generation=1)
++    session = provider_session.Session(
++        launcher_type=provider_session.LauncherTypes.GROUP,
++        launcher_id='synthetic-group',
++        sender_id='member-a',
++    )
++    session._semaphore = asyncio.Semaphore(1)
++    app = SimpleNamespace(
++        instance_config=SimpleNamespace(data={'concurrency': {'pipeline': 10}}),
++        logger=Mock(),
++        query_pool=QueryPool(),
++        persistence_mgr=SimpleNamespace(mode=SimpleNamespace(value='oss')),
++        workspace_service=SimpleNamespace(get_execution_binding=AsyncMock(return_value=context)),
++        sess_mgr=SimpleNamespace(get_session=AsyncMock(return_value=session)),
++    )
++    config = {
++        'trigger': {
++            'group-respond-rules': {'at': True, 'prefix': ['/ai']},
++            'message-aggregation': {'enabled': True, 'delay': 10},
++        }
++    }
++    pipeline = SimpleNamespace(pipeline_entity=SimpleNamespace(config=config), bound_plugins=[], bound_mcp_servers=[])
++    app.pipeline_mgr = SimpleNamespace(get_pipeline_by_uuid=AsyncMock(return_value=pipeline))
++    return app, context, pipeline
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('sender', ['member-a', 'member-b'])
++@pytest.mark.parametrize('addressed', [False, True])
++async def test_group_steering_never_builds_a_plan_or_mutates_the_input(sender, addressed):
++    orchestrator = object.__new__(AgentRunOrchestrator)
++    orchestrator.query_bridge = Mock()
++    query = SimpleNamespace(
++        launcher_type=provider_session.LauncherTypes.GROUP,
++        sender_id=sender,
++        message_chain=chain('Synthetic follow-up', mention='bot' if addressed else None),
++    )
++    before = query.message_chain.model_dump()
++
++    assert await orchestrator.try_claim_steering_from_query(query) is False
++
++    orchestrator.query_bridge.build_plan.assert_not_called()
++    assert query.message_chain.model_dump() == before
++
++
++@pytest.mark.asyncio
++async def test_busy_group_keeps_other_members_and_unaddressed_images_out_of_active_run():
++    app, context, pipeline = make_app()
++    aggregator = MessageAggregator(app)
++    controller = Controller(app)
++    orchestrator = object.__new__(AgentRunOrchestrator)
++    orchestrator.query_bridge = Mock()
++    steering_checked = asyncio.Event()
++
++    async def try_steering(query):
++        result = await orchestrator.try_claim_steering_from_query(query)
++        steering_checked.set()
++        return result
++
++    app.agent_run_orchestrator = SimpleNamespace(try_claim_steering_from_query=try_steering)
++    rules = GroupRespondRuleCheckStage(app)
++    rules.rule_matchers = [AtBotRule(app), PrefixRule(app)]
++    first_started, release_first, all_processed = asyncio.Event(), asyncio.Event(), asyncio.Event()
++    processed, accepted, worker_tasks = [], [], []
++
++    async def run(query):
++        query.pipeline_config = pipeline.pipeline_entity.config
++        result = await rules.process(query, 'GroupRespondRuleCheckStage')
++        if result.result_type == ResultType.CONTINUE:
++            # The later Chat handler uses the same steering entry point.
++            assert not await orchestrator.try_claim_steering_from_query(query)
++            accepted.append((query.query_uuid, query.sender_id, str(query.message_chain)))
++            if len(accepted) == 1:
++                first_started.set()
++                await release_first.wait()
++                assert str(query.message_chain) == 'Question A'
++        processed.append(query.query_uuid)
++        if len(processed) == 7:
++            all_processed.set()
++
++    pipeline.run = run
++
++    def create_task(coro, **kwargs):
++        task = asyncio.create_task(coro)
++        worker_tasks.append(task)
++        return task
++
++    app.task_mgr = SimpleNamespace(create_task=create_task)
++
++    async def enqueue(sender, message_chain):
++        await aggregator.add_message(
++            bot_uuid='synthetic-bot',
++            launcher_type=provider_session.LauncherTypes.GROUP,
++            launcher_id='synthetic-group',
++            sender_id=sender,
++            message_event=group_message_event(message_chain, sender_id=sender, group_id='synthetic-group'),
++            message_chain=message_chain,
++            adapter=None,
++            pipeline_uuid='synthetic-pipeline',
++            execution_context=context,
++        )
++        query = app.query_pool.queries[-1]
++        query.adapter = SimpleNamespace(bot_account_id='bot')
++        return query.query_uuid
++
++    first_id = await enqueue('member-a', chain('Question A', mention='bot'))
++    consumer_task = asyncio.create_task(controller.consumer())
++    try:
++        await asyncio.wait_for(first_started.wait(), timeout=2)
++        await enqueue('member-b', chain('Ordinary text B'))
++        await enqueue('member-b', chain('', image=True))
++        second_id = await enqueue('member-b', chain('Question B', mention='bot'))
++        await enqueue('member-a', chain('Unaddressed follow-up A'))
++        third_id = await enqueue('member-a', chain('/aiQuestion A2'))
++        await enqueue('member-c', chain('Talking to B', mention='member-b'))
++        await asyncio.wait_for(steering_checked.wait(), timeout=2)
++
++        assert accepted == [(first_id, 'member-a', 'Question A')]
++        assert len(app.query_pool.queries) == 6
++        assert aggregator.buffers == {}
++        orchestrator.query_bridge.build_plan.assert_not_called()
++
++        release_first.set()
++        await asyncio.wait_for(all_processed.wait(), timeout=2)
++        await asyncio.wait_for(asyncio.gather(*worker_tasks), timeout=2)
++    finally:
++        release_first.set()
++        consumer_task.cancel()
++        with pytest.raises(asyncio.CancelledError):
++            await consumer_task
++        for task in worker_tasks:
++            if not task.done():
++                task.cancel()
++        await asyncio.gather(*worker_tasks, return_exceptions=True)
++
++    assert accepted == [
++        (first_id, 'member-a', 'Question A'),
++        (second_id, 'member-b', 'Question B'),
++        (third_id, 'member-a', 'Question A2'),
++    ]
++    assert len(set(processed)) == 7
++    assert app.query_pool.queries == []
++    assert app.query_pool.cached_queries == {}
++    app.logger.error.assert_not_called()
++
++
++@pytest.mark.asyncio
++async def test_private_messages_still_use_configured_aggregation():
++    app, context, _ = make_app()
++    aggregator = MessageAggregator(app)
++    for content in ('Private part one', 'Private part two'):
++        message_chain = chain(content)
++        await aggregator.add_message(
++            bot_uuid='synthetic-bot',
++            launcher_type=provider_session.LauncherTypes.PERSON,
++            launcher_id='member-a',
++            sender_id='member-a',
++            message_event=friend_message_event(message_chain, sender_id='member-a'),
++            message_chain=message_chain,
++            adapter=None,
++            pipeline_uuid='synthetic-pipeline',
++            execution_context=context,
++        )
++    assert len(aggregator.buffers) == 1
++    assert app.query_pool.queries == []
++    await aggregator.flush_all()
++    assert len(app.query_pool.queries) == 1
++    assert str(app.query_pool.queries[0].message_chain) == 'Private part one\nPrivate part two'

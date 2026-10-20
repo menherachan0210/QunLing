@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: send_web_file
+  label:
+    en_US: Send downloaded attachment
+    zh_Hans: 上传已下载的附件
+  description:
+    en_US: Upload one downloaded file_ref with its source to the current QQ conversation.
+    zh_Hans: 将本轮已下载的一个文件及来源上传到当前QQ聊天。
+spec:
+  parameters:
+    type: object
+    properties:
+      file_ref:
+        type: string
+        description: Exact file_ref returned by download_web_file in this query.
+    required: [file_ref]
+    additionalProperties: false
+  llm_prompt: |
+    Send an attachment only when the current user asks you to upload/send/provide the file in this chat.
+    Use the exact file_ref from this query's download_web_file result, never a URL, local path, group ID or recipient.
+    Each call uploads one file to the current trusted QQ conversation. At most two distinct attachments per query.
+    On status=sent, the attachment and source have been sent; give a brief acknowledgement, not manual download instructions.
+    Failed or unconfirmed delivery must not be retried; never claim success unless the tool returns sent.
+execution:
+  python:
+    path: send_web_file.py
+    attr: SendWebFile

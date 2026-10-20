@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: comic_translation_status
+  label:
+    en_US: comic_translation_status
+    zh_Hans: 查询漫画翻译进度
+  description:
+    en_US: Report this sender's latest comic translation progress in this conversation.
+    zh_Hans: 查询漫画翻译进度；只操作本会话当前发送者的任务。
+spec:
+  parameters:
+    type: object
+    properties: {}
+    additionalProperties: false
+  llm_prompt: |
+    Report this sender's latest comic translation progress in this conversation. Never query another sender or invent progress. This read-only operation does not retry pages or resend a file. If delivery=unknown, explain that the file send was not confirmed and user may explicitly request resending.
+    Call with {} only; never pass URLs, paths, identities, recipients, or file IDs.
+execution:
+  python:
+    path: comic_translation_status.py
+    attr: ComicTranslationStatus

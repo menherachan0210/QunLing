@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: Plugin
+metadata:
+  author: local
+  name: QQWebSearch
+  version: 0.2.0
+  label:
+    en_US: Web Search, Images and Attachments
+    zh_Hans: 联网查询、搜图与附件上传
+  description:
+    en_US: Search public sources, inspect web images, download and send public attachments.
+    zh_Hans: 按自然语言联网查询、搜图，下载公开文件并作为QQ附件上传。
+  icon: assets/icon.svg
+spec:
+  config:
+    - name: api_base_url
+      type: string
+      required: true
+      default: https://ai.qlht.uk/v1
+      label:
+        en_US: Responses API URL
+        zh_Hans: 联网搜索 API 地址
+    - name: api_key
+      type: secret
+      required: true
+      default: ''
+      label:
+        en_US: API key
+        zh_Hans: API 密钥
+    - name: model_name
+      type: string
+      required: true
+      default: gpt-6.1-sol
+      label:
+        en_US: Search model
+        zh_Hans: 联网模型
+    - name: vision_model_uuid
+      type: string
+      required: true
+      default: ''
+      label:
+        en_US: Existing vision model UUID
+        zh_Hans: 已有图片理解模型 UUID
+    - name: request_timeout_seconds
+      type: integer
+      required: false
+      default: 65
+      label:
+        en_US: Search timeout in seconds
+        zh_Hans: 搜索超时秒数（30 至 90）
+  components:
+    Tool:
+      fromDirs:
+        - path: components/tools/
+    EventListener:
+      fromDirs:
+        - path: components/event_listener/
+execution:
+  python:
+    path: main.py
+    attr: QQWebSearch

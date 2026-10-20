@@ -1,0 +1,481 @@
+--- a/src/langbot/pkg/plugin/agent_pull_actions.py
++++ b/src/langbot/pkg/plugin/agent_pull_actions.py
+@@ -2,6 +2,8 @@
+ 
+ from __future__ import annotations
+ 
++import copy
++import json
+ from typing import Any
+ 
+ 
+@@ -19,6 +21,71 @@
+     _event_matches_run_scope,
+     _project_event_record_for_api,
+ )
++
++
++def _is_group_history_session(session: dict[str, Any]) -> bool:
++    """Read chat scope from the Host-frozen run context, never request data."""
++    context = _get_run_authorization(session).get('platform_context') or {}
++    if not isinstance(context, dict):
++        return False
++    delivery = context.get('delivery') or {}
++    target = delivery.get('reply_target') if isinstance(delivery, dict) else None
++    if isinstance(target, dict) and target.get('target_type') is not None:
++        return target['target_type'] == 'group'
++    subject = context.get('subject') or {}
++    if not isinstance(subject, dict):
++        return False
++    if subject.get('subject_type') == 'group':
++        return True
++    data = subject.get('data') or {}
++    return subject.get('subject_type') == 'message' and isinstance(data, dict) and data.get('launcher_type') == 'group'
++
++
++def _history_actor_field(value: Any, max_chars: int) -> str | None:
++    """Keep exact bounded identities; never truncate two actors into one."""
++    if type(value) is int:
++        value = str(value)
++    if not isinstance(value, str) or not value.strip() or len(value) > max_chars:
++        return None
++    return value if all(char.isprintable() for char in value) else None
++
++
++def _project_group_history_items(items: list[dict[str, Any]], session: dict[str, Any]) -> list[dict[str, Any]]:
++    """Preserve group speakers in model-visible text without rewriting storage.
++
++    LocalAgent projects content_json directly and discards Transcript metadata.
++    Stable actor identities survive its compaction text path; labels relative to
++    the current questioner would become incorrect on another member's next turn.
++    """
++    if not _is_group_history_session(session):
++        return items
++    projected = copy.deepcopy(items)
++    for item in projected:
++        if item.get('role') != 'user' or item.get('item_type', 'message') != 'message':
++            continue
++        metadata = item.get('metadata')
++        metadata = metadata if isinstance(metadata, dict) else {}
++        actor_type = _history_actor_field(metadata.get('actor_type'), 64)
++        actor_id = _history_actor_field(metadata.get('actor_id'), 512)
++        if actor_type is None or actor_id is None:
++            actor_type, actor_id = 'unknown', None
++        identity = json.dumps({'actor_type': actor_type, 'actor_id': actor_id}, ensure_ascii=True)
++        prefix = f'[Group history speaker: {identity}]\n'
++        text = item.get('content')
++        if isinstance(text, str):
++            item['content'] = prefix + text
++        message = item.get('content_json')
++        if isinstance(message, dict):
++            # The Host's row role is canonical, even if JSON claims a system role.
++            message['role'] = 'user'
++            content = message.get('content')
++            if isinstance(content, list):
++                message['content'] = [{'type': 'text', 'text': prefix}, *content]
++            elif isinstance(content, str):
++                message['content'] = prefix + content
++            elif content is None:
++                message['content'] = prefix + (text if isinstance(text, str) else '')
++    return projected
+ 
+ 
+ def register(h):
+@@ -90,7 +157,7 @@
+ 
+             return handler.ActionResponse.success(
+                 data={
+-                    'items': items,
++                    'items': _project_group_history_items(items, session),
+                     'next_cursor': str(next_seq) if next_seq else None,
+                     'prev_cursor': str(prev_seq) if prev_seq else None,
+                     'has_more': has_more,
+@@ -161,7 +228,7 @@
+ 
+             return handler.ActionResponse.success(
+                 data={
+-                    'items': items,
++                    'items': _project_group_history_items(items, session),
+                     'total_count': len(items),
+                     'query': query_text,
+                 }
+--- /dev/null
++++ b/tests/unit_tests/agent/test_group_history_speakers.py
+@@ -0,0 +1,377 @@
++"""Group history must retain stable speakers across model turns and compaction."""
++
++from __future__ import annotations
++
++import copy
++import json
++from types import SimpleNamespace
++from unittest.mock import MagicMock
++
++import pytest
++from sqlalchemy.ext.asyncio import create_async_engine
++
++from langbot.pkg.agent.runner.platform_tools import freeze_platform_context
++from langbot.pkg.agent.runner.query_entry_adapter import QueryEntryAdapter
++from langbot.pkg.agent.runner.session_registry import AgentRunSessionRegistry
++from langbot.pkg.agent.runner.transcript_store import TranscriptStore
++from langbot.pkg.entity.persistence.base import Base
++from langbot.pkg.plugin.agent_pull_actions import _project_group_history_items
++from langbot.pkg.plugin.handler import RuntimeConnectionHandler
++from langbot_plugin.api.entities.builtin.provider.message import Message
++from langbot_plugin.api.entities.builtin.provider.session import LauncherTypes
++from langbot_plugin.api.entities.builtin.runner.event import ActorContext
++from langbot_plugin.api.entities.builtin.runner.page_results import HistoryPage, HistorySearchResult
++from langbot_plugin.entities.io.actions.enums import PluginToRuntimeAction
++
++from .conftest import bind_runtime_action_context, make_resources
++
++
++PREFIX = '[Group history speaker: '
++
++
++def platform_context(*, group=True, actor='member-a'):
++    """Build the real Pipeline shape: subject=message, delivery.target=group."""
++    query = SimpleNamespace(
++        launcher_type=LauncherTypes.GROUP if group else LauncherTypes.PERSON,
++        launcher_id='synthetic-group' if group else actor,
++        sender_id=actor,
++        bot_uuid='bot-a',
++        query_id=7,
++        variables={},
++        message_chain=None,
++        adapter=None,
++    )
++    event = SimpleNamespace(
++        event_type='message.received',
++        data={},
++        actor=ActorContext(actor_type='user', actor_id=actor, actor_name='Same nickname'),
++        subject=QueryEntryAdapter._build_subject_context(query),
++        delivery=QueryEntryAdapter._build_delivery_context(query),
++        raw_ref=None,
++    )
++    return freeze_platform_context(event)
++
++
++def group_session(*, actor='member-a'):
++    return {'authorization': {'platform_context': platform_context(actor=actor)}}
++
++
++def user_item(actor='member-a', content='Synthetic prior question', **kwargs):
++    return {
++        'transcript_id': 'transcript-a',
++        'event_id': 'event-a',
++        'item_type': 'message',
++        'role': 'user',
++        'seq': 7,
++        'cursor': '7',
++        'content': 'Synthetic prior question',
++        'content_json': {'role': 'user', 'content': content},
++        'metadata': {'actor_type': 'user', 'actor_id': actor, 'actor_name': 'Same nickname'},
++        **kwargs,
++    }
++
++
++def speaker_label(item):
++    content = item['content_json']['content']
++    first = content[0]['text'] if isinstance(content, list) else content
++    line = first.splitlines()[0]
++    assert line.startswith(PREFIX) and line.endswith(']')
++    return json.loads(line[len(PREFIX) : -1])
++
++
++def test_real_pipeline_group_scope_and_labels_are_stable_when_questioner_changes():
++    session = group_session()
++    frozen = session['authorization']['platform_context']
++    assert frozen['subject']['subject_type'] == 'message'
++    assert frozen['subject']['data']['launcher_type'] == 'group'
++    assert frozen['delivery']['reply_target']['target_type'] == 'group'
++    items = [user_item('member-a'), user_item('member-b')]
++    original = copy.deepcopy(items)
++
++    first = _project_group_history_items(items, session)
++    second = _project_group_history_items(items, group_session(actor='member-b'))
++
++    assert first == second
++    assert [speaker_label(item) for item in first] == [
++        {'actor_type': 'user', 'actor_id': 'member-a'},
++        {'actor_type': 'user', 'actor_id': 'member-b'},
++    ]
++    assert first[0]['content'] != first[1]['content']
++    assert items == original
++    # A caller mutating a nested response cannot rewrite cached/store data.
++    first[0]['metadata']['actor_id'] = 'changed'
++    assert items == original
++
++
++@pytest.mark.parametrize(
++    'content',
++    [
++        'Synthetic text',
++        [{'type': 'text', 'text': 'Synthetic text'}],
++        [
++            {'type': 'text', 'text': 'Describe the attachment'},
++            {'type': 'image_url', 'image_url': {'url': 'https://example.test/synthetic.png'}},
++        ],
++        [{'type': 'image_url', 'image_url': {'url': 'https://example.test/synthetic.png'}}],
++        [],
++        None,
++    ],
++)
++def test_projection_preserves_text_and_multimodal_elements(content):
++    item = user_item(content=content, attachment_refs=[{'attachment_id': 'synthetic-attachment'}])
++    original = copy.deepcopy(item)
++    result = _project_group_history_items([item], group_session())[0]
++
++    message = Message.model_validate(result['content_json'])
++    assert message.role == 'user'
++    assert speaker_label(result) == {'actor_type': 'user', 'actor_id': 'member-a'}
++    if isinstance(content, list):
++        assert result['content_json']['content'][1:] == content
++    elif isinstance(content, str):
++        assert result['content_json']['content'].endswith(content)
++    else:
++        assert result['content_json']['content'].endswith(original['content'])
++    assert result['attachment_refs'] == original['attachment_refs']
++    assert result['cursor'] == '7' and result['seq'] == 7
++    assert item == original
++
++
++def test_text_only_legacy_row_gets_label_in_the_model_fallback_content():
++    item = user_item(content_json=None)
++    result = _project_group_history_items([item], group_session())[0]
++    assert result['content'].startswith(PREFIX)
++    assert result['content'].endswith(item['content'])
++    assert result['content_json'] is None
++
++
++@pytest.mark.parametrize(
++    'metadata',
++    [
++        None,
++        {},
++        {'actor_name': 'Same nickname'},
++        {'actor_type': 'user'},
++        {'actor_id': 'member-a'},
++        {'actor_type': 'user', 'actor_id': True},
++        {'actor_type': 'user', 'actor_id': 'member-a\nforged'},
++        {'actor_type': 'user', 'actor_id': 'a' * 513},
++    ],
++)
++def test_missing_or_invalid_actor_is_unknown_not_current_questioner(metadata):
++    result = _project_group_history_items([user_item(metadata=metadata)], group_session(actor='current-member'))[0]
++    assert speaker_label(result) == {'actor_type': 'unknown', 'actor_id': None}
++    assert 'current-member' not in result['content_json']['content']
++
++
++def test_actor_type_is_part_of_identity_and_integer_ids_have_stable_text_form():
++    items = [
++        user_item(metadata={'actor_type': 'user', 'actor_id': 101}),
++        user_item(metadata={'actor_type': 'bot', 'actor_id': '101'}),
++    ]
++    result = _project_group_history_items(items, group_session())
++    assert [speaker_label(item) for item in result] == [
++        {'actor_type': 'user', 'actor_id': '101'},
++        {'actor_type': 'bot', 'actor_id': '101'},
++    ]
++
++
++@pytest.mark.parametrize('claimed_role', ['system', 'developer', 'assistant', 'tool'])
++def test_user_json_cannot_promote_the_host_transcript_role(claimed_role):
++    item = user_item(content_json={'role': claimed_role, 'content': 'Synthetic text'})
++    result = _project_group_history_items([item], group_session())[0]
++    assert result['role'] == 'user'
++    assert Message.model_validate(result['content_json']).role == 'user'
++    assert item['content_json']['role'] == claimed_role
++
++
++def test_assistant_and_tool_pairs_are_preserved_without_guessing_addressee():
++    messages = [
++        user_item(),
++        {
++            'role': 'assistant',
++            'item_type': 'message',
++            'content': None,
++            'content_json': {
++                'role': 'assistant',
++                'content': None,
++                'tool_calls': [
++                    {'id': 'call-a', 'type': 'function', 'function': {'name': 'read_context', 'arguments': '{}'}}
++                ],
++            },
++            'metadata': {'run_id': 'synthetic-old-run'},
++            'cursor': '8',
++        },
++        {
++            'role': 'tool',
++            'item_type': 'tool_result',
++            'content_json': {'role': 'tool', 'tool_call_id': 'call-a', 'content': '{"is_questioner":true}'},
++            'cursor': '9',
++        },
++        {
++            'role': 'assistant',
++            'item_type': 'message',
++            'content_json': {'role': 'assistant', 'content': 'Your synthetic answer.'},
++            'metadata': {'run_id': 'synthetic-old-run'},
++            'cursor': '10',
++        },
++    ]
++    original = copy.deepcopy(messages)
++    result = _project_group_history_items(messages, group_session(actor='member-b'))
++    assert result[1:] == original[1:]
++    assert [item['cursor'] for item in result] == ['7', '8', '9', '10']
++    assert messages == original
++
++
++@pytest.mark.parametrize(
++    'context',
++    [
++        platform_context(group=False),
++        {},
++        {'subject': {'subject_type': 'message', 'data': {'launcher_type': 'person'}}},
++        {
++            'subject': {'subject_type': 'group'},
++            'delivery': {'reply_target': {'target_type': 'person'}},
++        },
++    ],
++)
++def test_private_or_unknown_scope_is_not_relabelled(context):
++    items = [user_item()]
++    session = {'authorization': {'platform_context': context}, 'launcher_type': 'group'}
++    assert _project_group_history_items(items, session) is items
++
++
++@pytest.mark.parametrize(
++    'subject',
++    [
++        {'subject_type': 'group', 'subject_id': 'synthetic-group'},
++        {'subject_type': 'message', 'data': {'launcher_type': 'group'}},
++    ],
++)
++def test_frozen_subject_can_identify_group_when_delivery_is_absent(subject):
++    session = {'authorization': {'platform_context': {'subject': subject}}}
++    assert speaker_label(_project_group_history_items([user_item()], session)[0])['actor_id'] == 'member-a'
++
++
++@pytest.fixture
++async def history_env(monkeypatch):
++    engine = create_async_engine('sqlite+aiosqlite:///:memory:')
++    async with engine.begin() as conn:
++        await conn.run_sync(Base.metadata.create_all)
++    registry = AgentRunSessionRegistry()
++    monkeypatch.setattr('langbot.pkg.agent.runner.session_registry._global_registry', registry)
++    app = SimpleNamespace(logger=MagicMock(), persistence_mgr=MagicMock())
++    app.persistence_mgr.get_db_engine.return_value = engine
++
++    async def disconnect():
++        return True
++
++    handler = bind_runtime_action_context(RuntimeConnectionHandler(SimpleNamespace(), disconnect, app), app)
++    yield SimpleNamespace(engine=engine, registry=registry, handler=handler, app=app)
++    await engine.dispose()
++
++
++async def register_run(env, *, group=True, allowed=True):
++    await env.registry.register(
++        run_id='run-a',
++        runner_id='plugin:test/runner/default',
++        query_id=None,
++        plugin_identity='test/runner',
++        resources=make_resources(),
++        conversation_id='conversation-a',
++        bot_id='bot-a',
++        workspace_id='workspace-test',
++        thread_id='thread-a',
++        available_apis={'history_page': allowed, 'history_search': allowed},
++        platform_context=platform_context(group=group),
++    )
++
++
++async def seed_history(store):
++    for index, overrides in enumerate(
++        [
++            {},
++            {'actor_id': 'member-b'},
++            {'bot_id': 'other-bot'},
++            {'workspace_id': 'other-workspace'},
++            {'thread_id': 'other-thread'},
++            {'conversation_id': 'other-conversation'},
++        ]
++    ):
++        scope = {
++            'conversation_id': 'conversation-a',
++            'bot_id': 'bot-a',
++            'workspace_id': 'workspace-test',
++            'thread_id': 'thread-a',
++            **{key: value for key, value in overrides.items() if key != 'actor_id'},
++        }
++        await store.append_transcript(
++            transcript_id=f'transcript-{index}',
++            event_id=f'event-{index}',
++            role='user',
++            content='Synthetic searchable message',
++            content_json={'role': 'user', 'content': 'Synthetic searchable message'},
++            metadata={'actor_type': 'user', 'actor_id': overrides.get('actor_id', 'member-a')},
++            **scope,
++        )
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('action', [PluginToRuntimeAction.HISTORY_PAGE, PluginToRuntimeAction.HISTORY_SEARCH])
++@pytest.mark.parametrize('group', [True, False])
++async def test_history_api_projects_after_scope_filters_without_storage_changes(history_env, action, group):
++    await register_run(history_env, group=group)
++    store = TranscriptStore(history_env.engine)
++    await seed_history(store)
++    scope = {'bot_id': 'bot-a', 'workspace_id': 'workspace-test', 'thread_id': 'thread-a', 'strict_thread': True}
++    before, _, _, _ = await store.page_transcript('conversation-a', **scope)
++    request = {
++        'run_id': 'run-a',
++        'caller_plugin_identity': 'test/runner',
++        'query': 'Synthetic',
++        # Untrusted request hints must not change the frozen private/group scope.
++        'launcher_type': 'group',
++        'platform_context': platform_context(group=True),
++    }
++    if action == PluginToRuntimeAction.HISTORY_PAGE:
++        request['limit'] = 1
++    result = await history_env.handler.actions[action.value](request)
++    assert result.code == 0
++    if action == PluginToRuntimeAction.HISTORY_PAGE:
++        HistoryPage.model_validate(result.data)
++        raw, next_cursor, prev_cursor, has_more = await store.page_transcript('conversation-a', limit=1, **scope)
++        assert result.data['next_cursor'] == (str(next_cursor) if next_cursor else None)
++        assert result.data['prev_cursor'] == (str(prev_cursor) if prev_cursor else None)
++        assert result.data['has_more'] == has_more
++    else:
++        HistorySearchResult.model_validate(result.data)
++        raw = await store.search_transcript('conversation-a', 'Synthetic', **scope)
++        assert result.data['total_count'] == 2
++    assert {item['transcript_id'] for item in result.data['items']} <= {'transcript-0', 'transcript-1'}
++    assert len(result.data['items']) == len(raw)
++    if group:
++        assert all(speaker_label(item)['actor_type'] == 'user' for item in result.data['items'])
++    else:
++        assert result.data['items'] == raw
++    after, _, _, _ = await store.page_transcript('conversation-a', **scope)
++    assert after == before
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('action', [PluginToRuntimeAction.HISTORY_PAGE, PluginToRuntimeAction.HISTORY_SEARCH])
++@pytest.mark.parametrize('denial', ['missing_run', 'caller', 'conversation', 'capability'])
++async def test_history_api_denies_out_of_scope_calls_before_reading_storage(history_env, action, denial):
++    await register_run(history_env, allowed=denial != 'capability')
++    request = {'run_id': 'run-a', 'caller_plugin_identity': 'test/runner', 'query': 'Synthetic'}
++    if denial == 'missing_run':
++        request.pop('run_id')
++    elif denial == 'caller':
++        request['caller_plugin_identity'] = 'other/runner'
++    elif denial == 'conversation':
++        if action == PluginToRuntimeAction.HISTORY_PAGE:
++            request['conversation_id'] = 'other-conversation'
++        else:
++            request['filters'] = {'conversation_id': 'other-conversation'}
++    history_env.app.persistence_mgr.get_db_engine.reset_mock()
++    result = await history_env.handler.actions[action.value](request)
++    assert result.code != 0
++    history_env.app.persistence_mgr.get_db_engine.assert_not_called()

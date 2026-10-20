@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: EventListener
+metadata:
+  name: archive_context
+  label:
+    en_US: Scoped comic archive context
+    zh_Hans: 漫画压缩包 会话上下文
+  description:
+    en_US: Capture scoped archive references and retain trusted session access for job controls.
+    zh_Hans: 捕获隔离的 压缩包引用，并保留查询、续做和取消任务所需的可信会话。
+spec:
+execution:
+  python:
+    path: archive_context.py
+    attr: ArchiveContextListener
