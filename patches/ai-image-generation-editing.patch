@@ -49,7 +49,7 @@ new file mode 100644
 +
 +| 字段 | 本地默认值 |
 +| --- | --- |
-+| `api_base_url` | `https://ai.qlht.uk/v1` |
++| `api_base_url` | `https://api.openai.com/v1` |
 +| `openai_api_key` | 留空；在插件设置中填写，使用 secret 输入框 |
 +| `model_name` | `gpt-image-2.5-sunburst`，可自由填写 |
 +| `image_size` | `1024x1024` |
@@ -875,7 +875,7 @@ diff --git a/main.py b/main.py
  from langbot_plugin.api.definition.plugin import BasePlugin
  
 -DEFAULT_BASE_URL = "https://api.qhaigc.net"
-+DEFAULT_BASE_URL = "https://ai.qlht.uk/v1"
++DEFAULT_BASE_URL = "https://api.openai.com/v1"
 +MAX_IMAGE_BYTES = 10 * 1024 * 1024
 +MAX_PROMPT_CHARS = 8000
 +QUALITY_VALUES = {"auto", "low", "medium", "high", "xhigh", "max"}
@@ -1257,7 +1257,7 @@ diff --git a/manifest.yaml b/manifest.yaml
        zh_Hans: 兼容 OpenAI 格式的 API 地址
      required: false
 -    default: https://api.qhaigc.net/v1
-+    default: https://ai.qlht.uk/v1
++    default: https://api.openai.com/v1
    - name: openai_api_key
 -    type: string
 +    type: secret

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from langbot_plugin.api.definition.plugin import BasePlugin
 
-DEFAULT_BASE_URL = "https://ai.qlht.uk/v1"
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_PROMPT_CHARS = 8000
 QUALITY_VALUES = {"auto", "low", "medium", "high", "xhigh", "max"}

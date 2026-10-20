@@ -451,7 +451,7 @@
 +
 +## 重新打包与安装
 +
-+在部署根目录 `G:\素材\qq-ai-bot` 运行：
++在本仓库根目录（README.md 所在目录）运行：
 +
 +```powershell
 +& .\langbot\.venv\Scripts\python.exe .\custom-plugins\Build-LongTermMemory.py

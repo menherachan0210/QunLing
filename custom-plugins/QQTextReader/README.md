@@ -62,7 +62,7 @@ QQ群继续使用现有 `@机器人` 或 `/ai` 入口；上传附件本身不会
 使用当前 LangBot 虚拟环境（已实测 Python 3.12、langbot-plugin 0.7.11、aiohttp 3.14.1）：
 
 ```powershell
-Set-Location 'G:\素材\qq-ai-bot\custom-plugins\QQTextReader'
+Set-Location .\custom-plugins\QQTextReader
 & '..\..\langbot\.venv\Scripts\python.exe' -m pytest tests -q
 & '..\..\langbot\.venv\Scripts\python.exe' -m ruff check .
 & '..\..\langbot\.venv\Scripts\python.exe' -m langbot_plugin.cli build -o dist

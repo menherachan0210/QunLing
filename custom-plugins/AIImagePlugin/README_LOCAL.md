@@ -22,7 +22,7 @@
 
 | 字段 | 本地默认值 |
 | --- | --- |
-| `api_base_url` | `https://ai.qlht.uk/v1` |
+| `api_base_url` | `https://api.openai.com/v1` |
 | `openai_api_key` | 留空；在插件设置中填写，使用 secret 输入框 |
 | `model_name` | `gpt-image-2.5-sunburst`，可自由填写 |
 | `image_size` | `1024x1024` |

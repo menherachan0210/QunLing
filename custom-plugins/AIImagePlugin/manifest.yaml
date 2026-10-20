@@ -36,7 +36,7 @@ spec:
       en_US: Base URL for OpenAI compatible API
       zh_Hans: 兼容 OpenAI 格式的 API 地址
     required: false
-    default: https://ai.qlht.uk/v1
+    default: https://api.openai.com/v1
   - name: openai_api_key
     type: secret
     label:
