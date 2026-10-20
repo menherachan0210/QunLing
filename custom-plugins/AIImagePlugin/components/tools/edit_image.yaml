@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: edit_image
+  label:
+    en_US: Edit an image
+    zh_Hans: 修改图片
+  description:
+    en_US: Edit one current, quoted, or recent image for the same sender and send the result.
+    zh_Hans: 修改当前、引用或同一发送者近期的一张图片，并发送修改结果。
+spec:
+  parameters:
+    type: object
+    properties:
+      prompt:
+        type: string
+        minLength: 1
+        maxLength: 8000
+        description: The user's requested changes to one existing image, preserving all unspecified details.
+    required:
+      - prompt
+    additionalProperties: false
+  llm_prompt: |
+    Edit one EXISTING image and send the result directly to the current conversation.
+    Infer the user's intent from natural language; no fixed trigger word is required.
+    Use when the user requests a change to an existing image, for example a different
+    background, color, style, or object, or a follow-up revision to a recently generated image.
+    Do not use for merely describing, recognizing, analyzing or reading text in an image.
+    Do not call for a hypothetical request or your own example or suggestion.
+    Pass only the requested changes as prompt, at most 8000 characters. Never provide
+    image URLs, image bytes, account IDs, recipients, credentials, or model names.
+    The tool selects the current or quoted image, otherwise the same sender's most
+    recent upload or successfully delivered plugin image in the same chat, within 30 minutes.
+    Multiple current images are ambiguous: ask the user to send or quote exactly one.
+    Do not invent a source image or silently switch to generating a new image when none is available.
+    Generate and edit tools together allow at most one paid request per user message.
+    Never retry either tool after an error, timeout, unconfirmed result or delivery failure.
+    On success, the image is already sent; acknowledge briefly without Markdown image links.
+execution:
+  python:
+    path: edit_image.py
+    attr: EditImage

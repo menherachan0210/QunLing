@@ -1,0 +1,32 @@
+# Local deployment, credentials, downloaded runtimes and user data.
+/.local/
+/.tools/
+/downloads/
+/langbot/
+/napcat/
+
+# Environment secrets; keep distributable configuration examples.
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Python environments and generated caches.
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.py[cod]
+*.egg-info/
+.coverage
+.coverage.*
+htmlcov/
+
+# Rebuildable packages and dependency directories.
+dist/
+build/
+node_modules/
+*.lbpkg
+*.log

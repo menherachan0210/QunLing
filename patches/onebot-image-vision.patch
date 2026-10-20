@@ -1,0 +1,253 @@
+diff --git a/src/langbot/pkg/pipeline/preproc/preproc.py b/src/langbot/pkg/pipeline/preproc/preproc.py
+index 2a08781..408d132 100644
+--- a/src/langbot/pkg/pipeline/preproc/preproc.py
++++ b/src/langbot/pkg/pipeline/preproc/preproc.py
+@@ -348,9 +348,8 @@ class PreProcessor(stage.PipelineStage):
+                 content_list.append(provider_message.ContentElement.from_text(me.text))
+                 plain_text += me.text
+             elif isinstance(me, platform_message.Image):
+-                if keep_image_inputs:
+-                    if me.base64 is not None:
+-                        content_list.append(provider_message.ContentElement.from_image_base64(me.base64))
++                if keep_image_inputs and me.base64:
++                    content_list.append(provider_message.ContentElement.from_image_base64(me.base64))
+                 else:
+                     content_list.append(provider_message.ContentElement.from_text('[Image]'))
+                     plain_text += '[Image]'
+@@ -370,9 +369,8 @@ class PreProcessor(stage.PipelineStage):
+                     if isinstance(msg, platform_message.Plain):
+                         content_list.append(provider_message.ContentElement.from_text(msg.text))
+                     elif isinstance(msg, platform_message.Image):
+-                        if keep_image_inputs:
+-                            if msg.base64 is not None:
+-                                content_list.append(provider_message.ContentElement.from_image_base64(msg.base64))
++                        if keep_image_inputs and msg.base64:
++                            content_list.append(provider_message.ContentElement.from_image_base64(msg.base64))
+                         else:
+                             content_list.append(provider_message.ContentElement.from_text('[Image]'))
+                             plain_text += '[Image]'
+diff --git a/src/langbot/pkg/platform/adapters/aiocqhttp/message_converter.py b/src/langbot/pkg/platform/adapters/aiocqhttp/message_converter.py
+index a8e2fe2..0634596 100644
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/message_converter.py
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/message_converter.py
+@@ -2,8 +2,10 @@ from __future__ import annotations
+ 
+ import datetime
+ import json
++import logging
+ 
+ from langbot.pkg.platform.sources.aiocqhttp import _normalize_base64_payload
++from langbot.pkg.utils import image
+ import typing
+ 
+ import aiocqhttp
+@@ -12,6 +14,9 @@ import langbot_plugin.api.definition.abstract.platform.adapter as abstract_platf
+ from langbot_plugin.api.entities.builtin.platform import message as platform_message
+ 
+ 
++logger = logging.getLogger(__name__)
++
++
+ FACE_NAMES = {
+     '14': '微笑',
+     '21': '可爱',
+@@ -160,10 +165,20 @@ class AiocqhttpMessageConverter(abstract_platform_adapter.AbstractMessageConvert
+                         )
+                     )
+                 else:
++                    image_url = segment.data.get('url') or segment.data.get('file') or ''
++                    image_base64 = ''
++                    if image_url.startswith(('http://', 'https://')):
++                        try:
++                            payload, image_format = await image.qq_image_url_to_base64(image_url)
++                            image_base64 = f'data:image/{image_format};base64,{payload}'
++                        except Exception as exc:
++                            # Keep the reference when bounded media loading fails, without logging signed URLs.
++                            logger.warning('OneBot image download failed (%s); retaining the URL.', type(exc).__name__)
+                     components.append(
+                         platform_message.Image(
+                             image_id=str(segment.data.get('file', '')),
+-                            url=segment.data.get('url') or segment.data.get('file') or '',
++                            url=image_url,
++                            base64=image_base64,
+                         )
+                     )
+             elif segment.type == 'record':
+diff --git a/tests/unit_tests/pipeline/test_preproc_media_fallback.py b/tests/unit_tests/pipeline/test_preproc_media_fallback.py
+index 52da121..7248f58 100644
+--- a/tests/unit_tests/pipeline/test_preproc_media_fallback.py
++++ b/tests/unit_tests/pipeline/test_preproc_media_fallback.py
+@@ -103,3 +103,66 @@ async def test_preprocessor_keeps_image_placeholder_for_text_only_local_agent(mo
+     assert content[0].type == 'text'
+     assert content[0].text == '[Image]'
+     assert result.new_query.variables['user_message_text'] == '[Image]'
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('download_succeeds', [True, False])
++@pytest.mark.parametrize('quoted', [True, False])
++async def test_onebot_image_reaches_local_agent_or_becomes_placeholder(
++    mock_app, sample_query, monkeypatch, download_succeeds, quoted
++):
++    from importlib import import_module
++
++    from langbot.pkg.agent.runner.query_entry_adapter import QueryEntryAdapter
++    from langbot.pkg.platform.adapters.aiocqhttp.message_converter import AiocqhttpMessageConverter
++
++    model = Mock()
++    model.model_entity.uuid = 'vision-model'
++    model.model_entity.abilities = ['vision']
++    mock_app.model_mgr.get_model_by_uuid = AsyncMock(return_value=model)
++    _attach_runner_descriptor(mock_app)
++    mock_app.sess_mgr.get_session = AsyncMock(
++        return_value=provider_session.Session(
++            launcher_type=sample_query.launcher_type,
++            launcher_id=sample_query.launcher_id,
++            sender_id=sample_query.sender_id,
++            bot_uuid=sample_query.bot_uuid,
++        )
++    )
++    mock_app.sess_mgr.get_conversation = AsyncMock(return_value=_conversation())
++    mock_app.plugin_connector.emit_event = AsyncMock(return_value=_prompt_preprocessing_context())
++    download = AsyncMock(return_value=('aW1hZ2U=', 'png'))
++    if not download_succeeds:
++        download.side_effect = TimeoutError()
++    monkeypatch.setattr(
++        'langbot.pkg.platform.adapters.aiocqhttp.message_converter.image.qq_image_url_to_base64', download
++    )
++    converted = await AiocqhttpMessageConverter.target2yiri(
++        [{'type': 'image', 'data': {'url': 'https://example.test/image.png'}}]
++    )
++    sample_query.pipeline_config = _pipeline_config({'primary': 'vision-model', 'fallbacks': []})
++    sample_query.pipeline_config['trigger']['misc']['combine-quote-message'] = quoted
++    image_component = converted[1]
++    if quoted:
++        image_component = platform_message.Quote(
++            id='quoted-image', origin=platform_message.MessageChain([image_component])
++        )
++    sample_query.message_chain = platform_message.MessageChain(
++        [platform_message.Plain(text='describe this'), image_component]
++    )
++    sample_query.messages = []
++    sample_query.variables = {}
++
++    import_module('langbot.pkg.pipeline.pipelinemgr')
++    preproc_module = import_module('langbot.pkg.pipeline.preproc.preproc')
++    result = await preproc_module.PreProcessor(mock_app).process(sample_query, 'PreProcessor')
++    runner_input = QueryEntryAdapter._build_input(result.new_query)
++    content = runner_input.contents
++
++    assert content[0].type == 'text'
++    if download_succeeds:
++        assert content[1].type == 'image_base64'
++        assert content[1].image_base64 == 'data:image/png;base64,aW1hZ2U='
++    else:
++        assert [item.type for item in content] == ['text', 'text']
++        assert content[1].text == '[Image]'
+diff --git a/tests/unit_tests/platform/test_aiocqhttp_eba_adapter.py b/tests/unit_tests/platform/test_aiocqhttp_eba_adapter.py
+index 58473bf..7ba5b64 100644
+--- a/tests/unit_tests/platform/test_aiocqhttp_eba_adapter.py
++++ b/tests/unit_tests/platform/test_aiocqhttp_eba_adapter.py
+@@ -199,7 +199,11 @@ async def test_aiocqhttp_message_converter_flattens_forward_nodes():
+ 
+ 
+ @pytest.mark.asyncio
+-async def test_aiocqhttp_message_converter_maps_onebot_segments_to_chain():
++async def test_aiocqhttp_message_converter_maps_onebot_segments_to_chain(monkeypatch):
++    monkeypatch.setattr(
++        'langbot.pkg.platform.adapters.aiocqhttp.message_converter.image.qq_image_url_to_base64',
++        AsyncMock(return_value=('AAAA', 'png')),
++    )
+     chain = await AiocqhttpMessageConverter.target2yiri(
+         [
+             {'type': 'text', 'data': {'text': 'hello '}},
+@@ -225,6 +229,7 @@ async def test_aiocqhttp_message_converter_maps_onebot_segments_to_chain():
+     assert isinstance(chain[3], platform_message.At)
+     assert isinstance(chain[4], platform_message.Image)
+     assert chain[4].url == 'https://example.test/a.png'
++    assert chain[4].base64 == 'data:image/png;base64,AAAA'
+     assert isinstance(chain[5], platform_message.Face)
+     assert isinstance(chain[6], platform_message.Voice)
+     assert isinstance(chain[7], platform_message.File)
+diff --git a/tests/unit_tests/platform/test_onebot_incoming_images.py b/tests/unit_tests/platform/test_onebot_incoming_images.py
+new file mode 100644
+index 0000000..9dc6fcb
+--- /dev/null
++++ b/tests/unit_tests/platform/test_onebot_incoming_images.py
+@@ -0,0 +1,76 @@
++from __future__ import annotations
++
++import asyncio
++from unittest.mock import AsyncMock
++
++import pytest
++
++from langbot.pkg.platform.adapters.aiocqhttp.message_converter import AiocqhttpMessageConverter
++from langbot.pkg.utils import httpclient
++from langbot_plugin.api.entities.builtin.platform import message as platform_message
++
++
++@pytest.mark.asyncio
++async def test_onebot_downloads_image_bytes_for_vision(monkeypatch):
++    download = AsyncMock(return_value=('aW1hZ2U=', 'jpeg'))
++    monkeypatch.setattr(
++        'langbot.pkg.platform.adapters.aiocqhttp.message_converter.image.qq_image_url_to_base64', download
++    )
++    image_url = 'https://example.test/download?token=test-token'
++
++    chain = await AiocqhttpMessageConverter.target2yiri(
++        [{'type': 'image', 'data': {'file': 'picture.jpg', 'url': image_url}}]
++    )
++
++    download.assert_awaited_once_with(image_url)
++    assert isinstance(chain[1], platform_message.Image)
++    assert chain[1].base64 == 'data:image/jpeg;base64,aW1hZ2U='
++    assert chain[1].url == image_url
++    assert chain[1].image_id == 'picture.jpg'
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    'download_error',
++    [asyncio.TimeoutError(), httpclient.RemoteResponseTooLargeError('too large')],
++)
++async def test_onebot_image_failure_retains_message_without_leaking_url(monkeypatch, caplog, download_error):
++    download = AsyncMock(side_effect=download_error)
++    monkeypatch.setattr(
++        'langbot.pkg.platform.adapters.aiocqhttp.message_converter.image.qq_image_url_to_base64', download
++    )
++    image_url = 'https://example.test/download?rkey=private-test-key'
++
++    chain = await AiocqhttpMessageConverter.target2yiri(
++        [
++            {'type': 'image', 'data': {'url': image_url}},
++            {'type': 'text', 'data': {'text': 'describe this'}},
++        ]
++    )
++
++    assert chain[1].url == image_url
++    assert not chain[1].base64
++    assert chain[2].text == 'describe this'
++    assert 'OneBot image download failed' in caplog.text
++    assert 'private-test-key' not in caplog.text
++    assert image_url not in caplog.text
++
++
++@pytest.mark.asyncio
++async def test_onebot_does_not_fetch_emoji_package_or_local_file_reference(monkeypatch):
++    download = AsyncMock()
++    monkeypatch.setattr(
++        'langbot.pkg.platform.adapters.aiocqhttp.message_converter.image.qq_image_url_to_base64', download
++    )
++
++    chain = await AiocqhttpMessageConverter.target2yiri(
++        [
++            {'type': 'image', 'data': {'emoji_package_id': '14', 'summary': 'smile'}},
++            {'type': 'image', 'data': {'file': 'local-reference.image'}},
++        ]
++    )
++
++    download.assert_not_awaited()
++    assert isinstance(chain[1], platform_message.Face)
++    assert isinstance(chain[2], platform_message.Image)
++    assert not chain[2].base64

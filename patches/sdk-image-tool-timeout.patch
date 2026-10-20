@@ -1,0 +1,268 @@
+diff --git a/.venv/Lib/site-packages/langbot_plugin/api/proxies/runner/resources.py b/.venv/Lib/site-packages/langbot_plugin/api/proxies/runner/resources.py
+--- a/.venv/Lib/site-packages/langbot_plugin/api/proxies/runner/resources.py
++++ b/.venv/Lib/site-packages/langbot_plugin/api/proxies/runner/resources.py
+@@ -273,7 +273,11 @@
+     ) -> dict[str, Any]:
+         """Call a tool with permission validation."""
+         self._validate_tool_access(tool_name, "call")
+-        timeout = self._bounded_timeout(default=180.0)
++        # Transport waiting does not authorize tools; Host and the target worker
++        # still enforce the selected plugin's execution timeout.
++        timeout = self._bounded_timeout(
++            default=420.0 if tool_name in {"generate_image", "edit_image"} else 180.0
++        )
+         resp = await self._api.plugin_runtime_handler.call_action(
+             PluginToRuntimeAction.CALL_TOOL,
+             {
+diff --git a/.venv/Lib/site-packages/langbot_plugin/runtime/io/handlers/plugin.py b/.venv/Lib/site-packages/langbot_plugin/runtime/io/handlers/plugin.py
+--- a/.venv/Lib/site-packages/langbot_plugin/runtime/io/handlers/plugin.py
++++ b/.venv/Lib/site-packages/langbot_plugin/runtime/io/handlers/plugin.py
+@@ -828,7 +828,10 @@
+             return await forward_agent_action(
+                 PluginToRuntimeAction.CALL_TOOL,
+                 data,
+-                LONG_RUNNING_OPERATION_TIMEOUT,
++                # The Host and target worker validate the actual plugin source.
++                420.0
++                if data.get("tool_name") in {"generate_image", "edit_image"}
++                else LONG_RUNNING_OPERATION_TIMEOUT,
+             )
+ 
+         @self.action(PluginToRuntimeAction.LIST_PLUGINS_MANIFEST)
+@@ -1250,6 +1253,8 @@
+         session: dict[str, Any],
+         query_id: int,
+         query_uuid: str | None = None,
++        *,
++        timeout: float = LONG_RUNNING_OPERATION_TIMEOUT,
+     ) -> dict[str, Any]:
+         query_ref: dict[str, Any] = {"query_id": query_id}
+         if query_uuid is not None:
+@@ -1262,7 +1267,7 @@
+                 "session": session,
+                 **query_ref,
+             },
+-            timeout=LONG_RUNNING_OPERATION_TIMEOUT,
++            timeout=timeout,
+         )
+ 
+         return resp
+diff --git a/.venv/Lib/site-packages/langbot_plugin/runtime/plugin/mgr.py b/.venv/Lib/site-packages/langbot_plugin/runtime/plugin/mgr.py
+--- a/.venv/Lib/site-packages/langbot_plugin/runtime/plugin/mgr.py
++++ b/.venv/Lib/site-packages/langbot_plugin/runtime/plugin/mgr.py
+@@ -3398,12 +3398,22 @@
+                     if plugin._runtime_plugin_handler is None:
+                         continue
+ 
++                    # Decide from the selected container, never from caller-supplied
++                    # identity fields or a tool name shared by another plugin.
++                    timeout = (
++                        420.0
++                        if tool_name in {"generate_image", "edit_image"}
++                        and plugin.manifest.metadata.author == "langbot-team"
++                        and plugin.manifest.metadata.name == "AIImagePlugin"
++                        else 180.0
++                    )
+                     if query_uuid is None:
+                         resp = await plugin._runtime_plugin_handler.call_tool(
+                             tool_name,
+                             tool_parameters,
+                             session,
+                             query_id,
++                            timeout=timeout,
+                         )
+                     else:
+                         resp = await plugin._runtime_plugin_handler.call_tool(
+@@ -3412,6 +3422,7 @@
+                             session,
+                             query_id,
+                             query_uuid,
++                            timeout=timeout,
+                         )
+ 
+                     return resp["tool_response"]
+diff --git a/tests/unit_tests/plugin/test_sdk_image_tool_timeout.py b/tests/unit_tests/plugin/test_sdk_image_tool_timeout.py
+new file mode 100644
+--- /dev/null
++++ b/tests/unit_tests/plugin/test_sdk_image_tool_timeout.py
+@@ -0,0 +1,180 @@
++"""Cover image-tool transport timeouts without network calls or real waiting."""
++
++from types import SimpleNamespace
++from unittest.mock import AsyncMock, Mock
++
++import pytest
++
++from langbot_plugin.api.entities.builtin.runner.errors import AgentAPIException
++from langbot_plugin.api.entities.builtin.runner.resources import AgentResources, ToolResource
++from langbot_plugin.api.proxies.runner.api import RunnerAPIProxy
++from langbot_plugin.api.proxies.runner.common import PermissionDeniedError
++from langbot_plugin.entities.io.actions.enums import PluginToRuntimeAction, RuntimeToPluginAction
++from langbot_plugin.runtime.io.handlers.plugin import PluginConnectionHandler
++from langbot_plugin.runtime.plugin.mgr import PluginManager
++
++
++def make_runner(tool_name, *, operations=None, remaining=None):
++    context = SimpleNamespace(
++        run_id='test-run',
++        resources=AgentResources(
++            tools=[ToolResource(tool_name=tool_name, operations=operations or ['call'])]
++        ),
++    )
++    transport = SimpleNamespace(call_action=AsyncMock(return_value={'result': {'ok': True}}))
++    proxy = RunnerAPIProxy(context, transport)
++    proxy._remaining_deadline_seconds = Mock(return_value=remaining)
++    return proxy, transport
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    ('tool_name', 'remaining', 'expected'),
++    [
++        ('generate_image', None, 420),
++        ('edit_image', None, 420),
++        ('remember', None, 180),
++        ('generate_image', 60, 60),
++        ('edit_image', 600, 420),
++        ('remember', 600, 180),
++    ],
++)
++async def test_runner_timeout_preserves_deadline(tool_name, remaining, expected):
++    proxy, transport = make_runner(tool_name, remaining=remaining)
++    parameters = {'prompt': 'test'}
++
++    assert await proxy.call_tool(tool_name, parameters) == {'ok': True}
++    transport.call_action.assert_awaited_once_with(
++        PluginToRuntimeAction.CALL_TOOL,
++        {'run_id': 'test-run', 'tool_name': tool_name, 'parameters': parameters},
++        expected,
++    )
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('operations', [['call'], ['detail']])
++async def test_runner_still_rejects_unauthorized_image_tools(operations):
++    granted_name = 'remember' if operations == ['call'] else 'generate_image'
++    proxy, transport = make_runner(granted_name, operations=operations)
++
++    with pytest.raises(PermissionDeniedError):
++        await proxy.call_tool('generate_image', {})
++    transport.call_action.assert_not_awaited()
++
++
++@pytest.mark.asyncio
++async def test_runner_expired_deadline_sends_no_tool_call():
++    proxy, transport = make_runner('edit_image', remaining=-1)
++
++    with pytest.raises(AgentAPIException):
++        await proxy.call_tool('edit_image', {})
++    transport.call_action.assert_not_awaited()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    ('tool_name', 'expected'),
++    [('generate_image', 420), ('edit_image', 420), ('remember', 180)],
++)
++async def test_runtime_forward_wait_uses_image_timeout(tmp_path, tool_name, expected):
++    control = SimpleNamespace(call_action=AsyncMock(return_value={'result': {'ok': True}}))
++    context = SimpleNamespace(
++        control_handler=control,
++        plugin_mgr=SimpleNamespace(plugins=[]),
++    )
++    handler = PluginConnectionHandler(
++        SimpleNamespace(close=AsyncMock()), context, file_storage_dir=str(tmp_path / 'transfers')
++    )
++    payload = {'run_id': 'test-run', 'tool_name': tool_name, 'parameters': {'prompt': 'test'}}
++    try:
++        response = await handler.actions[PluginToRuntimeAction.CALL_TOOL.value](payload)
++        assert response.code == 0
++        control.call_action.assert_awaited_once_with(
++            PluginToRuntimeAction.CALL_TOOL, payload, timeout=expected
++        )
++    finally:
++        await handler.close()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('timeout', [None, 420])
++async def test_worker_dispatch_preserves_default_and_explicit_timeout(timeout):
++    response = {'tool_response': {'ok': True}}
++    handler = SimpleNamespace(call_action=AsyncMock(return_value=response))
++    kwargs = {} if timeout is None else {'timeout': timeout}
++
++    result = await PluginConnectionHandler.call_tool(
++        handler, 'generate_image', {'prompt': 'test'}, {'session_id': 'test'}, 123, 'query-uuid', **kwargs
++    )
++
++    assert result is response
++    handler.call_action.assert_awaited_once_with(
++        RuntimeToPluginAction.CALL_TOOL,
++        {
++            'tool_name': 'generate_image',
++            'tool_parameters': {'prompt': 'test'},
++            'session': {'session_id': 'test'},
++            'query_id': 123,
++            'query_uuid': 'query-uuid',
++        },
++        timeout=180 if timeout is None else timeout,
++    )
++
++
++def make_plugin(author, name, tool_name):
++    return SimpleNamespace(
++        manifest=SimpleNamespace(metadata=SimpleNamespace(author=author, name=name)),
++        components=[SimpleNamespace(manifest=SimpleNamespace(kind='Tool', metadata=SimpleNamespace(name=tool_name)))],
++        _runtime_plugin_handler=SimpleNamespace(call_tool=AsyncMock(return_value={'tool_response': {'ok': True}})),
++    )
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('query_uuid', [None, 'query-uuid'])
++@pytest.mark.parametrize(
++    ('author', 'name', 'tool_name', 'expected'),
++    [
++        ('langbot-team', 'AIImagePlugin', 'generate_image', 420),
++        ('langbot-team', 'AIImagePlugin', 'edit_image', 420),
++        ('langbot-team', 'AIImagePlugin', 'other_tool', 180),
++        ('another-author', 'AIImagePlugin', 'generate_image', 180),
++        ('langbot-team', 'OtherPlugin', 'edit_image', 180),
++        ('langbot-team', 'LongTermMemory', 'remember', 180),
++    ],
++)
++async def test_selected_worker_identity_controls_timeout(author, name, tool_name, expected, query_uuid):
++    plugin = make_plugin(author, name, tool_name)
++    manager = SimpleNamespace(_plugins_for_current_scope=lambda: [plugin])
++    parameters = {'prompt': 'test'}
++    session = {'session_id': 'test'}
++
++    result = await PluginManager.call_tool(
++        manager, tool_name, parameters, session, 123, [f'{author}/{name}'], query_uuid=query_uuid
++    )
++
++    assert result == {'ok': True}
++    args = (tool_name, parameters, session, 123)
++    if query_uuid is not None:
++        args += (query_uuid,)
++    plugin._runtime_plugin_handler.call_tool.assert_awaited_once_with(*args, timeout=expected)
++
++
++@pytest.mark.asyncio
++async def test_same_named_other_plugin_keeps_180_even_when_image_plugin_exists():
++    other = make_plugin('another-author', 'OtherPlugin', 'generate_image')
++    image = make_plugin('langbot-team', 'AIImagePlugin', 'generate_image')
++    manager = SimpleNamespace(_plugins_for_current_scope=lambda: [other, image])
++
++    await PluginManager.call_tool(manager, 'generate_image', {}, {}, 123)
++
++    other._runtime_plugin_handler.call_tool.assert_awaited_once_with('generate_image', {}, {}, 123, timeout=180)
++    image._runtime_plugin_handler.call_tool.assert_not_awaited()
++
++
++@pytest.mark.asyncio
++async def test_plugin_filter_still_blocks_unselected_image_plugin():
++    plugin = make_plugin('langbot-team', 'AIImagePlugin', 'generate_image')
++    manager = SimpleNamespace(_plugins_for_current_scope=lambda: [plugin])
++
++    assert await PluginManager.call_tool(manager, 'generate_image', {}, {}, 123, ['another-author/OtherPlugin']) == {}
++    plugin._runtime_plugin_handler.call_tool.assert_not_awaited()

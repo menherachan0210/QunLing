@@ -1,0 +1,155 @@
+--- a/.venv/Lib/site-packages/langbot_plugin/runtime/plugin/worker_launcher.py
++++ b/.venv/Lib/site-packages/langbot_plugin/runtime/plugin/worker_launcher.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+ import asyncio
++import contextlib
+ import hashlib
+ import importlib.metadata
+ import json
+@@ -9,6 +10,7 @@
+ import pathlib
+ import shutil
+ import sys
++import tempfile
+ from dataclasses import dataclass
+ from typing import Any, Callable, Coroutine, Literal, Sequence
+ 
+@@ -362,15 +364,25 @@
+             staging,
+             requirements,
+         )
+-        tmp_path = self._absolute_runtime_path(staging.tmp_path)
+-        process = await asyncio.create_subprocess_exec(
+-            *args,
+-            stdout=asyncio.subprocess.DEVNULL,
+-            stderr=asyncio.subprocess.DEVNULL,
+-            env=self._direct_dependency_installer_environment(tmp_path),
+-            cwd=str(tmp_path),
+-        )
+-        await self._wait_for_dependency_installer(process)
++        with contextlib.ExitStack() as temporary_paths:
++            tmp_path = self._absolute_runtime_path(staging.tmp_path)
++            if self.platform == "win32":
++                # pip adds its own target tree beneath TEMP. A digest staging
++                # path can exceed Windows MAX_PATH before publication, even
++                # when the final isolated dependency paths fit the limit.
++                tmp_path = pathlib.Path(
++                    temporary_paths.enter_context(
++                        tempfile.TemporaryDirectory(prefix="lb-deps-")
++                    )
++                ).absolute()
++            process = await asyncio.create_subprocess_exec(
++                *args,
++                stdout=asyncio.subprocess.DEVNULL,
++                stderr=asyncio.subprocess.DEVNULL,
++                env=self._direct_dependency_installer_environment(tmp_path),
++                cwd=str(tmp_path),
++            )
++            await self._wait_for_dependency_installer(process)
+ 
+     @staticmethod
+     async def _wait_for_dependency_installer(
+--- /dev/null
++++ b/tests/unit_tests/plugin/test_dependency_installer_windows_paths.py
+@@ -0,0 +1,99 @@
++"""Regression coverage for Windows dependency installation scratch paths."""
++
++import asyncio
++from pathlib import Path
++from unittest.mock import AsyncMock
++
++import pytest
++
++from langbot_plugin.runtime.plugin import worker_launcher
++from langbot_plugin.runtime.plugin.dependency_environment import (
++    DependencyEnvironmentPreparationError,
++    DependencyEnvironmentStaging,
++)
++
++
++def make_staging(root: Path) -> DependencyEnvironmentStaging:
++    staging = DependencyEnvironmentStaging(
++        root_path=root,
++        site_packages_path=root / 'site-packages',
++        scratch_path=root / '.scratch',
++        jail_root_path=root / '.scratch/root',
++        tmp_path=root / '.scratch/tmp',
++    )
++    staging.site_packages_path.mkdir(parents=True)
++    staging.tmp_path.mkdir(parents=True)
++    return staging
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('outcome', ['success', 'failure', 'cancelled'])
++async def test_windows_temp_is_short_and_cleaned_without_changing_target(tmp_path, monkeypatch, outcome):
++    staging = make_staging(tmp_path / ('a' * 64))
++    launcher = worker_launcher.PluginWorkerLauncher(platform='win32')
++    args = ['python', '-m', 'pip', '--target', str(staging.site_packages_path)]
++    monkeypatch.setattr(launcher, 'build_dependency_prepare_direct_args', lambda *_: args)
++    monkeypatch.setenv('MODEL_API_KEY', 'must-not-reach-installer')
++    observed = {}
++
++    async def spawn(*command, **kwargs):
++        observed.update(kwargs)
++        observed['command'] = command
++        scratch = Path(kwargs['cwd'])
++        assert scratch.is_dir()
++        assert len(str(scratch)) < len(str(staging.tmp_path))
++        # The path that exceeded MAX_PATH during the real pip installation.
++        nested = scratch / 'pip-target-12345678/lib/python/openai/resources/admin/organization/projects'
++        nested /= 'service_accounts/service_accounts.py'
++        nested.parent.mkdir(parents=True)
++        nested.write_text('# isolated installer probe\n', encoding='utf-8')
++        return object()
++
++    async def wait(_process):
++        if outcome == 'failure':
++            raise DependencyEnvironmentPreparationError('installer failed')
++        if outcome == 'cancelled':
++            raise asyncio.CancelledError
++
++    monkeypatch.setattr(worker_launcher.asyncio, 'create_subprocess_exec', spawn)
++    monkeypatch.setattr(launcher, '_wait_for_dependency_installer', wait)
++    if outcome == 'success':
++        await launcher._install_dependency_environment_direct(staging, ['openai==2.41.1'])
++    else:
++        error = DependencyEnvironmentPreparationError if outcome == 'failure' else asyncio.CancelledError
++        with pytest.raises(error):
++            await launcher._install_dependency_environment_direct(staging, ['openai==2.41.1'])
++
++    scratch = Path(observed['cwd'])
++    assert not scratch.exists()
++    assert staging.tmp_path.is_dir()
++    assert observed['command'] == tuple(args)
++    assert observed['env']['TEMP'] == str(scratch)
++    assert observed['env']['HOME'] == str(scratch)
++    assert 'MODEL_API_KEY' not in observed['env']
++    assert observed['stdout'] == asyncio.subprocess.DEVNULL
++    assert observed['stderr'] == asyncio.subprocess.DEVNULL
++
++
++@pytest.mark.asyncio
++async def test_linux_keeps_staging_scratch_directory(tmp_path, monkeypatch):
++    staging = make_staging(tmp_path / 'staging')
++    launcher = worker_launcher.PluginWorkerLauncher(platform='linux')
++    monkeypatch.setattr(launcher, 'build_dependency_prepare_direct_args', lambda *_: ['python', '-m', 'pip'])
++    spawn = AsyncMock(return_value=object())
++    monkeypatch.setattr(worker_launcher.asyncio, 'create_subprocess_exec', spawn)
++    monkeypatch.setattr(launcher, '_wait_for_dependency_installer', AsyncMock())
++    await launcher._install_dependency_environment_direct(staging, ['example'])
++    assert Path(spawn.call_args.kwargs['cwd']) == staging.tmp_path
++    assert spawn.call_args.kwargs['env']['TEMP'] == str(staging.tmp_path)
++    assert staging.tmp_path.is_dir()
++
++
++@pytest.mark.asyncio
++async def test_no_requirements_does_not_start_installer(tmp_path, monkeypatch):
++    staging = make_staging(tmp_path / 'staging')
++    launcher = worker_launcher.PluginWorkerLauncher(platform='win32')
++    spawn = AsyncMock()
++    monkeypatch.setattr(worker_launcher.asyncio, 'create_subprocess_exec', spawn)
++    await launcher._install_dependency_environment_direct(staging, [])
++    spawn.assert_not_called()

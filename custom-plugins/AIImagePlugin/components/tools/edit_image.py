@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+from langbot_plugin.api.definition.components.tool.tool import Tool
+from langbot_plugin.api.entities.builtin.platform.message import Image, MessageChain
+from langbot_plugin.api.proxies.query_based_api import QueryBasedAPIProxy
+
+from components.tools.generate_image import (
+    GENERATING,
+    GENERATION_FAILED,
+    GUARD_UNAVAILABLE,
+    INVALID_PROMPT,
+    MAX_PROMPT_CHARS,
+    QUERY_STATE_KEY,
+    REPLY_TIMEOUT_SECONDS,
+    SEND_FAILED,
+    SENT,
+    GenerateImage,
+    _STATE_MESSAGES,
+)
+from main import ImageGenerationError
+from pkg.image_context import query_claim_lock, remember_output, select_image
+
+
+class EditImage(Tool):
+    """Edit one scoped source image without trusting model-provided image URLs."""
+
+    async def call(
+        self,
+        params: dict[str, Any],
+        session: Any,
+        query_id: int,
+        query_uuid: str | None = None,
+    ) -> str:
+        if not isinstance(params, dict) or set(params) != {"prompt"}:
+            return INVALID_PROMPT
+        prompt = params["prompt"]
+        if (
+            not isinstance(prompt, str)
+            or not prompt.strip()
+            or len(prompt) > MAX_PROMPT_CHARS
+        ):
+            return INVALID_PROMPT
+        try:
+            reply_api = QueryBasedAPIProxy(
+                query_id=query_id,
+                query_uuid=query_uuid,
+                plugin_runtime_handler=self.plugin.plugin_runtime_handler,
+            )
+            async with query_claim_lock(self.plugin):
+                variables = await reply_api.get_query_vars()
+                if not isinstance(variables, dict):
+                    return GUARD_UNAVAILABLE
+                if QUERY_STATE_KEY in variables:
+                    state = variables[QUERY_STATE_KEY]
+                    return (
+                        _STATE_MESSAGES.get(state, GENERATING)
+                        if isinstance(state, str)
+                        else GENERATING
+                    )
+                image = select_image(self.plugin, variables)
+                await reply_api.set_query_var(QUERY_STATE_KEY, "started")
+        except ImageGenerationError as exc:
+            return str(exc)
+        except Exception:
+            return GUARD_UNAVAILABLE
+
+        try:
+            result = await self.plugin.edit_image(prompt.strip(), image)
+            if not result.base64 and not result.url:
+                raise ImageGenerationError("绘图服务未返回可发送的图片。")
+        except ImageGenerationError as exc:
+            await GenerateImage._record_state(reply_api, "generation_failed")
+            return f"{exc} 请勿重复调用本工具。"
+        except Exception:
+            await GenerateImage._record_state(reply_api, "generation_failed")
+            return GENERATION_FAILED
+        try:
+            await asyncio.wait_for(
+                reply_api.reply(
+                    MessageChain(
+                        [Image(base64=result.base64 or "", url=result.url or "")]
+                    )
+                ),
+                timeout=REPLY_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            await GenerateImage._record_state(reply_api, "send_failed")
+            return SEND_FAILED
+        await GenerateImage._record_state(reply_api, "sent")
+        await remember_output(self.plugin, reply_api, result)
+        return SENT

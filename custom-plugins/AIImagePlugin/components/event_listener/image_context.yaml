@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: EventListener
+metadata:
+  name: image_context
+  label:
+    en_US: Short-lived image context
+    zh_Hans: 短期图片上下文
+  description:
+    en_US: Keep bounded image references isolated by installation, bot, conversation and sender.
+    zh_Hans: 按安装、机器人、会话和发送者隔离有界短期图片上下文。
+spec:
+execution:
+  python:
+    path: image_context.py
+    attr: ImageContextListener

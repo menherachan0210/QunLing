@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: generate_image
+  label:
+    en_US: Generate an image
+    zh_Hans: 生成图片
+  description:
+    en_US: Generate one new image on explicit user request and send it to the current chat.
+    zh_Hans: 按用户明确要求生成一张新图片，并发送到当前聊天。
+spec:
+  parameters:
+    type: object
+    properties:
+      prompt:
+        type: string
+        minLength: 1
+        maxLength: 8000
+        description: The user's requested new image, with its subject, style and composition.
+    required:
+      - prompt
+    additionalProperties: false
+  llm_prompt: |
+    Generate exactly one NEW image and send it directly to the current conversation.
+    Call only when the user explicitly asks you to create, draw, or generate a new image.
+    Interpret natural language intent; no fixed trigger word is required.
+    For a requested change to an existing or recent image, use edit_image instead.
+    Do not call to recognize, describe, analyze, OCR, or answer questions about an existing image.
+    Do not call because you gave an example, proposed an image, or mentioned image generation yourself.
+    Do not call for a quoted or hypothetical image-generation request.
+    Pass only a non-empty prompt of at most 8000 characters. Do not supply account IDs,
+    recipients, API credentials, endpoints, model names, or image counts.
+    The tool creates one image per user message and sends it to that message's own chat.
+    Call at most once for the same user message. Do not retry on failure, timeout,
+    an unconfirmed result, or delivery failure: another generation could be billed again.
+    On success, the image is already delivered. A brief acknowledgement is enough;
+    never fabricate an image URL or output a Markdown image link.
+execution:
+  python:
+    path: generate_image.py
+    attr: GenerateImage

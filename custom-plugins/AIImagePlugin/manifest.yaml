@@ -1,0 +1,160 @@
+apiVersion: v1
+kind: Plugin
+metadata:
+  author: langbot-team
+  name: AIImagePlugin
+  repository: https://github.com/langbot-app/langbot-plugins/tree/main/misc/AIImagePlugin
+  version: 0.1.7-local.3
+  description:
+    en_US: 'Local extension: generate and edit images through an OpenAI-compatible
+      image API.'
+    zh_Hans: 本地定制：自然语言生成和修改图片，兼容 OpenAI 图片接口。
+    zh_Hant: AI 繪圖插件，支援透過 Tool 呼叫方式觸發繪圖，同時支援多種繪圖服務商。
+    ja_JP: AI画像生成プラグイン。Tool呼び出しで画像生成をトリガーし、複数の画像生成サービスに対応します。
+    vi_VN: Plugin vẽ tranh AI, hỗ trợ kích hoạt vẽ tranh qua Tool call, đồng thời
+      hỗ trợ nhiều nhà cung cấp dịch vụ vẽ tranh.
+    th_TH: ปลั๊กอินวาดภาพ AI รองรับการเรียกวาดภาพผ่าน Tool call และรองรับผู้ให้บริการวาดภาพหลายราย
+    es_ES: Plugin de generación de imágenes con IA, soporta la generación mediante
+      llamadas Tool y es compatible con múltiples proveedores de servicios.
+  label:
+    en_US: AI Image Generation and Editing (Local)
+    zh_Hans: AI 图片生成与编辑（本地定制）
+    zh_Hant: AI Image Generator
+    ja_JP: AI Image Generator
+    vi_VN: AI Image Generator
+    th_TH: AI Image Generator
+    es_ES: AI Image Generator
+  icon: assets/icon.svg
+spec:
+  config:
+  - name: api_base_url
+    type: string
+    label:
+      en_US: API Base URL
+      zh_Hans: API 地址
+    description:
+      en_US: Base URL for OpenAI compatible API
+      zh_Hans: 兼容 OpenAI 格式的 API 地址
+    required: false
+    default: https://ai.qlht.uk/v1
+  - name: openai_api_key
+    type: secret
+    label:
+      en_US: API Key
+      zh_Hans: API 密钥
+    description:
+      en_US: API credential stored in plugin settings only.
+      zh_Hans: 仅在插件设置中填写 API 密钥。
+    required: true
+    default: ''
+  - name: model_name
+    type: string
+    label:
+      en_US: Model Name
+      zh_Hans: 模型名称
+    description:
+      en_US: Image generation model name
+      zh_Hans: 图片生成模型名称
+    default: gpt-image-2.5-sunburst
+    required: false
+  - name: image_size
+    type: select
+    label:
+      en_US: Image Size
+      zh_Hans: 图片尺寸
+    description:
+      en_US: Default size for generated images
+      zh_Hans: 生成图片的默认尺寸
+    options:
+    - name: 1024x1024
+      label:
+        en_US: Square 1:1 (1024x1024)
+        zh_Hans: 正方形 1:1 (1024x1024)
+    - name: 1280x1280
+      label:
+        en_US: Square 1:1 (1280x1280)
+        zh_Hans: 正方形 1:1 (1280x1280)
+    - name: 768x1280
+      label:
+        en_US: Portrait 3:5 (768x1280)
+        zh_Hans: 竖版 3:5 (768x1280)
+    - name: 1280x768
+      label:
+        en_US: Landscape 5:3 (1280x768)
+        zh_Hans: 横版 5:3 (1280x768)
+    - name: 720x1280
+      label:
+        en_US: Portrait 9:16 (720x1280)
+        zh_Hans: 竖版 9:16 (720x1280)
+    - name: 1280x720
+      label:
+        en_US: Landscape 16:9 (1280x720)
+        zh_Hans: 横版 16:9 (1280x720)
+    - name: 1024x768
+      label:
+        en_US: Landscape 4:3 (1024x768)
+        zh_Hans: 横版 4:3 (1024x768)
+    - name: 768x1024
+      label:
+        en_US: Portrait 3:4 (768x1024)
+        zh_Hans: 竖版 3:4 (768x1024)
+    default: 1024x1024
+    required: false
+  - name: quality
+    type: select
+    label:
+      en_US: Quality
+      zh_Hans: 图片质量
+    default: auto
+    required: false
+    options:
+    - name: auto
+      label:
+        en_US: auto
+        zh_Hans: auto
+    - name: low
+      label:
+        en_US: low
+        zh_Hans: low
+    - name: medium
+      label:
+        en_US: medium
+        zh_Hans: medium
+    - name: high
+      label:
+        en_US: high
+        zh_Hans: high
+    - name: xhigh
+      label:
+        en_US: xhigh
+        zh_Hans: xhigh
+    - name: max
+      label:
+        en_US: max
+        zh_Hans: max
+  - name: request_timeout_seconds
+    type: integer
+    label:
+      en_US: Request timeout (seconds)
+      zh_Hans: 请求超时（秒）
+    description:
+      en_US: 30–300 seconds; no automatic retries.
+      zh_Hans: 30–300 秒；超时后不自动重试，上游可能仍在计费。
+    default: 300
+    required: false
+  components:
+    Command:
+      fromDirs:
+      - path: components/commands/
+    Tool:
+      fromDirs:
+      - path: components/tools/
+    EventListener:
+      fromDirs:
+      - path: components/event_listener/
+execution:
+  python:
+    path: main.py
+    attr: AIImagePlugin
+  sharedRuntime: shared-runtime-v1
+  componentModel: stateless-v1

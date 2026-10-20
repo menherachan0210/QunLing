@@ -1,0 +1,128 @@
+diff --git a/src/langbot/pkg/platform/botmgr.py b/src/langbot/pkg/platform/botmgr.py
+index dfb99d2..4d3bfcf 100644
+--- a/src/langbot/pkg/platform/botmgr.py
++++ b/src/langbot/pkg/platform/botmgr.py
+@@ -1184,7 +1184,11 @@ class RuntimeBot:
+                     event,
+                     adapter,
+                     pipeline_uuid=event_binding.get('target_uuid'),
+-                    routed_by_event_binding=True,
++                    # A catch-all OneBot route selects a pipeline, not every group
++                    # message. Keep its mention/prefix checks and prefix removal.
++                    routed_by_event_binding=not (
++                        getattr(event, 'adapter_name', None) == 'onebot-v11' and not event_binding.get('filters')
++                    ),
+                 )
+             return await self._record_event_route_trace(
+                 event_type=event_type,
+diff --git a/tests/unit_tests/platform/test_onebot_group_response_rules.py b/tests/unit_tests/platform/test_onebot_group_response_rules.py
+new file mode 100644
+index 0000000..defef21
+--- /dev/null
++++ b/tests/unit_tests/platform/test_onebot_group_response_rules.py
+@@ -0,0 +1,105 @@
++"""OneBot catch-all routes retain the pipeline's group response rules."""
++
++from types import SimpleNamespace
++from unittest.mock import AsyncMock
++
++import pytest
++
++from langbot.pkg.pipeline.entities import ResultType
++from langbot.pkg.pipeline.resprule.resprule import GroupRespondRuleCheckStage
++from langbot.pkg.platform.botmgr import RuntimeBot
++from langbot_plugin.api.entities.builtin.pipeline.query import Query
++from langbot_plugin.api.entities.builtin.platform import entities, events, message
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    ('adapter_name', 'filters', 'group_chat', 'text', 'mention', 'accepted', 'clean_text'),
++    [
++        ('onebot-v11', [], True, 'hello', None, False, 'hello'),
++        ('onebot-v11', [], True, 'hello', '20002', False, 'hello'),
++        ('onebot-v11', [], True, 'hello', '10001', True, 'hello'),
++        ('onebot-v11', [], True, '/ai hello', None, True, ' hello'),
++        ('onebot-v11', None, True, 'hello', None, False, 'hello'),
++        ('onebot-v11', [], False, 'hello', None, True, 'hello'),
++        (
++            'onebot-v11',
++            [{'field': 'message_text', 'operator': 'eq', 'value': 'hello'}],
++            True,
++            'hello',
++            None,
++            True,
++            'hello',
++        ),
++        ('telegram', [], True, 'hello', None, True, 'hello'),
++    ],
++    ids=[
++        'ordinary-group-message-ignored',
++        'mention-other-person-ignored',
++        'mention-bot-accepted',
++        'chat-prefix-accepted-and-removed',
++        'omitted-filters-still-check-rules',
++        'private-chat-unchanged',
++        'explicit-filter-bypasses-default-rules',
++        'other-platform-unchanged',
++    ],
++)
++async def test_routed_messages_obey_expected_group_response_policy(
++    adapter_name, filters, group_chat, text, mention, accepted, clean_text
++):
++    components = [message.Plain(text=text)]
++    if mention is not None:
++        components.insert(0, message.At(target=mention))
++    event = events.MessageReceivedEvent(
++        adapter_name=adapter_name,
++        message_id='message-1',
++        message_chain=message.MessageChain(components),
++        sender=entities.User(id='20002', nickname='Tester'),
++        chat_type=entities.ChatType.GROUP if group_chat else entities.ChatType.PRIVATE,
++        chat_id='30003' if group_chat else '20002',
++        group=entities.UserGroup(id='30003', name='Test group') if group_chat else None,
++    )
++    binding = {
++        'event_pattern': 'message.received',
++        'target_type': 'pipeline',
++        'target_uuid': 'pipeline-1',
++    }
++    if filters is not None:
++        binding['filters'] = filters
++
++    bot = object.__new__(RuntimeBot)
++    bot.bot_entity = SimpleNamespace(uuid='bot-1', event_bindings=[binding])
++    bot.execution_context = None
++    bot.assert_execution_active = AsyncMock()
++    bot._record_event_route_trace = AsyncMock()
++    bot.logger = SimpleNamespace(info=AsyncMock())
++    bot.ap = SimpleNamespace(msg_aggregator=SimpleNamespace(add_message=AsyncMock()))
++    adapter = SimpleNamespace(bot_account_id='10001')
++
++    # Exercise route selection, EBA conversion and the actual legacy dispatch.
++    # Only stop at the asynchronous queue, before any model or platform I/O.
++    await bot._dispatch_eba_event_to_processor(event, adapter)
++    bot.ap.msg_aggregator.add_message.assert_awaited_once()
++    queued = bot.ap.msg_aggregator.add_message.await_args.kwargs
++    assert queued['pipeline_uuid'] == 'pipeline-1'
++
++    pipeline_config = {'trigger': {'group-respond-rules': {'at': True, 'prefix': ['/ai'], 'regexp': [], 'random': 0.0}}}
++    query = Query.model_construct(
++        query_id=1,
++        launcher_type=queued['launcher_type'],
++        launcher_id=queued['launcher_id'],
++        sender_id=queued['sender_id'],
++        message_event=queued['message_event'],
++        adapter=adapter,
++        variables={'_routed_by_rule': queued['routed_by_rule']},
++        pipeline_config=pipeline_config,
++        message_chain=queued['message_chain'],
++    )
++    stage = GroupRespondRuleCheckStage(bot.ap)
++    await stage.initialize(pipeline_config)
++    result = await stage.process(query, 'GroupRespondRuleCheckStage')
++
++    assert result.result_type == (ResultType.CONTINUE if accepted else ResultType.INTERRUPT)
++    assert ''.join(item.text for item in query.message_chain if isinstance(item, message.Plain)) == clean_text
++    if mention == '10001':
++        assert not any(isinstance(item, message.At) for item in query.message_chain)

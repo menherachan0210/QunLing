@@ -1,0 +1,54 @@
+diff --git a/src/langbot/pkg/vector/vdbs/chroma.py b/src/langbot/pkg/vector/vdbs/chroma.py
+index 6965443..ae9fcdf 100644
+--- a/src/langbot/pkg/vector/vdbs/chroma.py
++++ b/src/langbot/pkg/vector/vdbs/chroma.py
+@@ -253,9 +253,11 @@ class ChromaVectorDatabase(VectorDatabase):
+ 
+     async def delete_by_filter(self, collection: str, filter: dict[str, Any]) -> int:
+         col = await self.get_or_create_collection(collection)
++        # Chroma does not return a deletion count; count matching IDs first.
++        matching = await asyncio.to_thread(col.get, where=filter, include=[])
+         await asyncio.to_thread(col.delete, where=filter)
+         self.ap.logger.info(f"Deleted embeddings from Chroma collection '{collection}' by filter")
+-        return 0  # Chroma delete does not return a count
++        return len(matching['ids'])
+ 
+     async def list_by_filter(
+         self,
+diff --git a/tests/unit_tests/vector/test_chroma_delete.py b/tests/unit_tests/vector/test_chroma_delete.py
+new file mode 100644
+index 0000000..a24a70d
+--- /dev/null
++++ b/tests/unit_tests/vector/test_chroma_delete.py
+@@ -0,0 +1,31 @@
++from types import SimpleNamespace
++from unittest.mock import MagicMock
++
++import pytest
++
++from langbot.pkg.vector.vdbs.chroma import ChromaVectorDatabase
++
++
++@pytest.mark.asyncio
++async def test_filtered_delete_reports_count_and_preserves_other_memory_scopes(tmp_path):
++    database = ChromaVectorDatabase(SimpleNamespace(logger=MagicMock()), base_path=str(tmp_path / 'chroma'))
++    collection = 'memory-delete-regression'
++    await database.add_embeddings(
++        collection,
++        ids=['alice-1', 'alice-2', 'bob-1'],
++        embeddings_list=[[1.0, 0.0], [0.9, 0.1], [0.0, 1.0]],
++        metadatas=[{'user_key': 'alice'}, {'user_key': 'alice'}, {'user_key': 'bob'}],
++    )
++
++    deleted = await database.delete_by_filter(collection, {'user_key': 'alice'})
++
++    remaining, total = await database.list_by_filter(collection)
++    assert [item['id'] for item in remaining] == ['bob-1']
++    assert total == 1
++    assert deleted == 2
++    assert await database.delete_by_filter(collection, {'user_key': 'alice'}) == 0
++
++    assert await database.delete_by_filter(collection, {'user_key': 'bob'}) == 1
++    remaining, total = await database.list_by_filter(collection)
++    assert remaining == []
++    assert total == 0

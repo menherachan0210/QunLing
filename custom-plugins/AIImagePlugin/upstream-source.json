@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/langbot-app/langbot-plugins",
+  "commit": "3016b5c763bb3f3c7df942d470df08b8ba643f5d",
+  "subdirectory": "misc/AIImagePlugin",
+  "base_version": "0.1.6"
+}

@@ -1,0 +1,85 @@
+--- a/src/langbot/pkg/plugin/handler.py
++++ b/src/langbot/pkg/plugin/handler.py
+@@ -3165,6 +3165,13 @@
+         query_ref: dict[str, Any] = {'query_id': query_id}
+         if query_uuid is not None:
+             query_ref['query_uuid'] = query_uuid
++        # Image generation and editing can exceed the normal tool budget.
++        # Require the exact source binding so same-named tools keep their limit.
++        timeout = (
++            420
++            if include_plugins == ['langbot-team/AIImagePlugin'] and tool_name in {'generate_image', 'edit_image'}
++            else 180
++        )
+         result = await self.call_action(
+             LangBotToRuntimeAction.CALL_TOOL,
+             {
+@@ -3174,7 +3181,7 @@
+                 **query_ref,
+                 'include_plugins': include_plugins,
+             },
+-            timeout=180,
++            timeout=timeout,
+         )
+ 
+         return result['tool_response']
+--- /dev/null
++++ b/tests/unit_tests/plugin/test_image_tool_timeout.py
+@@ -0,0 +1,57 @@
++"""Keep the extended image-tool timeout scoped to its exact plugin source."""
++
++from types import SimpleNamespace
++from unittest.mock import AsyncMock
++
++import pytest
++
++from langbot_plugin.entities.io.actions.enums import LangBotToRuntimeAction
++
++from langbot.pkg.plugin.handler import RuntimeConnectionHandler
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    ('tool_name', 'include_plugins', 'expected_timeout'),
++    [
++        ('generate_image', ['langbot-team/AIImagePlugin'], 420),
++        ('edit_image', ['langbot-team/AIImagePlugin'], 420),
++        ('other_tool', ['langbot-team/AIImagePlugin'], 180),
++        ('generate_image', ['another-author/AIImagePlugin'], 180),
++        ('edit_image', ['langbot-team/OtherPlugin'], 180),
++        ('generate_image', ['langbot-team/AIImagePlugin', 'another-author/OtherPlugin'], 180),
++        ('edit_image', ['langbot-team/AIImagePlugin', 'langbot-team/AIImagePlugin'], 180),
++        ('generate_image', None, 180),
++        ('edit_image', [], 180),
++        ('remember', ['langbot-team/LongTermMemory'], 180),
++    ],
++)
++async def test_tool_timeout_preserves_source_and_request(tool_name, include_plugins, expected_timeout):
++    response = {'result': 'completed'}
++    handler = SimpleNamespace(call_action=AsyncMock(return_value={'tool_response': response}))
++    parameters = {'prompt': 'test prompt'}
++    session = {'session_id': 'test-session'}
++
++    result = await RuntimeConnectionHandler.call_tool(
++        handler,
++        tool_name=tool_name,
++        parameters=parameters,
++        session=session,
++        query_id=123,
++        query_uuid='test-query-uuid',
++        include_plugins=include_plugins,
++    )
++
++    assert result is response
++    handler.call_action.assert_awaited_once_with(
++        LangBotToRuntimeAction.CALL_TOOL,
++        {
++            'tool_name': tool_name,
++            'tool_parameters': parameters,
++            'session': session,
++            'query_id': 123,
++            'query_uuid': 'test-query-uuid',
++            'include_plugins': include_plugins,
++        },
++        timeout=expected_timeout,
++    )
