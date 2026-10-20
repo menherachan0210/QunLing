@@ -1,5 +1,5 @@
 @echo off
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Stop-Bot.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Stop-Bot.ps1"
 if errorlevel 1 (
   echo Failed to stop one or more managed services. Review the error above.
   pause

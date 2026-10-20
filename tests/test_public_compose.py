@@ -55,7 +55,7 @@ def make_zip(entries):
 def test_compose_has_only_loopback_admin_ports_and_no_runtime_exposure():
     document = yaml.safe_load((COMPOSE / "compose.yaml").read_text(encoding="utf-8"))
     services = document["services"]
-    assert set(services) == {"init", "app", "wizard", "napcat"}
+    assert set(services) == {"init", "app", "wizard", "napcat", "updater"}
     published = [
         port for service in services.values() for port in service.get("ports", [])
     ]
@@ -64,13 +64,22 @@ def test_compose_has_only_loopback_admin_ports_and_no_runtime_exposure():
         "127.0.0.1:5310:5310",
         "127.0.0.1:6099:6099",
     ]
-    for service in services.values():
+    for name, service in services.items():
         assert service.get("privileged") is not True
         assert service.get("network_mode") != "host"
-        assert not any(
-            "docker.sock" in str(volume) for volume in service.get("volumes", [])
+        sockets = [
+            volume
+            for volume in service.get("volumes", [])
+            if "docker.sock" in str(volume)
+        ]
+        assert sockets == (
+            ["/var/run/docker.sock:/var/run/docker.sock"] if name == "updater" else []
         )
         assert service["platform"] == "linux/amd64"
+    assert not services["updater"].get("ports")
+    assert "setup-state:/var/lib/qqbot-setup:ro" in services["updater"]["volumes"]
+    assert "update-data:/var/lib/qqbot-updater" in services["updater"]["volumes"]
+    assert "update-data" in document["volumes"]
     assert services["app"]["command"] == ["app"]
     assert services["app"]["environment"]["BOX__ENABLED"] == "false"
     assert services["app"]["environment"]["LANGBOT_PLUGIN_RUNTIME_TRANSPORT"] == "stdio"
@@ -108,9 +117,11 @@ def test_explicit_docker_copies_never_import_workstation_runtimes():
     sources = {source for group in copies for source in group}
     assert sources == {
         "deploy/compose",
-        "Apply-RuntimePatches.py",
-        "Setup-ArchiveTools.py",
-        "chat_style.py",
+        "deploy/compose/prepare.py",
+        "deploy/compose/sources.lock.json",
+        "scripts/Apply-RuntimePatches.py",
+        "scripts/Setup-ArchiveTools.py",
+        "scripts/chat_style.py",
         "LICENSE",
         "NOTICE",
         "THIRD_PARTY_NOTICES.md",

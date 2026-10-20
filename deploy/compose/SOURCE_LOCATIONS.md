@@ -13,7 +13,7 @@
 | Runtime 的 AGPLv3 许可 | `/opt/qq-ai-bot/upstream/langbot-plugin-sdk/src/langbot_plugin/runtime/LICENSE` |
 | 当前运行的已修改 SDK/Runtime Python 源码 | `/opt/qq-ai-bot/langbot/.venv/lib/python3.12/site-packages/langbot_plugin/` |
 | 上游基线、下载来源与 SHA-256 | `/opt/qq-ai-bot/deploy/compose/sources.lock.json` |
-| 本地修改差异及安装器 | `/opt/qq-ai-bot/patches/`、`/opt/qq-ai-bot/Apply-RuntimePatches.py` |
+| 本地修改差异及安装器 | `/opt/qq-ai-bot/patches/`、`/opt/qq-ai-bot/scripts/Apply-RuntimePatches.py` |
 | 镜像构建与启动说明 | `/opt/qq-ai-bot/deploy/compose/` |
 | 插件源码、各自许可和修改告知 | `/opt/qq-ai-bot/custom-plugins/` |
 | 7-Zip 程序及其随附许可 | `/opt/qq-ai-bot/.local/tools/7zip/linux-x64/` |

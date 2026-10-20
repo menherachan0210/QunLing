@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$taskRoot = $PSScriptRoot
+$taskRoot = Split-Path -Parent $PSScriptRoot
 $taskApp = Join-Path $taskRoot 'langbot'
 $taskPython = Join-Path $taskApp '.venv\Scripts\python.exe'
 $taskState = Join-Path $taskRoot '.local'

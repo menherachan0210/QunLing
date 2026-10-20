@@ -14,7 +14,7 @@ import tarfile
 import tempfile
 import urllib.request
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 VERSION = "26.04"
 BASE = "https://github.com/ip7z/7zip/releases/download/" + VERSION + "/"
 # Digests published by the official ip7z/7zip release, pinned for reproducibility.

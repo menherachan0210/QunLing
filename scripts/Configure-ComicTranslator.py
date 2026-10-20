@@ -25,7 +25,7 @@ archive_path = (
 if not archive_path.is_file():
     located = shutil.which("7zz") or shutil.which("7z")
     if not located:
-        raise RuntimeError("先运行 Setup-ArchiveTools.py 安装当前系统的原生解压组件。")
+        raise RuntimeError("先运行 scripts/Setup-ArchiveTools.py 安装当前系统的原生解压组件。")
     from pathlib import Path
 
     archive_path = Path(located)

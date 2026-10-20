@@ -23,7 +23,7 @@ import yaml
 
 from local_api import LocalAPI, STATE
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "custom-plugins/QQWebSearch"
 sys.path.insert(0, str(PLUGIN))
 

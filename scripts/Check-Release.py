@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_ROOTS = {".local", ".tools", "langbot", "napcat", "downloads", "packages"}
 PRIVATE_NAMES = {"secrets.json", "ai.json", "langbot-admin.json", "setup-state.json"}
 PRIVATE_SUFFIXES = {

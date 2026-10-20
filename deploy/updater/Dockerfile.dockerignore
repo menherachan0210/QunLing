@@ -1,0 +1,10 @@
+**
+!LICENSE
+!NOTICE
+!THIRD_PARTY_NOTICES.md
+!deploy/
+!deploy/updater/
+!deploy/updater/*.py
+!deploy/updater/protocol.json
+!deploy/compose/
+!deploy/compose/compose.yaml

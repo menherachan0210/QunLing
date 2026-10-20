@@ -1,11 +1,13 @@
 name: qq-ai-bot
 
 x-app-image: &app-image
-  image: qq-ai-bot-local:4.11.0
+  image: ${QQBOT_APP_IMAGE:-qq-ai-bot-local:4.11.0}
   platform: linux/amd64
   build:
     context: ../..
     dockerfile: deploy/compose/Dockerfile
+    args:
+      QQBOT_REVISION: ${QQBOT_REVISION:-unknown}
 
 services:
   init:
@@ -89,6 +91,7 @@ services:
       QQBOT_ARCHIVE_PATH: /opt/qq-ai-bot/.local/tools/7zip/linux-x64/7zz
       QQBOT_BIND: 0.0.0.0
       QQBOT_PORT: "5310"
+      QQBOT_UPDATER_URL: http://updater:5320
     ports:
       - "127.0.0.1:5310:5310"
     volumes:
@@ -100,9 +103,41 @@ services:
       start_period: 30s
       retries: 6
 
+  updater:
+    image: ${QQBOT_UPDATER_IMAGE:-qunling-updater:1}
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: deploy/updater/Dockerfile
+      args:
+        QQBOT_REVISION: ${QQBOT_REVISION:-unknown}
+    restart: unless-stopped
+    init: true
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    environment:
+      QQBOT_PROJECT: ${COMPOSE_PROJECT_NAME:-qq-ai-bot}
+      QQBOT_UPDATE_REPOSITORY: ${QQBOT_UPDATE_REPOSITORY:-menherachan0210/QunLing}
+      QQBOT_UPDATE_BRANCH: ${QQBOT_UPDATE_BRANCH:-main}
+    volumes:
+      - setup-state:/var/lib/qqbot-setup:ro
+      - update-data:/var/lib/qqbot-updater
+      - /var/run/docker.sock:/var/run/docker.sock
+    # No published ports. Only this separate service controls Docker; the bot
+    # and the public setup page never receive the daemon socket.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5320/healthz', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
+    stop_grace_period: 15s
+
 volumes:
   langbot-data:
   setup-state:
   napcat-qq:
   napcat-config:
   napcat-plugins:
+  update-data:

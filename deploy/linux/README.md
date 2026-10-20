@@ -1,6 +1,6 @@
 # Linux 服务器迁移
 
-机器人业务代码是 Python。Windows 的 `.ps1/.cmd` 是本机启动入口；Linux 使用项目根目录的 `Start-LangBot.sh` 或此目录的 systemd 示例。漫画解压使用 Linux 原生 7zz，不依赖 Windows 的 7z.exe、QQ 安装或盘符。
+机器人业务代码是 Python。Windows 的 `.ps1/.cmd` 是本机启动入口；Linux 使用项目根目录的 `scripts/Start-LangBot.sh` 或此目录的 systemd 示例。漫画解压使用 Linux 原生 7zz，不依赖 Windows 的 7z.exe、QQ 安装或盘符。
 
 当前实机验证环境为 Windows。本目录提供 Linux 部署入口、原生解压工具安装和跨平台补丁工具；尚未在目标服务器执行完整部署验收。首次建议选择 Linux x86_64、Python 3.12，与现有测试 Python 版本一致。ARM64 的官方 7zz 安装也受支持，但整套 LangBot/NapCat 依赖还需在实际服务器验证。
 
@@ -20,19 +20,19 @@ langbot/.venv/bin/python -m pip install uv
 langbot/.venv/bin/uv sync --project langbot --frozen
 ```
 
-在服务停止时运行 `Apply-RuntimePatches.py`：默认检查，`--apply` 才应用。它通过目标 Python 的 `sysconfig` 寻找 SDK，不把 `.venv/Lib/site-packages` 的 Windows 路径硬套到 Linux；已应用的补丁跳过，不匹配时停止。
+在服务停止时运行 `scripts/Apply-RuntimePatches.py`：默认检查，`--apply` 才应用。它通过目标 Python 的 `sysconfig` 寻找 SDK，不把 `.venv/Lib/site-packages` 的 Windows 路径硬套到 Linux；已应用的补丁跳过，不匹配时停止。
 
 ```sh
-python3.12 Apply-RuntimePatches.py --python langbot/.venv/bin/python
-python3.12 Apply-RuntimePatches.py --python langbot/.venv/bin/python --apply
-python3.12 Setup-ArchiveTools.py
+python3.12 scripts/Apply-RuntimePatches.py --python langbot/.venv/bin/python
+python3.12 scripts/Apply-RuntimePatches.py --python langbot/.venv/bin/python --apply
+python3.12 scripts/Setup-ArchiveTools.py
 ```
 
 补丁清单包含 `onebot-group-context.patch` 和 `group-message-isolation.patch`：前者提供受限的群聊前文读取，后者修复跨发送者串话，让群消息逐条独立排队并检查自己的 @／命令触发条件。群内新消息不会再并入另一位成员正在执行的请求；私聊原有的聚合和追加输入行为不变。应用 Host 补丁后需要重启 LangBot。
 
-`group-history-speakers.patch` 补齐普通会话历史的说话人标签：即使模型没有调用群聊前文工具，也能区分不同成员已经与机器人说过的话。标签取自保存的发送者元数据，仅加入本轮读取的副本，不重写或清空历史；无身份记录不能归给当前提问者。该补丁使用同一份 Python 代码，适用于 Windows/Linux；重启后运行 `Configure-ChatStyle.py` 同步话题切换和成员归属规则。
+`group-history-speakers.patch` 补齐普通会话历史的说话人标签：即使模型没有调用群聊前文工具，也能区分不同成员已经与机器人说过的话。标签取自保存的发送者元数据，仅加入本轮读取的副本，不重写或清空历史；无身份记录不能归给当前提问者。该补丁使用同一份 Python 代码，适用于 Windows/Linux；重启后运行 `scripts/Configure-ChatStyle.py` 同步话题切换和成员归属规则。
 
-`Setup-ArchiveTools.py` 从 [7-Zip 官方发布](https://github.com/ip7z/7zip/releases/tag/26.04) 下载对应架构的 7zz，校验固定 SHA-256，安装到 `.local/tools/7zip/linux-x64/` 或 `linux-arm64/`。不修改全局 PATH，也不执行 Windows 安装器。
+`scripts/Setup-ArchiveTools.py` 从 [7-Zip 官方发布](https://github.com/ip7z/7zip/releases/tag/26.04) 下载对应架构的 7zz，校验固定 SHA-256，安装到 `.local/tools/7zip/linux-x64/` 或 `linux-arm64/`。不修改全局 PATH，也不执行 Windows 安装器。
 
 ## 迁移配置和记忆
 
@@ -40,13 +40,13 @@ python3.12 Setup-ArchiveTools.py
 
 不要迁移 `langbot/data/plugin-runtime/environments/`，这是平台相关依赖缓存。服务器上让插件运行时重新安装依赖；若已有插件状态未自动重建，按源目录重新打包并在管理页安装相同插件身份，保留数据库和插件存储。
 
-管理账号、模型密钥、OneBot Token 等都在运行数据中，通过你自己的安全传输方式迁移，不放进 Git。配置脚本还使用 `.local/setup-state.json` 和 `.local/langbot-admin.json`，这些文件可随私有配置迁移。不要迁移旧的 PID 文件。`Configure-Bot.py` 是首次配置脚本，迁移已有数据时不要运行它覆盖现有设置。
+管理账号、模型密钥、OneBot Token 等都在运行数据中，通过你自己的安全传输方式迁移，不放进 Git。配置脚本还使用 `.local/setup-state.json` 和 `.local/langbot-admin.json`，这些文件可随私有配置迁移。不要迁移旧的 PID 文件。`scripts/Configure-Bot.py` 是首次配置脚本，迁移已有数据时不要运行它覆盖现有设置。
 
 ```sh
-sh Start-LangBot.sh
+sh scripts/Start-LangBot.sh
 ```
 
-服务启动后，漫画插件重新运行 `langbot/.venv/bin/python Configure-ComicTranslator.py`，使其选择当前服务器的 7zz 路径，保留已有模型 UUID 和群触发设置。插件源码可用下面的跨平台命令打包，再通过管理页安装对应 `.lbpkg`：
+服务启动后，漫画插件重新运行 `langbot/.venv/bin/python scripts/Configure-ComicTranslator.py`，使其选择当前服务器的 7zz 路径，保留已有模型 UUID 和群触发设置。插件源码可用下面的跨平台命令打包，再通过管理页安装对应 `.lbpkg`：
 
 ```sh
 cd custom-plugins/QQComicTranslator
@@ -75,16 +75,16 @@ cd custom-plugins/QQComicTranslator
 确保前述运行补丁已应用并重启 LangBot。在管理页安装 `custom-plugins/QQGroupContext/dist/` 中的 `.lbpkg` 并启用插件；如果 QQ AI 流水线只允许指定插件，将“QQ 群聊前文与多图理解”加入允许列表。然后在项目根目录运行：
 
 ```sh
-langbot/.venv/bin/python Configure-GroupContext.py
+langbot/.venv/bin/python scripts/Configure-GroupContext.py
 ```
 
 配置脚本在未指定时使用已有的 `gpt-6.1-sol` 模型，保留现有模型和群触发规则，无需再填写密钥。它通过本机管理接口读取 `.local/setup-state.json` 与 `.local/langbot-admin.json`，因此应在 LangBot 启动、私有配置迁移完成后执行。群历史读取沿用已有 OneBot 连接，不需要额外开启 NapCat HTTP 接口。
 
-聊天语气保存在 `config/chat-style.txt`。迁移后的已有配置会保留；需要同步文件中的风格时，在项目根目录运行 `langbot/.venv/bin/python Configure-ChatStyle.py`，只更新语气段，不覆盖模型、工具或触发规则。
+聊天语气保存在 `config/chat-style.txt`。迁移后的已有配置会保留；需要同步文件中的风格时，在项目根目录运行 `langbot/.venv/bin/python scripts/Configure-ChatStyle.py`，只更新语气段，不覆盖模型、工具或触发规则。
 
-联网插件 `custom-plugins/QQWebSearch` 与 Windows 使用同一份代码，不依赖浏览器或桌面环境。迁移插件配置和现有提供方后，在项目根目录运行 `langbot/.venv/bin/python Configure-WebSearch.py` 同步 API 地址、密钥和视觉模型。它需要上游支持 Responses `web_search`，并允许服务器访问公开网页；不可访问的来源会明确报错，不以生成图片替代搜图。
+联网插件 `custom-plugins/QQWebSearch` 与 Windows 使用同一份代码，不依赖浏览器或桌面环境。迁移插件配置和现有提供方后，在项目根目录运行 `langbot/.venv/bin/python scripts/Configure-WebSearch.py` 同步 API 地址、密钥和视觉模型。它需要上游支持 Responses `web_search`，并允许服务器访问公开网页；不可访问的来源会明确报错，不以生成图片替代搜图。
 
-使用 `QQWebSearch 0.2.0` 或后续版本可下载公开网络文件并作为 QQ 附件上传。文件类型不设扩展名白名单，单个最多 20 MiB，每轮最多两个不同附件。文件只在插件内存中临时保存，通过当前查询的 `File(base64=...)` 回传给 NapCat；不依赖 Windows 路径、共享磁盘或桌面软件，不自动执行和解压。GitHub 目录查询走公开 Contents API，可能受匿名访问限额影响；普通网页支持静态下载链接。更新插件包后需用 `Apply-RuntimePatches.py --apply` 应用 `sdk-attachment-message-budget.patch` 并重启全部服务，使 SDK 单条消息限制从 16 MiB 调整为 32 MiB，足以承载 20 MiB 附件的 base64 与消息包装；仍保留严格上限。无需新增独立密钥。
+使用 `QQWebSearch 0.2.0` 或后续版本可下载公开网络文件并作为 QQ 附件上传。文件类型不设扩展名白名单，单个最多 20 MiB，每轮最多两个不同附件。文件只在插件内存中临时保存，通过当前查询的 `File(base64=...)` 回传给 NapCat；不依赖 Windows 路径、共享磁盘或桌面软件，不自动执行和解压。GitHub 目录查询走公开 Contents API，可能受匿名访问限额影响；普通网页支持静态下载链接。更新插件包后需用 `scripts/Apply-RuntimePatches.py --apply` 应用 `sdk-attachment-message-budget.patch` 并重启全部服务，使 SDK 单条消息限制从 16 MiB 调整为 32 MiB，足以承载 20 MiB 附件的 base64 与消息包装；仍保留严格上限。无需新增独立密钥。
 
 联网结果仅保存在本轮内存缓存，不随数据目录迁移；最多保留 32 轮、64 MiB，15 分钟过期。图片解码上限 1200 万像素、进程内最多两个线程，图像回传绑定当前查询。群聊前文插件使用 `0.1.2` 或后续版本，覆盖自然追问、群文件图片和代理 fake-IP 取图。
 
@@ -113,7 +113,7 @@ NapCat 在服务器上按 [官方文档](https://napneko.github.io/) 安装 Linu
 
 ```sh
 langbot/.venv/bin/python -m pytest custom-plugins/QQGroupContext/tests -q
-langbot/.venv/bin/python Verify-GroupContext.py --check-only
+langbot/.venv/bin/python scripts/Verify-GroupContext.py --check-only
 ```
 
-需要合成模型联调时，运行 `langbot/.venv/bin/python Verify-GroupContext.py`。它会消耗模型额度，以虚构三人讨论、合成图片及纯问候验证自然工具调用；群历史和图片下载使用替身，不发送 QQ 消息。结果写入 `.local/group-context-verification.json`，不能替代以上实际交互检查。
+需要合成模型联调时，运行 `langbot/.venv/bin/python scripts/Verify-GroupContext.py`。它会消耗模型额度，以虚构三人讨论、合成图片及纯问候验证自然工具调用；群历史和图片下载使用替身，不发送 QQ 消息。结果写入 `.local/group-context-verification.json`，不能替代以上实际交互检查。

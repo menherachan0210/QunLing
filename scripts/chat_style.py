@@ -4,7 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 
 MARKER = "[QQ 聊天语气]"
-STYLE_PATH = Path(__file__).resolve().parent / "config/chat-style.txt"
+STYLE_PATH = Path(__file__).resolve().parents[1] / "config/chat-style.txt"
 
 
 def styled_prompts(prompts):

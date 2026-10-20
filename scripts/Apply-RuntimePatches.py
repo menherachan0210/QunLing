@@ -20,7 +20,7 @@ import sys
 import tomllib
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[1]
 SDK_PREFIX = ".venv/Lib/site-packages/"
 PATCHES = (
     ("host-managed-runtime-transport.patch", "host", False),

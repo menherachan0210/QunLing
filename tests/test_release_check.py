@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 spec = importlib.util.spec_from_file_location(
-    "release_check", Path(__file__).resolve().parents[1] / "Check-Release.py"
+    "release_check", Path(__file__).resolve().parents[1] / "scripts/Check-Release.py"
 )
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)

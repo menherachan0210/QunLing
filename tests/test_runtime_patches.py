@@ -18,7 +18,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
-    "runtime_patches", ROOT / "Apply-RuntimePatches.py"
+    "runtime_patches", ROOT / "scripts/Apply-RuntimePatches.py"
 )
 patcher = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = patcher

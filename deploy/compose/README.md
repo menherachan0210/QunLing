@@ -1,15 +1,14 @@
 # Docker Compose 简易部署
 
-主路径是 Linux amd64 服务器、Docker Engine 与 Compose v2。首次构建需要下载 Python 依赖、LangBot 完整发布包、官方 NapCat 镜像和本地记忆模型；建议预留 8 GiB 内存及至少 10 GiB 磁盘。
+支持 Linux amd64 服务器上的 Docker Engine + Compose v2，以及 Windows Docker Desktop 的 Linux amd64 容器。首次构建需要下载 Python 依赖、LangBot 完整发布包、官方 NapCat 镜像和本地记忆模型；建议预留 8 GiB 内存及至少 10 GiB 磁盘，更新备份需要额外空间。Windows 优先使用根目录 `Start-Bot.cmd`；两种平台的完整步骤见[首页](../../README.md)。
 
 在项目根目录执行：
 
 ```bash
-docker compose -f deploy/compose/compose.yaml up -d --build
-docker compose -f deploy/compose/compose.yaml run --rm --no-deps wizard access
+bash bot.sh up
 ```
 
-第二条命令显示带本机随机口令的专属设置链接。打开完整链接，按引导填写自己的 AI 服务并登录 QQ。管理账号、模型、流水线、插件和反向 WebSocket 由引导自动配置，不需要手填插件 UUID 或修改 JSON 文件。
+命令显示带本机随机口令的专属设置链接。打开完整链接，按引导填写自己的 AI 服务并登录 QQ。管理账号、模型、流水线、插件和反向 WebSocket 由引导自动配置，不需要手填插件 UUID 或修改 JSON 文件。
 
 远程服务器通过 SSH 转发访问本机端口：
 
@@ -20,7 +19,7 @@ ssh -N \
   -L 6099:127.0.0.1:6099 用户@服务器
 ```
 
-引导页为 5310，LangBot 管理页为 5300，NapCat 管理页为 6099。三个端口均只绑定服务器回环地址。插件 Runtime 由 Host 自动启动，5400/5401 不映射到宿主机。不要为此部署挂载 Docker socket 或开启容器特权模式。
+引导页为 5310，LangBot 管理页为 5300，NapCat 管理页为 6099。三个端口均只绑定服务器回环地址。插件 Runtime 由 Host 自动启动，5400/5401 不映射到宿主机。只有独立 `updater` 服务挂载 Docker socket，用于管理员发起的版本更新；不要向 app、wizard、NapCat 或插件追加 socket 或容器特权模式。updater 不发布宿主机管理端口，向导通过内部认证 API 调用它。
 
 ## 构建内容
 
@@ -50,7 +49,7 @@ ssh -N \
 
 ## 数据与重启
 
-Compose 使用五个命名卷：
+Compose 使用五个业务命名卷，另有一个更新工作卷：
 
 | 卷 | 保存内容 |
 | --- | --- |
@@ -59,6 +58,7 @@ Compose 使用五个命名卷：
 | `napcat-qq` | QQ 登录数据 |
 | `napcat-config` | NapCat WebUI 与 OneBot 配置 |
 | `napcat-plugins` | NapCat 插件数据 |
+| `update-data` | 更新版本状态、工作文件与五个业务卷的备份 |
 
 初始化服务只准备缺失状态，不重置已有配置。应用启动不会重新套补丁或重新构建插件；这些操作在镜像构建时完成。向导通过受工作区权限保护的只读接口 `/api/v1/plugins/_/installations` 核对数据库中的包摘要；相同包即使正在恢复、尚未出现在运行列表中，也只等待就绪，不重复安装。该接口不返回插件配置或密钥，补丁来源与许可见 [SOURCE_LOCATIONS.md](SOURCE_LOCATIONS.md)。普通重启：
 
@@ -66,7 +66,9 @@ Compose 使用五个命名卷：
 docker compose -f deploy/compose/compose.yaml restart
 ```
 
-更新仓库源码后，重新执行 `up -d --build`，然后使用引导核对插件版本与连接状态。备份应在服务停止后保存上述全部命名卷。`docker compose down` 保留数据；`down -v` 会删除数据，不用于日常更新。
+日常更新从设置页“版本更新”检查并选择固定提交。updater 构建候选镜像，在业务服务停止后备份五个卷，执行替换和健康检查；失败时尝试回滚镜像及数据。更新不会改用户本地源码，ZIP 部署也可用。详细流程、权限与恢复边界见[运维说明](../../docs/OPERATIONS.md)。
+
+普通启动入口优先恢复已经启用的部署快照，首次没有快照才构建。自行修改源码的开发环境应显式执行 `bash bot.sh rebuild` 或 `powershell -File scripts/Public-Bot.ps1 rebuild`，然后使用引导核对插件版本与连接状态。不要在网页更新后从旧源码直接运行 `up -d --build`，否则可能重建旧版本。更新任务进行时不得停止服务。`down -v` 会删除数据和更新备份，不用于日常更新。
 
 ## 检查与排障
 

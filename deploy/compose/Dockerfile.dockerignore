@@ -1,7 +1,8 @@
 **
-!Apply-RuntimePatches.py
-!Setup-ArchiveTools.py
-!chat_style.py
+!scripts/
+!scripts/Apply-RuntimePatches.py
+!scripts/Setup-ArchiveTools.py
+!scripts/chat_style.py
 !LICENSE
 !NOTICE
 !THIRD_PARTY_NOTICES.md

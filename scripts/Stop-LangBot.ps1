@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
-$taskState = Join-Path $PSScriptRoot '.local'
+$taskRoot = Split-Path -Parent $PSScriptRoot
+$taskState = Join-Path $taskRoot '.local'
 $taskPidFile = Join-Path $taskState 'langbot-process.json'
 New-Item -ItemType Directory -Path $taskState -Force | Out-Null
 $taskLockFile = Join-Path $taskState 'langbot-operation.lock'

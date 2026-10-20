@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 from bootstrap.api import LangBotAPI, NapCatAPI, SetupError  # noqa: E402
 from bootstrap.configure import PLUGINS, RUNNER, plugin_identity  # noqa: E402
 from bootstrap.state import State  # noqa: E402
-from chat_style import styled_prompts  # noqa: E402
+from scripts.chat_style import styled_prompts  # noqa: E402
 
 
 class SmokeError(RuntimeError):

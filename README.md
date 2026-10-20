@@ -1,4 +1,4 @@
-# QQ AI Bot
+# QunLing
 
 给 QQ 群聊和私聊接入自己的 AI。基于 **LangBot + NapCat**，带群聊上下文、记忆、识图、生图改图、文件阅读、漫画翻译和联网工具。
 
@@ -6,31 +6,44 @@
 
 ## 快速开始
 
-准备一台 **Linux amd64** 服务器，安装 [Docker Engine 和 Compose v2](https://docs.docker.com/engine/install/)。建议预留 8 GiB 内存和 10 GiB 磁盘；首次构建会下载依赖、官方 QQ 容器和本地记忆模型，需要能访问 GitHub、Docker Hub、PyPI 及模型下载站点。
+Windows 与 Linux 使用同一套 Linux amd64 容器。建议预留 **8 GiB 内存、10 GiB 可用磁盘**；更新备份还需要额外空间。首次构建需下载依赖、官方 QQ 容器和本地记忆模型，网络应能访问 GitHub、Docker Hub、PyPI 及模型下载站点。
 
-首次构建耗时取决于网络和磁盘；下载或构建失败后可以直接重试，已完成的构建层会被复用，不需要删除数据卷。小内存服务器、尤其同机运行其他服务时，应先检查运行和任务执行时的内存占用；swap 不能替代推荐内存，也不代表多图、漫画等任务可以同时运行。
+### Windows：双击启动
 
-下载本仓库并进入目录，执行：
+1. 安装并启动 [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/)，启用 WSL 2，使用 **Linux 容器**。确认 Docker Desktop 已正常运行。
+2. [下载项目 ZIP](https://github.com/menherachan0210/QunLing/archive/refs/heads/main.zip)，**完整解压**到一个固定目录；不需要安装 Git 或 Python，不要在压缩包窗口中直接运行。
+3. 双击 **`Start-Bot.cmd`**。首次会构建镜像，成功后自动打开设置页；没有自动打开时，双击 **`Open-Bot.cmd`**。
+4. 在设置页填写 AI 服务并扫码登录 QQ，具体步骤见下方“完成设置”。以后用同一目录启动；双击 **`Stop-Bot.cmd`** 可停止服务并保留数据。
+
+仅支持运行 Linux amd64 容器的环境；Windows ARM 和 Windows 容器模式不在当前部署支持范围内。已有旧版本机 `langbot/.venv`、`napcat/` 环境的目录仍走兼容启动逻辑，不会自动改为容器或迁移历史。
+
+### Linux：服务器部署
+
+安装 [Docker Engine](https://docs.docker.com/engine/install/) 与 [Compose v2](https://docs.docker.com/compose/install/linux/)，然后下载源码并启动：
 
 ```bash
+git clone https://github.com/menherachan0210/QunLing.git
+cd QunLing
 bash bot.sh up
 ```
 
-启动结束后会显示专属设置链接。**在服务器部署时**，先在自己的电脑建立 SSH 隧道：
+也可以解压同一个 ZIP 后在目录中执行 `bash bot.sh up`。启动结束会显示专属设置链接。服务器默认只监听回环地址：在自己的电脑运行以下命令，并保持终端打开：
 
 ```bash
 ssh -N -L 5310:127.0.0.1:5310 用户@服务器
 ```
 
-保持该终端打开，再在电脑浏览器打开启动命令给出的完整链接：
+然后在电脑浏览器打开启动命令输出的完整设置链接。`bash bot.sh url` 可以再次查看链接。
+
+### 完成设置
 
 1. 填写 AI 的 **API 地址、API Key、聊天模型名、图片模型名**。视觉和联网使用不同模型时，展开额外选项填写。
-2. 保存配置，用手机 QQ 扫描设置页上的二维码并确认登录。
-3. 页面显示连接成功后，群聊中 **@机器人** 或发送 **`/ai 问题`**；私聊直接发送。
+2. 保存配置，用手机 QQ 扫描设置页的二维码并确认登录。
+3. 页面显示连接成功后，在群聊中 **@机器人** 或发送 **`/ai 问题`**；私聊直接发送。
 
-想作为群机器人的 QQ 需要已经加入对应群。QQ 登录过期时回到设置页重新扫码；设置链接可以用 `bash bot.sh url` 再次查看，请勿公开分享。
+机器人 QQ 需先加入对应群。登录过期时回到设置页重新扫码。设置链接含管理令牌，请勿公开分享。
 
-**Windows 本地部署：** 安装并启动 Docker Desktop，使用 Linux 容器，然后双击 `Start-Bot.cmd`。已安装旧版本机运行环境的目录仍使用原启动方式；全新下载的目录会走容器部署并打开设置页。
+构建失败后修复网络再用同一入口重试，已完成的构建层会复用；不需要删除数据卷。小内存机器应留意任务执行时的占用，swap 不能替代推荐内存或保证多图、漫画任务并行运行。
 
 ## AI 服务需要支持什么
 
@@ -63,19 +76,22 @@ ssh -N -L 5310:127.0.0.1:5310 用户@服务器
 
 主要边界：群历史默认查看提问前最近 60 分钟、最多 100 条；多图编辑最多 4 张；公开文件单个最多 20 MiB、每轮最多发送 2 个；漫画包最多 40 MiB、100 张图片。模型理解、翻译和文字定位仍可能出错。完整范围和限制见 [功能说明](docs/FEATURES.md)。
 
-## 日常管理
+## 日常管理与更新
 
-```bash
-bash bot.sh status   # 查看服务状态
-bash bot.sh logs     # 查看最近日志
-bash bot.sh url      # 重新获取设置链接
-bash bot.sh down     # 停止服务，保留数据
-bash bot.sh up       # 启动；更新源码后也使用此命令重新构建
-```
+| 操作 | Windows | Linux |
+| --- | --- | --- |
+| 启动 | 双击 `Start-Bot.cmd` | `bash bot.sh up` |
+| 打开设置 | 双击 `Open-Bot.cmd` | `bash bot.sh url`，再打开完整链接 |
+| 停止并保留数据 | 双击 `Stop-Bot.cmd` | `bash bot.sh down` |
+| 查看状态 | `powershell -File scripts/Public-Bot.ps1 status` | `bash bot.sh status` |
+| 查看日志 | `powershell -File scripts/Public-Bot.ps1 logs` | `bash bot.sh logs` |
+| 按本地源码重新构建（开发用） | `powershell -File scripts/Public-Bot.ps1 rebuild` | `bash bot.sh rebuild` |
 
-Windows 对应双击 `Start-Bot.cmd`、`Open-Bot.cmd`、`Stop-Bot.cmd`，或使用 `.\Public-Bot.ps1 status` / `logs`。
+**容器部署的更新入口在设置页“版本更新”。** 检查版本后可查看目标提交，点击更新时固定到该 SHA；系统会构建候选镜像、备份并校验五个业务数据卷，再重启并检查服务。失败时尝试恢复备份和旧镜像，结果会显示在页面。ZIP 下载的部署同样可用，无需在本机执行 `git pull`。可更新的版本必须已发布到远端仓库；本机尚未提交或推送的修改不会出现在版本检查中。
 
-账号、密钥、QQ 登录状态、聊天、记忆和任务保存在私有 Docker 数据卷中。正常停止和重新构建不会删除它们。更新前先备份；**不要用 `docker compose down -v` 作为更新命令**。备份、排障、远程管理和旧环境迁移见 [运维说明](docs/OPERATIONS.md)。
+网页更新管理容器镜像和数据卷，**不覆盖电脑上的源码目录**。普通启动会恢复已启用的部署版本，避免网页更新后被旧下载目录降级；只有显式 `rebuild` 才按本地源码重新构建。自己的源码修改不会自动合并进官方新版本；维护分支或插件时，先阅读[运维说明](docs/OPERATIONS.md)。更新期间机器人会短暂离线，先完成或取消长任务，不要执行停止命令。若 QQ 要求重新验证登录，更新后仍需在设置页扫码确认。备份保存在独立 `update-data` 卷，所有历史任务备份均保留、不自动删除，含私有数据并持续占用磁盘。
+
+账号、密钥、QQ 登录、聊天、记忆和任务保存在私有 Docker 数据卷中。正常停止不会删除它们。**不要用 `docker compose down -v` 更新或排障**。独立 updater 容器需要 Docker socket 来备份、构建和替换服务；聊天服务、插件与配置向导均不直接获得该权限。首次启动和网页更新会执行你配置的代码仓库，请只使用自己信任的来源。
 
 ## 用到了什么，哪些是我们做的
 
@@ -90,11 +106,23 @@ Windows 对应双击 `Start-Bot.cmd`、`Open-Bot.cmd`、`Stop-Bot.cmd`，或使�
 
 这是对成熟框架的集成与定制，包含 **1 个官方 Agent、2 个定制插件、4 个原创插件**，不是从零实现 QQ 协议或模型框架。架构和修改位置见 [架构说明](docs/ARCHITECTURE.md)，构建细节见 [Compose 部署说明](deploy/compose/README.md)。
 
-## 开发与发布
+## 目录导航与开发
 
-- 修改回答风格：`config/chat-style.txt`；容器重新构建启动后自动应用。
-- 修改功能：维护 `custom-plugins/` 源码，运行对应测试，再重新构建。不要编辑运行缓存。
-- 新环境优先使用容器。根目录旧 `Configure-*.py` 和 [Linux 手动部署](deploy/linux/README.md) 保留给已有环境维护，不是新用户的安装步骤。
+| 目录／入口 | 用途 |
+| --- | --- |
+| `Start/Open/Stop-Bot.cmd`、`bot.sh` | 新用户启动与日常管理 |
+| `bootstrap/` | 设置网页、首次初始化与统一 AI 配置 |
+| `deploy/compose/`、`deploy/updater/` | 容器构建、固定来源与版本更新服务 |
+| `custom-plugins/` | 六个本地维护的插件源码；官方 LocalAgent 在构建时获取 |
+| `scripts/` | [维护工具](scripts/README.md)、旧原生配置与合成验证 |
+| `config/`、`patches/` | 通用对话风格与可重放的框架补丁 |
+| `docs/`、`tests/` | 使用／架构说明与离线回归 |
+| `licenses/` | 第三方许可与来源记录 |
+
+
+- 修改回答风格：`config/chat-style.txt`；显式 `rebuild` 后自动应用。
+- 修改功能：维护 `custom-plugins/` 源码，运行对应测试，再使用 `rebuild`。不要编辑运行缓存。
+- 新环境优先使用容器。`scripts/Configure-*.py` 和 [Linux 手动部署](deploy/linux/README.md) 保留给已有环境维护，不是新用户的安装步骤。
 - [贡献与验证说明](CONTRIBUTING.md) 包含测试入口、发布检查与兼容边界。
 
 已在 Linux amd64 / Docker 环境完成镜像构建、全新数据卷初始化、七插件安装和 AI 配置验证，并执行容器内的部署回归测试。GitHub Actions 会检查 Linux 镜像构建与全新部署，以对应提交的实际运行结果为准。聊天、看图、改图、文件和漫画任务仍应结合自己的 AI 服务与 QQ 账号验收；配置成功不等于服务端支持每一种模型能力。

@@ -1,7 +1,9 @@
 """Exercise the actual onboarding HTTP boundary without any live service."""
 
 from copy import deepcopy
+import socket
 import threading
+from urllib.parse import urlsplit
 
 import pytest
 import requests
@@ -9,6 +11,7 @@ import requests
 from bootstrap.api import SetupError
 from bootstrap.server import SetupHTTPServer, SetupManager
 from bootstrap.state import State, prepare
+from bootstrap.update_client import UpdateError
 
 
 class Manager:
@@ -22,6 +25,7 @@ class Manager:
         )
         self.submissions = []
         self.refreshes = 0
+        self.update_operations = []
 
     def snapshot(self):
         return {"configured": False, "settings": {"api_key_saved": True}}
@@ -33,6 +37,17 @@ class Manager:
 
     def refresh_qr(self):
         self.refreshes += 1
+
+    def update_status(self):
+        return {"phase": "idle", "busy": False}
+
+    def check_update(self, value):
+        self.update_operations.append(("check", deepcopy(value)))
+        return {"phase": "available", "busy": False}
+
+    def apply_update(self, value):
+        self.update_operations.append(("apply", deepcopy(value)))
+        return {"phase": "backing_up", "busy": True}
 
 
 @pytest.fixture
@@ -62,7 +77,7 @@ def test_page_is_public_but_state_and_admin_require_token(endpoint):
     assert "offline-password" not in page.text
     assert page.headers["Cache-Control"] == "no-store"
     assert "frame-ancestors 'none'" in page.headers["Content-Security-Policy"]
-    for path in ("/api/status", "/api/admin"):
+    for path in ("/api/status", "/api/admin", "/api/update"):
         assert http.get(url + path, timeout=5).status_code == 401
     response = http.get(url + "/api/status", headers=headers(url), timeout=5)
     assert response.status_code == 200
@@ -152,6 +167,80 @@ def test_admin_and_qr_are_available_only_to_authenticated_operator(endpoint):
         == 202
     )
     assert manager.refreshes == 1
+
+
+@pytest.mark.parametrize("path", ["/api/update/check", "/api/update/apply"])
+@pytest.mark.parametrize(
+    "override", [
+        {"Origin": "https://evil.example"},
+        {"Authorization": "Bearer wrong"},
+        {"Host": "evil.example"},
+    ],
+)
+def test_update_mutations_enforce_origin_token_and_host(endpoint, path, override):
+    http, url, manager = endpoint
+    response = http.post(
+        url + path, json={}, headers={**headers(url), **override}, timeout=5
+    )
+    assert response.status_code == 403
+    assert manager.update_operations == []
+
+
+def test_update_routes_forward_only_authenticated_operations(endpoint):
+    http, url, manager = endpoint
+    response = http.get(url + "/api/update", headers=headers(url), timeout=5)
+    assert response.status_code == 200
+    assert response.json() == {"phase": "idle", "busy": False}
+    assert http.post(
+        url + "/api/update/check", json={}, headers=headers(url), timeout=5
+    ).json()["phase"] == "available"
+    response = http.post(
+        url + "/api/update/apply",
+        json={"revision": "a" * 40},
+        headers=headers(url), timeout=5,
+    )
+    assert response.status_code == 202
+    assert manager.update_operations == [("check", {}), ("apply", {"revision": "a" * 40})]
+
+
+@pytest.mark.parametrize("uncertain, expected", [(True, 503), (False, 409)])
+def test_update_response_distinguishes_rejection_from_unknown_outcome(endpoint, uncertain, expected):
+    http, url, manager = endpoint
+
+    def apply(_value):
+        raise UpdateError("无法确认", uncertain=uncertain)
+
+    manager.apply_update = apply
+    response = http.post(
+        url + "/api/update/apply", json={"revision": "a" * 40},
+        headers=headers(url), timeout=5,
+    )
+    assert response.status_code == expected
+
+
+@pytest.mark.parametrize("declared_length", ["4096", "1073741824", "invalid"])
+def test_unauthorized_post_body_drain_is_bounded_and_does_not_mutate(endpoint, declared_length):
+    _, url, manager = endpoint
+    parsed = urlsplit(url)
+    # A peer may never finish a small body, claim a huge length, or send invalid
+    # framing. Every case must still receive the auth rejection promptly.
+    with socket.create_connection((parsed.hostname, parsed.port), timeout=2) as client:
+        client.sendall((
+            "POST /api/update/apply HTTP/1.1\r\n"
+            f"Host: {parsed.netloc}\r\n"
+            "Authorization: Bearer wrong\r\n"
+            f"Origin: {url}\r\n"
+            "Content-Type: application/json\r\n"
+            f"Content-Length: {declared_length}\r\n\r\n"
+        ).encode() + b"{")
+        result = b""
+        while b"\r\n\r\n" not in result:
+            chunk = client.recv(4096)
+            assert chunk, "Server closed before returning its authentication result"
+            result += chunk
+        assert result.startswith(b"HTTP/1.0 403")
+    assert manager.update_operations == []
+    assert manager.submissions == []
 
 
 @pytest.mark.parametrize("stage", ["configuring", "error"])

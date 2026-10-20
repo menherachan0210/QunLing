@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import secrets
 import threading
+import time
 from urllib.parse import urlsplit
 
 from bootstrap.api import LangBotAPI, NapCatAPI, SetupError
@@ -22,6 +23,7 @@ from bootstrap.configure import (
     settings_from_input,
 )
 from bootstrap.state import State
+from bootstrap.update_client import REVISION, UpdateClient, UpdateError
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -37,6 +39,11 @@ class SetupManager:
         self.langbot_url = langbot_url
         self.packages, self.archive = Path(packages), archive
         self.lock = threading.RLock()
+        self.updater = UpdateClient(
+            os.environ.get("QQBOT_UPDATER_URL", ""), self.secrets["setup_token"]
+        )
+        self.update_pending = False
+        self.update_inflight = False
         self.pending = None
         self.stopping = threading.Event()
         self.status = {
@@ -61,6 +68,8 @@ class SetupManager:
     def submit(self, values):
         config = settings_from_input(values, self.state.read("ai.json", {}))
         with self.lock:
+            if self.update_inflight or self.update_status()["busy"]:
+                raise SetupError("版本更新正在进行，完成后再保存 AI 配置。")
             if (
                 not self.status["plugins_ready"]
                 or self.status["stage"] == "configuring"
@@ -70,6 +79,71 @@ class SetupManager:
             self.status.update(
                 stage="configuring", message="正在统一配置模型、工具和记忆。"
             )
+
+    def update_status(self):
+        with self.lock:
+            value = self.updater.status()
+            if self.update_inflight:
+                value.update(busy=True, message="正在提交更新任务。")
+                return value
+            if value["available"]:
+                self.update_pending = value["busy"]
+            elif self.update_pending:
+                value.update(
+                    busy=True,
+                    message="更新状态暂不可用，正在等待服务恢复；尚未确认更新完成。",
+                )
+            return value
+
+    def check_update(self, values):
+        if values != {}:
+            raise SetupError("检查更新不接受额外参数。")
+        with self.lock:
+            if self.update_status()["busy"]:
+                raise SetupError("更新正在进行，请等待完成。")
+            return self.updater.check()
+
+    def apply_update(self, values):
+        if (
+            not isinstance(values, dict)
+            or set(values) != {"revision"}
+            or not isinstance(values["revision"], str)
+            or not REVISION.fullmatch(values["revision"])
+        ):
+            raise SetupError("请先检查更新，再选择页面显示的版本。")
+        with self.lock:
+            if self.status["stage"] in {"starting", "configuring"} or self.pending:
+                raise SetupError("初始化或配置正在进行，完成后再更新。")
+            current = self.update_status()
+            if current["busy"]:
+                raise SetupError("更新正在进行，请等待完成。")
+            if not current["available"]:
+                raise SetupError(current["message"])
+            if (
+                not current["update_available"]
+                or current["latest_revision"] != values["revision"].lower()
+            ):
+                raise SetupError("可更新版本已变化，请重新检查更新。")
+            self.update_pending = True
+            self.update_inflight = True
+        # The updater rechecks this wizard's readiness before accepting a job.
+        # Do not hold the snapshot lock across that callback round trip.
+        try:
+            value = self.updater.apply(values["revision"])
+        except UpdateError as exc:
+            with self.lock:
+                self.update_pending = exc.uncertain
+                self.update_inflight = False
+            raise
+        except Exception:
+            with self.lock:
+                self.update_inflight = False
+                self.update_pending = True
+            raise
+        with self.lock:
+            self.update_pending = value["busy"]
+            self.update_inflight = False
+            return value
 
     def refresh_qr(self):
         with self.lock:
@@ -243,6 +317,32 @@ class Handler(BaseHTTPRequestHandler):
         expected = "Bearer " + self.server.manager.secrets["setup_token"]
         return secrets.compare_digest(supplied.encode(), expected.encode())
 
+    def _reject_post(self, status, value):
+        # Closing a socket with an unread POST body can replace the HTTP error
+        # with a TCP reset on Windows. Consume only a small, declared body with
+        # a total deadline; authorization has already failed and no data is
+        # parsed or passed to the manager.
+        previous_timeout = self.connection.gettimeout()
+        try:
+            lengths = self.headers.get_all("Content-Length", [])
+            size = int(lengths[0]) if len(lengths) == 1 else 0
+            if 0 < size <= 64 * 1024 and not self.headers.get("Transfer-Encoding"):
+                deadline = time.monotonic() + .25
+                while size:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self.connection.settimeout(remaining)
+                    chunk = self.rfile.read1(min(size, 16 * 1024))
+                    if not chunk:
+                        break
+                    size -= len(chunk)
+        except (OSError, ValueError):
+            pass
+        finally:
+            self.connection.settimeout(previous_timeout)
+        return self._send(status, value)
+
     def _send(self, status, value, content_type="application/json; charset=utf-8"):
         raw = (
             value
@@ -286,6 +386,8 @@ class Handler(BaseHTTPRequestHandler):
             )
         if path == "/api/status":
             return self._send(200, self.server.manager.snapshot())
+        if path == "/api/update":
+            return self._send(200, self.server.manager.update_status())
         if path == "/api/admin":
             return self._send(
                 200, self.server.manager.state.read("langbot-admin.json", {})
@@ -294,29 +396,35 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self._trusted_host() or not self._authorized():
-            return self._send(403, {"error": "未授权。"})
+            return self._reject_post(403, {"error": "未授权。"})
         origin = self.headers.get("Origin")
         if origin != "http://" + self.headers.get(
             "Host"
         ) and origin != "https://" + self.headers.get("Host"):
-            return self._send(403, {"error": "来源校验失败，请从设置页操作。"})
+            return self._reject_post(403, {"error": "来源校验失败，请从设置页操作。"})
         if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
-            return self._send(415, {"error": "需要 JSON 请求。"})
+            return self._reject_post(415, {"error": "需要 JSON 请求。"})
         try:
             size = int(self.headers.get("Content-Length", ""))
             if not 0 < size <= 16 * 1024:
-                return self._send(413, {"error": "请求过大。"})
+                return self._reject_post(413, {"error": "请求过大。"})
             self.connection.settimeout(10)
             body = json.loads(self.rfile.read(size))
             if self.path == "/api/configure":
                 self.server.manager.submit(body)
             elif self.path == "/api/qr/refresh":
                 self.server.manager.refresh_qr()
+            elif self.path == "/api/update/check":
+                return self._send(200, self.server.manager.check_update(body))
+            elif self.path == "/api/update/apply":
+                return self._send(202, self.server.manager.apply_update(body))
             else:
                 return self._send(404, {"error": "Not found"})
             return self._send(202, {"status": "accepted"})
         except (ValueError, UnicodeError):
             return self._send(400, {"error": "请求格式不正确。"})
+        except UpdateError as exc:
+            return self._send(503 if exc.uncertain else 409, {"error": str(exc)})
         except SetupError as exc:
             return self._send(400, {"error": str(exc)})
         except Exception:

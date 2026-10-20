@@ -22,7 +22,7 @@ from openai import AsyncOpenAI
 from chat_style import styled_prompts
 from local_api import LocalAPI, STATE
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "langbot/src"))
 
 # Match the Host entry point's import order (the plugin handler imports app).

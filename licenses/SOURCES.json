@@ -19,13 +19,13 @@
   },
   {
     "file": "7-Zip-windows-x64-License.txt",
-    "source": "Official 7-Zip 26.04 archive installed by Setup-ArchiveTools.py (download and SHA-256 pinned there)",
+    "source": "Official 7-Zip 26.04 archive installed by scripts/Setup-ArchiveTools.py (download and SHA-256 pinned there)",
     "upstream": "https://github.com/ip7z/7zip/releases/tag/26.04",
     "sha256": "519ac0a4bded9c18ea02e0afb71f663d8c47373bd9facd3ac96a79f51d77765d"
   },
   {
     "file": "7-Zip-linux-x64-License.txt",
-    "source": "Official 7-Zip 26.04 archive installed by Setup-ArchiveTools.py (download and SHA-256 pinned there)",
+    "source": "Official 7-Zip 26.04 archive installed by scripts/Setup-ArchiveTools.py (download and SHA-256 pinned there)",
     "upstream": "https://github.com/ip7z/7zip/releases/tag/26.04",
     "sha256": "1790374e5352329cedb46ee3808930a88e9ca2f08b82b10fcf5cf605d2c301b1"
   }

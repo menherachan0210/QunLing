@@ -28,7 +28,7 @@ import yaml
 from local_api import LocalAPI, STATE
 from chat_style import STYLE_PATH
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = ROOT / "custom-plugins" / "QQGroupContext"
 sys.path.insert(0, str(PLUGIN_ROOT))
 

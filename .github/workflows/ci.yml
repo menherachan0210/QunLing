@@ -28,9 +28,9 @@ jobs:
       - name: Install offline test dependencies
         run: python -m pip install pytest PyYAML requests qrcode Pillow
       - name: Check publishable files for private runtime state and credentials
-        run: python Check-Release.py
+        run: python scripts/Check-Release.py
       - name: Test setup, source isolation and patch installer
-        run: python -m pytest tests/test_public*.py tests/test_runtime_patches.py tests/test_release_check.py -q
+        run: python -m pytest tests/test_public*.py tests/test_runtime_patches.py tests/test_release_check.py tests/test_script_paths.py -q
 
   linux-compose:
     name: Linux image and fresh initialization
@@ -60,6 +60,19 @@ jobs:
           push: false
           cache-from: type=gha,scope=qqbot-linux-amd64
           cache-to: type=gha,scope=qqbot-linux-amd64,mode=min
+      - name: Build the separate deployment updater
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: deploy/updater/Dockerfile
+          platforms: linux/amd64
+          tags: qunling-updater:1
+          load: true
+          push: false
+          cache-from: type=gha,scope=qunling-updater
+          cache-to: type=gha,scope=qunling-updater,mode=min
+      - name: Verify update and rollback with isolated disposable services
+        run: python -m deploy.updater.smoke run --helper-image qunling-updater:1
       - name: Start a fresh deployment
         run: |
           docker compose pull napcat

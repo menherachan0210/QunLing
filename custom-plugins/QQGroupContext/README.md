@@ -18,9 +18,9 @@
 
 ## 安装与跨平台
 
-需要项目的 `patches/onebot-group-context.patch`，由 `Apply-RuntimePatches.py` 检查或应用到 LangBot 4.11.0，然后重启 LangBot。使用原有 NapCat 只读群历史接口，无需开启额外 QQ HTTP 服务。
+需要项目的 `patches/onebot-group-context.patch`，由 `scripts/Apply-RuntimePatches.py` 检查或应用到 LangBot 4.11.0，然后重启 LangBot。使用原有 NapCat 只读群历史接口，无需开启额外 QQ HTTP 服务。
 
-用当前系统 Python 打包此插件，在管理页本地安装，运行根目录 `Configure-GroupContext.py` 选择已配置视觉模型。迁移时保留现有插件配置；业务代码可用于 Windows/Linux。
+用当前系统 Python 打包此插件，在管理页本地安装，运行`scripts/Configure-GroupContext.py` 选择已配置视觉模型。迁移时保留现有插件配置；业务代码可用于 Windows/Linux。
 
 ```sh
 # 在本目录；Windows 用对应 .venv/Scripts/python.exe
@@ -37,4 +37,4 @@
 
 `tests/` 覆盖会话隔离、并发快照、提问者识别、多图分析、下载与计费去重、失败图片提示、媒体边界，以及纯 fake-IP 的受限 DoH 回退和混合私网拒绝；也用虚构自然追问验证 SDK 事件、工具描述、查询锚点与前文读取链路。运行不联网、不发送 QQ，不以模拟工具调用冒充真实模型选择效果。
 
-根目录 `Verify-GroupContext.py` 使用虚构多人讨论与合成图片调用真实模型，验证自由表达能选择相应工具；平台历史接口使用替身，不发送 QQ 消息，会消耗模型额度。真实群聊效果仍需在 QQ 中验证。
+`scripts/Verify-GroupContext.py` 使用虚构多人讨论与合成图片调用真实模型，验证自由表达能选择相应工具；平台历史接口使用替身，不发送 QQ 消息，会消耗模型额度。真实群聊效果仍需在 QQ 中验证。

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Foreground Linux entry point; let systemd own process lifetime and logging.
 set -eu
-TASK_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+TASK_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 TASK_APP="$TASK_ROOT/langbot"
 TASK_PYTHON="$TASK_APP/.venv/bin/python"
 if [ ! -x "$TASK_PYTHON" ]; then

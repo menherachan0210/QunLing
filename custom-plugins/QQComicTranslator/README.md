@@ -8,7 +8,7 @@
 
 限制：压缩包 40 MiB、最多 100 张 PNG/JPEG/WEBP/BMP、单图 20 MiB、总解压 200 MiB、1000 个目录项、单图 4000 万像素。支持 Stored/Deflate ZIP、RAR4/RAR5、7z，包含固实压缩；拒绝加密、分卷、自解压 EXE、ZIP64、危险路径、链接、多帧图片和重名图片。不执行成员文件，不按压缩包路径向磁盘解压。RAR/7z 仅把原压缩包存入随机临时目录，成员通过有界 stdout 逐页读取，结束后删除临时目录。每次仅解码一页，按比例缩放到长边 2400，标记坐标仍相对原图。长条图的小字可能需要拆页。单页最多 200 条、16000 字符、64 KiB 译文数据；结果 TXT 最多 8 MiB，符合 SDK 16 MiB 消息预算。文字位置和翻译是模型初稿，应人工校对。
 
-RAR/7z 使用官方完整 7-Zip CLI，Windows 为 7z.exe+7z.dll，Linux 为 7zz。先运行根目录 `Setup-ArchiveTools.py`，再运行 `Configure-ComicTranslator.py`；也可由管理员设置 `seven_zip_path`，模型不能选择执行路径或命令。每次 native 解压限 512 MiB/120 秒，Windows Job Object 和 Linux 资源上限在解码前启用。相同 Python 插件在两个系统使用同一逻辑；服务器部署参见 `deploy/linux/README.md`。
+RAR/7z 使用官方完整 7-Zip CLI，Windows 为 7z.exe+7z.dll，Linux 为 7zz。先运行`scripts/Setup-ArchiveTools.py`，再运行 `scripts/Configure-ComicTranslator.py`；也可由管理员设置 `seven_zip_path`，模型不能选择执行路径或命令。每次 native 解压限 512 MiB/120 秒，Windows Job Object 和 Linux 资源上限在解码前启用。相同 Python 插件在两个系统使用同一逻辑；服务器部署参见 `deploy/linux/README.md`。
 
 每个插件进程最多两个并发任务，单页请求 150 秒，整个后台任务最多两小时。不会自动重试失败请求；连续三页失败即停止后续请求。已完成页逐页保存，部分结果会在未完成页插入明确占位标记，文件名带“待校对”。部分看不清的文字由模型标“【看不清】”，无法保证模型完全避免漏字。
 
@@ -20,4 +20,4 @@ RAR/7z 使用官方完整 7-Zip CLI，Windows 为 7z.exe+7z.dll，Linux 为 7zz�
 
 格式依据：<https://github.com/LabelPlus/LabelPlus/blob/master/LabelPlus/LabelFileManager.cs>、<https://github.com/LabelPlus/PS-Script/blob/master/src/text_parser.ts>。TXT 保存的是点标记位置，不是 OCR 矩形框；`1,0` 为格式版本，分组从 1 开始。
 
-离线验证：在项目根目录运行 `langbot\.venv\Scripts\python.exe -m pytest custom-plugins/QQComicTranslator/tests -q`。真实 API 测试使用项目的 `Verify-ComicTranslation.py`，只发送合成图片到已配置模型，不发送 QQ 消息。
+离线验证：在项目根目录运行 `langbot\.venv\Scripts\python.exe -m pytest custom-plugins/QQComicTranslator/tests -q`。真实 API 测试使用项目的 `scripts/Verify-ComicTranslation.py`，只发送合成图片到已配置模型，不发送 QQ 消息。

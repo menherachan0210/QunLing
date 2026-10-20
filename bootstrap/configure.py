@@ -10,7 +10,7 @@ import time
 from urllib.parse import urlsplit, urlunsplit
 
 from bootstrap.api import SetupError
-from chat_style import styled_prompts
+from scripts.chat_style import styled_prompts
 
 RUNNER = "plugin:langbot-team/LocalAgent/default"
 PLUGINS = {

@@ -43,7 +43,7 @@ NapCatQQ 使用 [Limited Redistribution License](https://github.com/NapNeko/NapC
 
 ## 7-Zip 与 LabelPlus
 
-漫画压缩包使用 [官方 7-Zip 26.04](https://github.com/ip7z/7zip/releases/tag/26.04)，由 `Setup-ArchiveTools.py` 按平台下载并校验。安装器保留其 `License.txt`；本仓库不分发可执行文件。
+漫画压缩包使用 [官方 7-Zip 26.04](https://github.com/ip7z/7zip/releases/tag/26.04)，由 `scripts/Setup-ArchiveTools.py` 按平台下载并校验。安装器保留其 `License.txt`；本仓库不分发可执行文件。
 
 7-Zip 涉及 LGPL、部分 BSD 代码和 unRAR 限制，不能整体标成 Apache。保留本项目所用官方包的 [Windows 许可](licenses/7-Zip-windows-x64-License.txt)与 [Linux 许可](licenses/7-Zip-linux-x64-License.txt)。若另行再分发二进制或修改版，应满足对应的许可、声明与源码提供要求。
 

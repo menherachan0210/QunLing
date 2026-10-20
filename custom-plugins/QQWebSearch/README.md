@@ -23,11 +23,11 @@
 ..\..\langbot\.venv\Scripts\python.exe -m langbot_plugin.cli build -o dist
 ```
 
-Linux 对应使用 `../../langbot/.venv/bin/python`。通过本地插件安装页安装 `.lbpkg`，然后在项目根目录运行 `Configure-WebSearch.py`，从已有 sub2api 提供方复制地址与密钥，并选择已有视觉模型。密钥只进入插件 secret 配置，更新提供方密钥后需重新运行脚本同步。搜索模型不改变聊天模型。
+Linux 对应使用 `../../langbot/.venv/bin/python`。通过本地插件安装页安装 `.lbpkg`，然后在项目根目录运行 `scripts/Configure-WebSearch.py`，从已有 sub2api 提供方复制地址与密钥，并选择已有视觉模型。密钥只进入插件 secret 配置，更新提供方密钥后需重新运行脚本同步。搜索模型不改变聊天模型。
 
 上游必须支持 Responses `web_search` 和来源引用；不能仅凭模型说“查到了”认定已经联网。默认单次搜索最多 65 秒，每轮最多三次文字搜索、四次网页读取、一次搜图、一次图片发送；搜索无自动重试。搜图最多读取四个来源页、下载六个候选，并进行一次视觉核对。
 
-附件每轮最多四次链接列表查询、三次下载尝试和两次不同文件发送；文件下载总限时 60 秒，发送等待 45 秒。部署时需通过 `Apply-RuntimePatches.py --apply` 应用 `sdk-attachment-message-budget.patch` 并重启 Host、Runtime 和插件工作进程，将 SDK 单条消息上限从 16 MiB 调至 32 MiB；20 MiB 原始文件经 base64 后约 26.67 MiB，仍为 JSON 包装留有空间。该补丁影响 SDK 所有消息的单条容量，下载与共享缓存仍独立限额。未更新 Runtime 时，大附件会在发送前明确报容量不足。下载成功后还需调用发送工具，不能把“已下载”当成“已上传”。上传超时或取消时保留已尝试状态，避免重复发文件。下载本身无需图片模型；需要查找来源时才调用已有搜索服务。
+附件每轮最多四次链接列表查询、三次下载尝试和两次不同文件发送；文件下载总限时 60 秒，发送等待 45 秒。部署时需通过 `scripts/Apply-RuntimePatches.py --apply` 应用 `sdk-attachment-message-budget.patch` 并重启 Host、Runtime 和插件工作进程，将 SDK 单条消息上限从 16 MiB 调至 32 MiB；20 MiB 原始文件经 base64 后约 26.67 MiB，仍为 JSON 包装留有空间。该补丁影响 SDK 所有消息的单条容量，下载与共享缓存仍独立限额。未更新 Runtime 时，大附件会在发送前明确报容量不足。下载成功后还需调用发送工具，不能把“已下载”当成“已上传”。上传超时或取消时保留已尝试状态，避免重复发文件。下载本身无需图片模型；需要查找来源时才调用已有搜索服务。
 
 ## 边界
 
@@ -38,6 +38,6 @@ Linux 对应使用 `../../langbot/.venv/bin/python`。通过本地插件安装�
 - 图片与附件仅内存缓存，每轮隔离，15 分钟过期，最多 32 轮、共享 64 MiB；进程重启后失效。同轮相同字节附件去重。不把图、文件或网页自动保存为长期记忆。
 - 发送状态在发送前占用；超时或发送结果未确认时不会自动重复发送。工具报错不回显密钥、原始服务错误体或内部地址。
 
-实现参考：[Responses Web Search](https://developers.openai.com/api/docs/guides/tools-web-search)。真实联网测试会消耗已有模型接口额度；`Verify-WebSearch.py` 只使用公开测试页面，QQ 发送用本地替身捕获，绝不向真实群发送测试消息。
+实现参考：[Responses Web Search](https://developers.openai.com/api/docs/guides/tools-web-search)。真实联网测试会消耗已有模型接口额度；`scripts/Verify-WebSearch.py` 只使用公开测试页面，QQ 发送用本地替身捕获，绝不向真实群发送测试消息。
 
-`Verify-WebSearch.py --case font_attachment` 验证查找指定字体、列目录、下载和选择附件发送的完整模型流程；`--case source_attachment` 验证公开源码文件可按通用附件处理。发送使用本地替身，不替代真实 QQ 的最终回传验收。Windows 和 Linux 使用同一套 Python 下载与发送代码，不依赖桌面程序。
+`scripts/Verify-WebSearch.py --case font_attachment` 验证查找指定字体、列目录、下载和选择附件发送的完整模型流程；`--case source_attachment` 验证公开源码文件可按通用附件处理。发送使用本地替身，不替代真实 QQ 的最终回传验收。Windows 和 Linux 使用同一套 Python 下载与发送代码，不依赖桌面程序。
