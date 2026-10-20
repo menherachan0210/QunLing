@@ -151,7 +151,9 @@ def test_background_has_hard_bounds_prioritizes_explicit_statements_and_does_not
             for i in range(20)
         ],
     }
-    present_history(item, 100)
+    page = present_history(item, 100)
+    assert page["next_before_ref"]
+    present_history(item, 100, page["next_before_ref"])
     evidence = vision_context(item, ["img_1", "img_2", "img_3", "img_4"], "比较", ["m_1"])
     assert len(evidence["discussion"]) <= MAX_VISION_CONTEXT_MESSAGES
     assert sum(len(message["text"]) for message in evidence["discussion"]) <= MAX_VISION_CONTEXT_TEXT

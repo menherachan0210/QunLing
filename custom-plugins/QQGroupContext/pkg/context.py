@@ -15,6 +15,8 @@ from pkg.errors import VisionError
 
 KEY = "qq_group_context.query.v1"
 TTL = 900
+MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
+MAX_TOTAL_SNAPSHOT_BYTES = 16 * 1024 * 1024
 
 
 def identity(value, *, signed=False):
@@ -57,6 +59,7 @@ class QueryContext:
     timestamp: int
     created: float
     history: dict | None = None
+    history_bytes: int = 0
     image_urls: dict[str, str] = field(default_factory=dict)
     shown_images: set[str] = field(default_factory=set)
     shown_messages: dict[str, dict] = field(default_factory=dict, repr=False)
@@ -85,7 +88,7 @@ class ContextStore:
 
     def save_history(self, item, history):
         size = len(json.dumps(history, ensure_ascii=False).encode("utf-8"))
-        if size > 1024 * 1024:
+        if size > MAX_SNAPSHOT_BYTES:
             raise VisionError("近期群聊上下文过大，请引用需要讨论的消息。")
         saved = [
             (key, entry)
@@ -93,10 +96,13 @@ class ContextStore:
             if entry is not item and entry.history is not None
         ]
         # Bound full snapshots separately from the small pre-trigger anchors.
-        while len(saved) >= 16:
-            key, _ = saved.pop(0)
+        total = size + sum(entry.history_bytes for _, entry in saved)
+        while len(saved) >= 16 or total > MAX_TOTAL_SNAPSHOT_BYTES:
+            key, removed = saved.pop(0)
+            total -= removed.history_bytes
             self.entries.pop(key, None)
         item.history = history
+        item.history_bytes = size
 
     def capture(self, plugin, event_ctx, bot):
         event = event_ctx.event

@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   author: local
   name: QQGroupContext
-  version: 0.1.3
+  version: 0.1.4
   label:
     en_US: QQ Group Conversation Context
     zh_Hans: QQ 群聊前文与多图理解
@@ -23,6 +23,26 @@ spec:
       description:
         en_US: Uses the existing LangBot model provider and credentials.
         zh_Hans: 使用已配置的 LangBot 模型与密钥，不重复填写密钥。
+    - name: history_hours
+      type: integer
+      required: false
+      default: 24
+      label:
+        en_US: History lookback hours
+        zh_Hans: 群聊回看时长（小时）
+      description:
+        en_US: 1–168 hours before the current question; not a permanent archive.
+        zh_Hans: 允许1–168小时，默认24小时；仅按需读取，不永久归档。
+    - name: history_max_messages
+      type: integer
+      required: false
+      default: 1000
+      label:
+        en_US: History scan limit
+        zh_Hans: 群聊最多扫描条数
+      description:
+        en_US: 100–1000 messages; model results are paginated separately.
+        zh_Hans: 允许100–1000条，默认1000条；分批交给模型，不一次塞入全部历史。
   components:
     Tool:
       fromDirs:

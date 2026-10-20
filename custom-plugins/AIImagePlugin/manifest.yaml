@@ -5,7 +5,7 @@ metadata:
   author: langbot-team
   name: AIImagePlugin
   repository: https://github.com/langbot-app/langbot-plugins/tree/main/misc/AIImagePlugin
-  version: 0.1.7-local.5
+  version: 0.1.7-local.6
   description:
     en_US: 'Local extension: generate and edit images through an OpenAI-compatible
       image API.'
@@ -142,6 +142,26 @@ spec:
       en_US: 30–300 seconds; no automatic retries.
       zh_Hans: 30–300 秒；超时后不自动重试，上游可能仍在计费。
     default: 300
+    required: false
+  - name: history_hours
+    type: integer
+    label:
+      en_US: Group history window (hours)
+      zh_Hans: 群聊历史范围（小时）
+    description:
+      en_US: 1–168 hours before the question; available history depends on QQ.
+      zh_Hans: 提问前 1–168 小时；实际可读取范围取决于 QQ 历史记录。
+    default: 24
+    required: false
+  - name: history_max_messages
+    type: integer
+    label:
+      en_US: Maximum group history messages
+      zh_Hans: 群聊历史条数上限
+    description:
+      en_US: 100–1000 messages; at most 24 recent reference images are listed.
+      zh_Hans: 100–1000 条；仍只列出最近最多 24 张候选参考图，选中后才下载。
+    default: 1000
     required: false
   components:
     Command:

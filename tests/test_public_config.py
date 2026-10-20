@@ -266,6 +266,9 @@ def test_empty_install_configures_distinct_model_roles_memory_processors_and_bot
     for identity in ("local/QQGroupContext", "local/QQComicTranslator"):
         assert api.configs[identity]["model_uuid"] == result["vision_model_uuid"]
     assert api.configs["local/QQWebSearch"]["vision_model_uuid"] == result["vision_model_uuid"]
+    for identity in ("local/QQGroupContext", "langbot-team/AIImagePlugin"):
+        assert api.configs[identity]["history_hours"] == 24
+        assert api.configs[identity]["history_max_messages"] == 1000
     assert all(c["unrelated_option"] == "preserve-me" for c in api.configs.values())
 
 
@@ -375,6 +378,105 @@ def test_input_retains_saved_key_but_requires_complete_image_configuration():
         settings(image_model="")
 
 
+@pytest.mark.parametrize("hours,messages", [(1, 100), (168, 1000), ("48", "750")])
+def test_group_context_limits_accept_bounded_integers_and_browser_strings(hours, messages):
+    config = settings(group_context_hours=hours, group_context_max_messages=messages)
+    assert type(config["group_context_hours"]) is int
+    assert type(config["group_context_max_messages"]) is int
+    assert config["group_context_hours"] == int(hours)
+    assert config["group_context_max_messages"] == int(messages)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("group_context_hours", 0), ("group_context_hours", 169),
+    ("group_context_hours", True), ("group_context_hours", 24.0),
+    ("group_context_hours", "1.5"), ("group_context_hours", ""),
+    ("group_context_hours", "24\ninvalid"), ("group_context_hours", None),
+    ("group_context_max_messages", 99), ("group_context_max_messages", 1001),
+    ("group_context_max_messages", False), ("group_context_max_messages", 1000.0),
+    ("group_context_max_messages", "1e3"), ("group_context_max_messages", []),
+])
+def test_group_context_invalid_limits_are_rejected(field, value):
+    with pytest.raises(SetupError):
+        settings(**{field: value})
+
+
+def test_context_only_change_keeps_saved_ai_settings_and_updates_both_plugins():
+    api = FakeLangBot()
+    previous = settings()
+    first = run_configure(api, previous)
+    count = api.counter
+    api.calls.clear()
+    config = setup.settings_from_input(
+        {"group_context_hours": "72", "group_context_max_messages": "600"}, previous
+    )
+    for key in ("base_url", "api_key", "chat_model", "vision_model", "image_model", "search_model"):
+        assert config[key] == previous[key]
+    second = run_configure(api, config, first)
+    assert api.counter == count and second["memory_uuid"] == first["memory_uuid"]
+    assert {
+        path for method, path, _ in api.calls if method == "PUT"
+    } == {
+        "/api/v1/plugins/local/QQGroupContext/config",
+        "/api/v1/plugins/langbot-team/AIImagePlugin/config",
+    }
+    for identity in ("local/QQGroupContext", "langbot-team/AIImagePlugin"):
+        assert api.configs[identity]["history_hours"] == 72
+        assert api.configs[identity]["history_max_messages"] == 600
+    assert api.configs["langbot-team/AIImagePlugin"]["openai_api_key"] == previous["api_key"]
+
+
+def test_old_saved_settings_get_defaults_on_restore_and_public_status():
+    old = {key: value for key, value in settings().items() if key not in setup.GROUP_CONTEXT_SETTINGS}
+    assert setup.public_settings(old)["group_context_hours"] == 24
+    assert setup.public_settings(old)["group_context_max_messages"] == 1000
+    api = FakeLangBot()
+    run_configure(api, old)
+    for identity in ("local/QQGroupContext", "langbot-team/AIImagePlugin"):
+        assert api.configs[identity]["history_hours"] == 24
+        assert api.configs[identity]["history_max_messages"] == 1000
+
+
+def test_older_client_omitting_context_fields_keeps_existing_custom_limits():
+    previous = settings(group_context_hours=96, group_context_max_messages=900)
+    updated = setup.settings_from_input({"chat_model": "replacement-chat"}, previous)
+    assert updated["group_context_hours"] == 96
+    assert updated["group_context_max_messages"] == 900
+    assert updated["api_key"] == previous["api_key"]
+    assert updated["image_model"] == previous["image_model"]
+
+
+def test_context_setting_persistence_and_redacted_status_roundtrip(tmp_path, monkeypatch):
+    from bootstrap.server import SetupManager
+    from bootstrap.state import prepare
+
+    monkeypatch.delenv("QQBOT_UPDATER_URL", raising=False)
+    prepare(tmp_path / "private", tmp_path / "napcat")
+    manager = SetupManager(
+        State(tmp_path / "private"), "http://app:5300", "http://napcat:6099",
+        tmp_path, "7zz",
+    )
+    manager.api = FakeLangBot()
+    original = settings()
+    manager._apply(original)
+    manager.update(stage="ready", plugins_ready=True)
+    manager.submit({"group_context_hours": "48", "group_context_max_messages": "800"})
+    pending, manager.pending = manager.pending, None
+    manager._apply(pending)
+    saved = manager.state.read("ai.json")
+    assert saved["group_context_hours"] == 48
+    assert saved["group_context_max_messages"] == 800
+    assert saved["api_key"] == original["api_key"]
+    for key in ("chat_model", "image_model", "vision_model", "search_model"):
+        assert saved[key] == original[key]
+    visible = manager.snapshot()["settings"]
+    assert visible["group_context_hours"] == 48
+    assert visible["group_context_max_messages"] == 800
+    assert visible["api_key_saved"] is True
+    assert "api_key" not in visible and original["api_key"] not in json.dumps(visible)
+    assert setup.settings_from_input(saved) == saved
+
+
 @pytest.mark.parametrize("url", [
     "file:///etc/passwd", "https://user:password@example.com/v1",
     "https://example.com:99999/v1", "https://example.com/v1?secret=value",
@@ -391,6 +493,7 @@ def test_public_settings_uses_allowlist_for_future_private_fields():
     public = setup.public_settings(config)
     assert set(public) == {
         "base_url", "chat_model", "vision_model", "image_model", "search_model", "api_key_saved",
+        "group_context_hours", "group_context_max_messages",
     }
     assert public["api_key_saved"] is True
     assert "synthetic-private" not in json.dumps(public)

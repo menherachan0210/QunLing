@@ -1,15 +1,16 @@
 --- a/src/langbot/pkg/platform/adapters/aiocqhttp/platform_api.py
 +++ b/src/langbot/pkg/platform/adapters/aiocqhttp/platform_api.py
-@@ -5,4 +5,8 @@
+@@ -5,4 +5,9 @@
  
  import aiocqhttp
 +
 +import asyncio
++import json
 +import time
 +import unicodedata
  
  
-@@ -141,2 +145,314 @@
+@@ -141,2 +146,438 @@
      'can_send_record': can_send_record,
  }
 +
@@ -70,6 +71,9 @@
 +_HISTORY_IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'}
 +_HISTORY_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 +_HISTORY_FILE_LOOKUP_LIMIT = 8
++_HISTORY_PAGE_SIZE = 100
++_HISTORY_MAX_PAGES = 12
++_HISTORY_SNAPSHOT_MAX_BYTES = 8 * 1024 * 1024
 +
 +
 +def _history_file_image(data: dict) -> tuple[bool, str | None, str | None, str | None]:
@@ -142,20 +146,14 @@
 +        item['images'].sort(key=lambda image: image['index'])
 +
 +
-+def _group_context_result(raw: typing.Any, group_id: int, anchor_id: int, before_time: int, *, deadline: float) -> dict:
-+    def check_deadline() -> None:
-+        # asyncio timeouts cannot interrupt synchronous parsing of native data.
-+        if time.monotonic() >= deadline:
-+            raise TimeoutError('OneBot group context lookup timed out')
-+
-+    check_deadline()
-+    window_start = before_time - 3600
++def _history_page_rows(
++    raw: typing.Any, group_id: int, previous_descending: bool | None
++) -> tuple[list, bool | None, int]:
 +    messages = raw.get('messages') if isinstance(raw, dict) else None
-+    if not isinstance(messages, list) or len(messages) > 100:
++    if not isinstance(messages, list) or len(messages) > _HISTORY_PAGE_SIZE:
 +        raise RuntimeError('OneBot group context response is invalid')
 +    rows = []
 +    for position, message in enumerate(messages):
-+        check_deadline()
 +        if not isinstance(message, dict) or message.get('message_type') != 'group':
 +            continue
 +        try:
@@ -166,41 +164,122 @@
 +        except ValueError:
 +            continue
 +        rows.append((position, message_id, timestamp, message))
++    # Normalize each page before prepending it. Globally sorting concatenated
++    # pages would reverse equal-second messages at page boundaries.
++    descending = previous_descending
++    if len(rows) > 1 and rows[0][2] != rows[-1][2]:
++        descending = rows[0][2] > rows[-1][2]
++    rows.sort(key=lambda row: (row[2], -row[0] if descending else row[0]))
++    return rows, descending, len(messages)
 +
-+    # NapCat keeps native ordering. Infer descending batches from distinct times;
-+    # equal timestamps retain native order, which is the only available tie-break.
-+    descending = len(rows) > 1 and rows[0][2] > rows[-1][2]
-+    anchors = [row for row in rows if row[1] == anchor_id]
-+    anchor_position = None
-+    if anchors:
-+        anchor = max(anchors) if descending else min(anchors)
-+        anchor_position = anchor[0]
-+        before_time = min(before_time, anchor[2])
-+    eligible, seen = [], set()
-+    for position, message_id, timestamp, message in rows:
-+        if message_id == anchor_id or message_id in seen:
-+            continue
-+        if not window_start <= timestamp <= before_time:
-+            continue
-+        if timestamp == before_time:
-+            # Without the anchor, second-resolution timestamps cannot distinguish
-+            # a preceding message from a later message in that same second.
-+            if anchor_position is None:
++
++async def _history_pages(bot, group_id, anchor_id, before_time, window_seconds, max_messages, *, deadline):
++    collected, seen, cursors = [], set(), set()
++    cursor, cursor_time = anchor_id, before_time
++    window_start = before_time - window_seconds
++    scanned, descending, truncated, stop_reason = 0, None, False, 'exhausted'
++    for _ in range(_HISTORY_MAX_PAGES):
++        # Reserve time for normalization and returning useful partial results.
++        remaining = deadline - time.monotonic() - 1
++        if remaining <= 0:
++            if not collected:
++                raise TimeoutError('OneBot group context lookup timed out')
++            truncated, stop_reason = True, 'timeout'
++            break
++        if cursor in cursors:
++            truncated, stop_reason = True, 'no_progress'
++            break
++        cursors.add(cursor)
++        try:
++            async with asyncio.timeout(remaining):
++                raw = await _call(
++                    bot,
++                    'get_group_msg_history',
++                    {
++                        'group_id': str(group_id),
++                        'message_seq': str(cursor),
++                        'count': _HISTORY_PAGE_SIZE,
++                        'reverse_order': True,
++                        'disable_get_url': False,
++                        'parse_mult_msg': False,
++                    },
++                )
++        except Exception as exc:
++            if not collected:
++                raise
++            truncated = True
++            stop_reason = 'timeout' if isinstance(exc, TimeoutError) else 'platform_error'
++            break
++        try:
++            page, descending, count = _history_page_rows(raw, group_id, descending)
++        except Exception:
++            if not collected:
++                raise
++            truncated, stop_reason = True, 'invalid_page'
++            break
++        scanned += count
++        anchor_positions = [index for index, row in enumerate(page) if row[1] == cursor]
++        anchor_position = min(anchor_positions) if anchor_positions else None
++        upper = cursor_time
++        if anchor_position is not None:
++            upper = min(upper, page[anchor_position][2])
++        # reverse_order is forwarded into QQ's native history API; NapCat does
++        # not enforce a documented tie order itself. Do not assume ascending
++        # order for a first page containing only one timestamp.
++        ambiguous = (anchor_position is None or descending is None) and any(row[2] == upper for row in page)
++        truncated |= ambiguous
++        fresh, page_seen = [], set()
++        for index, (_, message_id, timestamp, message) in enumerate(page):
++            if message_id in seen or message_id in page_seen or message_id in {cursor, anchor_id}:
 +                continue
-+            if (not descending and position >= anchor_position) or (descending and position <= anchor_position):
++            if not window_start <= timestamp <= upper:
 +                continue
-+        seen.add(message_id)
-+        eligible.append((timestamp, position, message_id, message))
-+    eligible.sort(key=lambda row: (row[0], -row[1] if descending else row[1]))
-+    valid_message_ids = {str(row[2]) for row in eligible}
++            if timestamp == upper and (anchor_position is None or descending is None or index >= anchor_position):
++                continue
++            page_seen.add(message_id)
++            fresh.append((message_id, timestamp, message))
++        room = max_messages - len(collected)
++        cut = len(fresh) > room
++        retained = fresh[-room:] if room else []
++        collected = retained + collected
++        seen.update(row[0] for row in retained)
++        if cut:
++            truncated, stop_reason = True, 'limit'
++            break
++        if page and page[0][2] < window_start:
++            stop_reason = 'window'
++            break
++        if count < _HISTORY_PAGE_SIZE:
++            stop_reason = ('ambiguous_order' if descending is None else 'anchor_missing') if ambiguous else 'exhausted'
++            break
++        if len(collected) >= max_messages:
++            truncated, stop_reason = True, 'limit'
++            break
++        if not fresh:
++            truncated = True
++            stop_reason = 'ambiguous_order' if ambiguous and descending is None else 'no_progress'
++            break
++        cursor, cursor_time = fresh[0][:2]
++    else:
++        truncated, stop_reason = True, 'page_limit'
++    return collected, scanned, truncated, stop_reason
++
++
++def _group_context_result(
++    rows, window_seconds, max_messages, scanned, truncated, stop_reason, *, deadline: float
++) -> dict:
++    valid_message_ids = {str(row[0]) for row in rows}
 +    output = []
-+    truncated = False
 +    # Allocate shared budgets while parsing newest content first, rather than
 +    # validating every URL and discarding older content afterwards.
-+    text_remaining, images_remaining = 16000, 100
-+    segments_remaining, image_inspections_remaining = 5000, 200
-+    for timestamp, _, message_id, message in reversed(eligible):
-+        check_deadline()
++    text_remaining, images_remaining = 1000 * 1000, 256
++    segments_remaining, image_inspections_remaining = 50000, 1024
++    # Leave room for resolving at most eight file URLs and response metadata.
++    snapshot_remaining = _HISTORY_SNAPSHOT_MAX_BYTES - 256 * 1024
++    for message_id, timestamp, message in reversed(rows):
++        if time.monotonic() >= deadline - 0.1:
++            truncated, stop_reason = True, 'timeout'
++            break
 +        sender = message.get('sender')
 +        sender = sender if isinstance(sender, dict) else {}
 +        try:
@@ -215,9 +294,12 @@
 +            continue
 +        segment_limit = min(2000, segments_remaining)
 +        text_limit = min(1000, text_remaining)
-+        truncated |= len(segments) > segment_limit
++        item_truncated = len(segments) > segment_limit
 +        for index, segment in enumerate(segments[:segment_limit]):
-+            check_deadline()
++            if time.monotonic() >= deadline - 0.1:
++                truncated, stop_reason = True, 'timeout'
++                item_truncated = True
++                break
 +            segments_remaining -= 1
 +            if not isinstance(segment, dict) or not isinstance(segment.get('data'), dict):
 +                continue
@@ -226,16 +308,16 @@
 +            if kind == 'text':
 +                content = data.get('text')
 +                if isinstance(content, str):
-+                    truncated |= len(text) + len(content) > text_limit
++                    item_truncated |= len(text) + len(content) > text_limit
 +                    if len(text) < text_limit:
 +                        text += _history_text(content, text_limit - len(text))
 +            elif kind == 'at':
 +                placeholder = '[提及用户]'
-+                truncated |= len(text) + len(placeholder) > text_limit
++                item_truncated |= len(text) + len(placeholder) > text_limit
 +                text += placeholder[: max(0, text_limit - len(text))]
 +            elif kind == 'image':
 +                if images_remaining <= 0 or image_inspections_remaining <= 0:
-+                    truncated = True
++                    item_truncated = True
 +                    continue
 +                image_inspections_remaining -= 1
 +                url = _history_image_url(data.get('url')) or _history_image_url(data.get('file'))
@@ -246,7 +328,7 @@
 +                    unavailable_images.append({'index': index, 'reason': 'missing_url'})
 +            elif kind == 'file':
 +                if images_remaining <= 0 or image_inspections_remaining <= 0:
-+                    truncated = True
++                    item_truncated = True
 +                    continue
 +                image_inspections_remaining -= 1
 +                is_image, url, file_id, reason = _history_file_image(data)
@@ -276,48 +358,91 @@
 +            'text': text,
 +            'images': images,
 +        }
++        if item_truncated:
++            item['truncated'] = True
++            truncated = True
 +        if reply_id is not None:
 +            item['reply_message_id'] = reply_id
 +        if pending_files:
 +            item['_pending_image_files'] = pending_files
 +        if unavailable_images:
 +            item['unavailable_images'] = unavailable_images
++        item_size = len(json.dumps(item, ensure_ascii=False).encode()) + 2
++        if item_size > snapshot_remaining:
++            truncated, stop_reason = True, 'snapshot_limit'
++            break
++        snapshot_remaining -= item_size
 +        output.append(item)
 +
-+    check_deadline()
 +    output.reverse()
-+    return {'messages': output, 'scanned_messages': len(messages), 'window_seconds': 3600, 'truncated': truncated}
++    available_ids = {item['message_id'] for item in output}
++    for item in output:
++        if item.get('reply_message_id') not in available_ids:
++            item.pop('reply_message_id', None)
++    return {
++        'messages': output,
++        'scanned_messages': scanned,
++        'window_seconds': window_seconds,
++        'max_messages': max_messages,
++        'truncated': truncated,
++        'stop_reason': stop_reason,
++    }
++
++
++def _bound_history_snapshot(result: dict) -> None:
++    """Bound the final UTF-8 JSON snapshot, including resolved file URLs."""
++    messages = result['messages']
++    sizes = [len(json.dumps(item, ensure_ascii=False).encode()) for item in messages]
++    metadata_size = len(json.dumps({**result, 'messages': []}, ensure_ascii=False).encode())
++    total = metadata_size + sum(sizes) + max(0, len(messages) - 1) * 2
++    if total <= _HISTORY_SNAPSHOT_MAX_BYTES:
++        return
++    result['truncated'], result['stop_reason'] = True, 'snapshot_limit'
++    metadata_size = len(json.dumps({**result, 'messages': []}, ensure_ascii=False).encode())
++    total = metadata_size + sum(sizes) + max(0, len(messages) - 1) * 2
++    removed = 0
++    while total > _HISTORY_SNAPSHOT_MAX_BYTES and removed < len(messages):
++        total -= sizes[removed] + (2 if len(messages) - removed > 1 else 0)
++        removed += 1
++    del messages[:removed]
++    retained_ids = {item['message_id'] for item in messages}
++    for item in messages:
++        if item.get('reply_message_id') not in retained_ids:
++            item.pop('reply_message_id', None)
 +
 +
 +async def get_group_recent_context(bot: aiocqhttp.CQHttp, params: dict) -> dict:
 +    """Return bounded direct content around a caller's trusted group message."""
-+    if not isinstance(params, dict) or set(params) != {'group_id', 'before_message_id', 'before_time'}:
++    required = {'group_id', 'before_message_id', 'before_time'}
++    if (
++        not isinstance(params, dict)
++        or not required <= set(params)
++        or set(params) - required - {'window_seconds', 'max_messages'}
++    ):
 +        raise ValueError('Invalid group context parameters')
 +    group_id = _history_integer(params['group_id'])
 +    anchor_id = _history_integer(params['before_message_id'], signed=True)
 +    before_time = _history_integer(params['before_time'])
++    window_seconds = params.get('window_seconds', 86400)
++    max_messages = params.get('max_messages', 1000)
++    if type(window_seconds) is not int or not 3600 <= window_seconds <= 604800:
++        raise ValueError('Invalid group context window')
++    if type(max_messages) is not int or not 100 <= max_messages <= 1000:
++        raise ValueError('Invalid group context message limit')
 +    now = int(time.time())
 +    if before_time < 1577836800 or not now - 900 <= before_time <= now + 60:
 +        raise ValueError('Invalid group context time boundary')
 +    try:
 +        deadline = time.monotonic() + 12
 +        async with asyncio.timeout(12):
-+            raw = await _call(
-+                bot,
-+                'get_group_msg_history',
-+                {
-+                    'group_id': str(group_id),
-+                    'message_seq': str(anchor_id),
-+                    'count': 100,
-+                    # NapCat uses this flag to walk backwards from the anchor;
-+                    # False walks forwards and can include later group messages.
-+                    'reverse_order': True,
-+                    'disable_get_url': False,
-+                    'parse_mult_msg': False,
-+                },
++            rows, scanned, truncated, stop_reason = await _history_pages(
++                bot, group_id, anchor_id, before_time, window_seconds, max_messages, deadline=deadline
 +            )
-+            result = _group_context_result(raw, group_id, anchor_id, before_time, deadline=deadline)
++            result = _group_context_result(
++                rows, window_seconds, max_messages, scanned, truncated, stop_reason, deadline=deadline
++            )
 +            await _resolve_history_file_images(bot, result, group_id, deadline=deadline)
++            _bound_history_snapshot(result)
 +            return result
 +    except Exception:
 +        raise RuntimeError('OneBot group context lookup failed') from None
@@ -336,7 +461,7 @@
    python:
 --- a/tests/unit_tests/platform/test_aiocqhttp_eba_adapter.py
 +++ b/tests/unit_tests/platform/test_aiocqhttp_eba_adapter.py
-@@ -582,4 +582,12 @@
+@@ -582,4 +582,19 @@
              result = await adapter.call_platform_api(action, params)
              assert result == {'url': 'https://example.test/file'}
 +        elif action == 'get_group_recent_context':
@@ -346,10 +471,17 @@
 +            result = await adapter.call_platform_api(
 +                action, {'group_id': '20001', 'before_message_id': '-101', 'before_time': int(time.time())}
 +            )
-+            assert result == {'messages': [], 'scanned_messages': 0, 'window_seconds': 3600, 'truncated': False}
++            assert result == {
++                'messages': [],
++                'scanned_messages': 0,
++                'window_seconds': 86400,
++                'max_messages': 1000,
++                'truncated': False,
++                'stop_reason': 'exhausted',
++            }
          else:
              bot.call_action.return_value = {'ok': True}
-@@ -588,5 +596,7 @@
+@@ -588,5 +603,7 @@
  
      called_actions = [call.args[0] for call in bot.call_action.await_args_list]
 -    assert called_actions == list(PLATFORM_API_MAP)
@@ -360,10 +492,11 @@
      with pytest.raises(NotSupportedError):
 --- /dev/null
 +++ b/tests/unit_tests/platform/test_onebot_group_image_history.py
-@@ -0,0 +1,419 @@
+@@ -0,0 +1,670 @@
 +"""Scoped recent-context bridge tests using synthetic OneBot payloads only."""
 +
 +import asyncio
++import json
 +from unittest.mock import AsyncMock
 +
 +import pytest
@@ -567,8 +700,10 @@
 +            }
 +        ],
 +        'scanned_messages': 2,
-+        'window_seconds': 3600,
++        'window_seconds': 86400,
++        'max_messages': 1000,
 +        'truncated': False,
++        'stop_reason': 'exhausted',
 +    }
 +    assert api.PLATFORM_API_MAP['get_group_recent_context'] is api.get_group_recent_context
 +    assert 'get_group_msg_history' not in api.PLATFORM_API_MAP
@@ -597,6 +732,16 @@
 +        params(before_time=NOW + 61),
 +        params(before_time=NOW - 901),
 +        params(before_time=NOW + 0.5),
++        params(window_seconds=3599),
++        params(window_seconds=604801),
++        params(window_seconds=True),
++        params(window_seconds='86400'),
++        params(window_seconds=86400.0),
++        params(max_messages=99),
++        params(max_messages=1001),
++        params(max_messages=False),
++        params(max_messages='1000'),
++        params(max_messages=1000.0),
 +    ],
 +)
 +async def test_invalid_scope_or_cursor_never_calls_onebot(payload):
@@ -618,7 +763,8 @@
 +            message(5, segments=[text('duplicate must not replace first')]),
 +            message(ANCHOR, NOW),
 +            message('6', NOW + 1),
-+        ]
++        ],
++        window_seconds=3600,
 +    )
 +    assert [item['message_id'] for item in result['messages']] == ['2', '5']
 +    assert result['messages'][1]['text'] == 'Synthetic discussion'
@@ -636,9 +782,15 @@
 +
 +
 +@pytest.mark.asyncio
-+async def test_equal_timestamp_batch_preserves_native_order_and_anchor_cutoff():
-+    result, _ = await lookup([message('2', NOW), message('1', NOW), message(ANCHOR, NOW), message('3', NOW)])
-+    assert [item['message_id'] for item in result['messages']] == ['2', '1']
++@pytest.mark.parametrize('descending', [False, True])
++@pytest.mark.parametrize('full_page', [False, True])
++async def test_first_equal_timestamp_batch_excludes_ambiguous_order(descending, full_page):
++    padding = [message(str(i + 10), NOW) for i in range(96)] if full_page else []
++    batch = [*padding, message('2', NOW), message('1', NOW), message(ANCHOR, NOW), message('3', NOW)]
++    result, _ = await lookup(list(reversed(batch)) if descending else batch)
++    assert result['messages'] == []
++    assert result['truncated'] is True
++    assert result['stop_reason'] == 'ambiguous_order'
 +
 +
 +@pytest.mark.asyncio
@@ -649,7 +801,7 @@
 +
 +@pytest.mark.asyncio
 +async def test_old_anchor_cannot_move_the_window_into_old_history():
-+    result, _ = await lookup([message('1', NOW - 7200), message(ANCHOR, NOW - 7100)])
++    result, _ = await lookup([message('1', NOW - 7200), message(ANCHOR, NOW - 7100)], window_seconds=3600)
 +    assert result['messages'] == []
 +
 +
@@ -713,18 +865,33 @@
 +        for index in range(100)
 +    ]
 +    result, _ = await lookup(batch)
-+    assert sum(len(item['text']) for item in result['messages']) == 16000
++    assert sum(len(item['text']) for item in result['messages']) == 100000
 +    assert all(len(item['text']) <= 1000 and len(item['sender_name']) == 80 for item in result['messages'])
-+    assert result['messages'][0]['text'] == ''
++    assert all(item['truncated'] is True for item in result['messages'])
++    assert len(result['messages'][0]['text']) == 1000
 +    assert len(result['messages'][-1]['text']) == 1000
 +    assert sum(len(item['images']) for item in result['messages']) == 100
 +    assert result['truncated'] is True
 +
 +
 +@pytest.mark.asyncio
++async def test_segment_and_text_truncation_are_marked_per_message():
++    result, _ = await lookup(
++        [
++            message('1', NOW - 3, segments=[text('x')] * 2001),
++            message('2', NOW - 2, segments=[text('x' * 1001)]),
++            message('3', segments=[text('complete sentence')]),
++        ]
++    )
++    assert result['messages'][0]['truncated'] is True
++    assert result['messages'][1]['truncated'] is True
++    assert 'truncated' not in result['messages'][2]
++
++
++@pytest.mark.asyncio
 +async def test_image_budget_is_shared_across_messages_and_keeps_recent_images():
-+    result, _ = await lookup([message('1', NOW - 2, segments=[image()] * 100), message('2', segments=[image()] * 4)])
-+    assert [len(item['images']) for item in result['messages']] == [96, 4]
++    result, _ = await lookup([message('1', NOW - 2, segments=[image()] * 300), message('2', segments=[image()] * 4)])
++    assert [len(item['images']) for item in result['messages']] == [252, 4]
 +    assert result['truncated'] is True
 +
 +
@@ -770,7 +937,8 @@
 +    bot.call_action.side_effect = blocked
 +    with pytest.raises(RuntimeError, match='^OneBot group context lookup failed$'):
 +        await api.get_group_recent_context(bot, params())
-+    assert deadlines == [12]
++    assert deadlines[0] == 12
++    assert all(0 < deadline <= 12 for deadline in deadlines)
 +
 +
 +@pytest.mark.asyncio
@@ -780,3 +948,218 @@
 +    bot.call_action.return_value = payload
 +    with pytest.raises(RuntimeError, match='^OneBot group context lookup failed$'):
 +        await api.get_group_recent_context(bot, params())
++
++
++def history_bot(records, *, descending=False):
++    """Emulate NapCat's include-cursor pages with synthetic messages only."""
++    positions = {str(row['message_id']): index for index, row in enumerate(records)}
++    bot = AsyncMock()
++
++    async def call(action, **parameters):
++        if action == 'get_group_file_url':
++            assert parameters['group_id'] == GROUP
++            return {'url': 'https://example.test/resolved.png'}
++        assert action == 'get_group_msg_history'
++        assert parameters['group_id'] == GROUP
++        assert parameters['count'] == 100
++        assert parameters['reverse_order'] is True
++        position = positions[parameters['message_seq']]
++        page = records[max(0, position - parameters['count'] + 1) : position + 1]
++        return {'messages': list(reversed(page)) if descending else list(page)}
++
++    bot.call_action.side_effect = call
++    return bot
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('descending', [False, True])
++async def test_real_backward_paging_preserves_older_discussion_and_cross_page_replies(descending):
++    rows = [message(str(i + 1), NOW - 5000 + i) for i in range(250)]
++    rows[-1]['message'].append({'type': 'reply', 'data': {'id': rows[0]['message_id']}})
++    bot = history_bot([*rows, message(ANCHOR, NOW)], descending=descending)
++    result = await api.get_group_recent_context(bot, params())
++    assert [row['message_id'] for row in result['messages']] == [str(i + 1) for i in range(250)]
++    assert all(row['text'] == 'Synthetic discussion' for row in result['messages'])
++    assert result['messages'][-1]['reply_message_id'] == '1'
++    assert result['messages'][0]['time'] < NOW - 3600
++    assert result['window_seconds'] == 86400
++    assert result['max_messages'] == 1000
++    assert result['scanned_messages'] == 253  # Current question plus two cursor overlaps.
++    assert result['stop_reason'] == 'exhausted'
++    assert result['truncated'] is False
++    assert [call.kwargs['message_seq'] for call in bot.call_action.await_args_list] == [ANCHOR, '152', '53']
++
++
++@pytest.mark.asyncio
++async def test_thousand_message_cap_keeps_all_text_and_latest_rows_without_duplicate_anchors():
++    rows = [message(str(i + 1), NOW - 1200 + i, segments=[text(str(i + 1) + ':' + 'x' * 995)]) for i in range(1200)]
++    bot = history_bot([*rows, message(ANCHOR, NOW)])
++    result = await api.get_group_recent_context(bot, params())
++    assert len(result['messages']) == 1000
++    assert [row['message_id'] for row in result['messages']] == [str(i) for i in range(201, 1201)]
++    assert all(row['text'].startswith(row['message_id'] + ':') for row in result['messages'])
++    assert all(len(row['text']) >= 999 for row in result['messages'])
++    assert result['scanned_messages'] == 1100
++    assert result['truncated'] is True
++    assert result['stop_reason'] == 'limit'
++    assert bot.call_action.await_count == 11
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('descending', [False, True])
++async def test_equal_second_page_boundaries_do_not_drop_messages_or_sort_by_ids(descending):
++    # IDs are deliberately opposite to chronological order. The first page
++    # establishes direction; later pages contain only the same second.
++    rows = [message(str(10000 - i * 7), NOW - 1) for i in range(250)]
++    bot = history_bot([*rows, message(ANCHOR, NOW)], descending=descending)
++    result = await api.get_group_recent_context(bot, params())
++    assert [row['message_id'] for row in result['messages']] == [row['message_id'] for row in rows]
++    assert result['truncated'] is False
++    assert bot.call_action.await_count == 3
++
++
++@pytest.mark.asyncio
++async def test_maximum_window_and_explicit_message_limit_are_respected():
++    rows = [message(str(i + 1), NOW - 604801 + i) for i in range(150)]
++    bot = history_bot([*rows, message(ANCHOR, NOW)])
++    result = await api.get_group_recent_context(bot, params(window_seconds=604800, max_messages=100))
++    assert result['window_seconds'] == 604800
++    assert result['max_messages'] == 100
++    assert [row['message_id'] for row in result['messages']] == [str(i) for i in range(51, 151)]
++    assert result['stop_reason'] == 'limit'
++
++
++@pytest.mark.asyncio
++async def test_window_start_is_inclusive_and_stops_before_more_pages():
++    rows = [message(str(i + 1), NOW - 200 + i) for i in range(200)]
++    for index, row in enumerate(rows):
++        row['time'] = NOW - 3650 + index
++    bot = history_bot([*rows, message(ANCHOR, NOW)])
++    result = await api.get_group_recent_context(bot, params(window_seconds=3600))
++    assert result['messages'][0]['time'] == NOW - 3600
++    assert [row['message_id'] for row in result['messages']] == [str(i) for i in range(51, 201)]
++    assert result['truncated'] is False
++    assert result['stop_reason'] == 'window'
++    assert bot.call_action.await_count == 2
++
++
++@pytest.mark.asyncio
++async def test_repeated_full_page_stops_without_looping_or_discarding_collected_messages():
++    rows = [message(str(i + 1), NOW - 100 + i) for i in range(100)]
++    result, bot = await lookup(rows)
++    assert len(result['messages']) == 100
++    assert len({row['message_id'] for row in result['messages']}) == 100
++    assert bot.call_action.await_count == 2
++    assert result['truncated'] is True
++    assert result['stop_reason'] == 'no_progress'
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    'failure,reason',
++    [
++        (RuntimeError('private signed URL'), 'platform_error'),
++        (TimeoutError('private endpoint'), 'timeout'),
++        ({'messages': 'private malformed payload'}, 'invalid_page'),
++    ],
++)
++async def test_later_page_failure_returns_useful_partial_history_without_private_errors(failure, reason):
++    bot = AsyncMock()
++    bot.call_action.side_effect = [
++        {'messages': [message(str(i + 1), NOW - 100 + i) for i in range(100)]},
++        failure,
++    ]
++    result = await api.get_group_recent_context(bot, params())
++    assert len(result['messages']) == 100
++    assert result['truncated'] is True
++    assert result['stop_reason'] == reason
++    assert 'private' not in repr(result)
++    assert bot.call_action.await_count == 2
++
++
++@pytest.mark.asyncio
++async def test_later_pages_cannot_reintroduce_other_group_or_post_question_messages():
++    rows = [message(str(i + 1), NOW - 200 + i) for i in range(200)]
++    first = [*rows[-98:], message(ANCHOR, NOW), message('9998', NOW)]
++    second = [*rows[:3], message('9999', NOW + 1), message('9997', group='20002'), rows[-98]]
++    bot = AsyncMock()
++    bot.call_action.side_effect = [{'messages': first}, {'messages': second}]
++    result = await api.get_group_recent_context(bot, params())
++    ids = [row['message_id'] for row in result['messages']]
++    assert ids == ['1', '2', '3', *[row['message_id'] for row in rows[-98:]]]
++    assert ANCHOR not in ids
++    assert not {'9997', '9998', '9999'}.intersection(ids)
++
++
++@pytest.mark.asyncio
++async def test_missing_cursor_conservatively_excludes_ambiguous_seconds_but_keeps_earlier_rows():
++    first = [message(str(i + 1), NOW - 100 + i) for i in range(100)]
++    second = [message('200', NOW - 101), message('201', NOW - 100)]
++    bot = AsyncMock()
++    bot.call_action.side_effect = [{'messages': first}, {'messages': second}]
++    result = await api.get_group_recent_context(bot, params())
++    assert [row['message_id'] for row in result['messages']] == ['200', *[str(i) for i in range(1, 101)]]
++    assert result['truncated'] is True
++    assert result['stop_reason'] == 'anchor_missing'
++
++
++@pytest.mark.asyncio
++async def test_file_lookup_budget_remains_eight_across_multiple_history_pages():
++    rows = [
++        message(str(i + 1), NOW - 250 + i, segments=[image_file(url=None, file_id=f'file-{i}')]) for i in range(250)
++    ]
++    bot = history_bot([*rows, message(ANCHOR, NOW)])
++    result = await api.get_group_recent_context(bot, params())
++    history_calls = [call for call in bot.call_action.await_args_list if call.args == ('get_group_msg_history',)]
++    file_calls = [call for call in bot.call_action.await_args_list if call.args == ('get_group_file_url',)]
++    assert len(history_calls) == 3
++    assert len(file_calls) == 8
++    assert {call.kwargs['file_id'] for call in file_calls} == {f'file-{i}' for i in range(242, 250)}
++    assert len(result['messages']) == 250
++    assert sum(len(row['images']) for row in result['messages']) == 8
++    assert all(row['unavailable_images'][0]['reason'] == 'budget_exceeded' for row in result['messages'][:-8])
++    assert '_pending_image_files' not in repr(result)
++
++
++@pytest.mark.asyncio
++async def test_snapshot_budget_keeps_recent_text_and_removes_dangling_reply_links(monkeypatch):
++    monkeypatch.setattr(api, '_HISTORY_SNAPSHOT_MAX_BYTES', 300000)
++    rows = [
++        message(str(i + 1), NOW - 100 + i, segments=[text('中' * 1000), {'type': 'reply', 'data': {'id': '1'}}])
++        for i in range(100)
++    ]
++    bot = history_bot([*rows, message(ANCHOR, NOW)])
++    result = await api.get_group_recent_context(bot, params())
++    assert 0 < len(result['messages']) < 100
++    assert result['messages'][-1]['message_id'] == '100'
++    assert all(row['text'] == '中' * 1000 for row in result['messages'])
++    assert all('reply_message_id' not in row for row in result['messages'])
++    assert result['truncated'] is True
++    assert result['stop_reason'] == 'snapshot_limit'
++    assert len(json.dumps(result, ensure_ascii=False).encode()) <= 300000
++
++
++def test_final_snapshot_cap_counts_resolved_unicode_urls_and_keeps_latest_messages(monkeypatch):
++    monkeypatch.setattr(api, '_HISTORY_SNAPSHOT_MAX_BYTES', 700)
++    result = {
++        'messages': [
++            {
++                'message_id': str(i + 1),
++                'reply_message_id': '1',
++                'images': [{'url': 'https://example.test/' + '😀' * 40}],
++            }
++            for i in range(5)
++        ],
++        'scanned_messages': 5,
++        'window_seconds': 86400,
++        'max_messages': 1000,
++        'truncated': False,
++        'stop_reason': 'exhausted',
++    }
++    api._bound_history_snapshot(result)
++    assert result['messages'][-1]['message_id'] == '5'
++    assert 0 < len(result['messages']) < 5
++    assert all('reply_message_id' not in row for row in result['messages'])
++    assert result['truncated'] is True
++    assert result['stop_reason'] == 'snapshot_limit'
++    assert len(json.dumps(result, ensure_ascii=False).encode()) <= 700

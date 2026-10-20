@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import textwrap
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 import venv
@@ -403,6 +404,231 @@ def test_onebot_patches_preflight_together_before_any_write(
     assert {
         path: (tmp_path / path).read_text(encoding="utf-8") for path in originals
     } == originals
+
+
+@pytest.fixture
+def group_history_bridge(tmp_path):
+    """Execute the published Host patch without importing LangBot or its SDK."""
+    fixture = ROOT / "tests/fixtures/onebot_runtime"
+    prefix = "src/langbot/pkg/platform/adapters/aiocqhttp/"
+    target = write(
+        tmp_path,
+        prefix + "platform_api.py",
+        (fixture / "platform_api.py.txt").read_text(encoding="utf-8"),
+    )
+    write(
+        tmp_path,
+        prefix + "manifest.yaml",
+        (fixture / "manifest.yaml").read_text(encoding="utf-8"),
+    )
+    for name in ("onebot-text-attachment.patch", "onebot-group-context.patch"):
+        source = (ROOT / "patches" / name).read_text(encoding="utf-8")
+        plan = patcher.build_plan(name, tmp_path, source, "host")
+        patcher.execute_plans([plan], apply=True)
+    tree = ast.parse(target.read_text(encoding="utf-8"))
+    tree.body = [
+        node
+        for node in tree.body
+        if not (
+            isinstance(node, ast.Import)
+            and any(alias.name == "aiocqhttp" for alias in node.names)
+        )
+    ]
+    namespace = {}
+    exec(compile(tree, str(target), "exec"), namespace)
+    # Isolate the clock replacement from asyncio and other tests.
+    namespace["time"] = SimpleNamespace(
+        time=lambda: 1800000000, monotonic=time.monotonic
+    )
+    return SimpleNamespace(**namespace)
+
+
+def group_history_message(message_id, timestamp, text="Synthetic discussion", **changes):
+    return {
+        "message_id": str(message_id),
+        "time": timestamp,
+        "message_type": "group",
+        "group_id": "20001",
+        "sender": {"user_id": "30001", "nickname": "Synthetic member"},
+        "message": [{"type": "text", "data": {"text": text}}],
+        **changes,
+    }
+
+
+def group_history_params(**changes):
+    return {
+        "group_id": "20001",
+        "before_message_id": "-500",
+        "before_time": 1800000000,
+        **changes,
+    }
+
+
+def synthetic_history_bot(rows, *, descending=False):
+    bot = AsyncMock()
+    positions = {row["message_id"]: index for index, row in enumerate(rows)}
+
+    async def call(action, **parameters):
+        assert action == "get_group_msg_history"
+        assert parameters["group_id"] == "20001"
+        assert parameters["count"] == 100
+        assert parameters["reverse_order"] is True
+        position = positions[parameters["message_seq"]]
+        page = rows[max(0, position - 99):position + 1]
+        return {"messages": list(reversed(page)) if descending else list(page)}
+
+    bot.call_action.side_effect = call
+    return bot
+
+
+def test_published_group_history_defaults_page_to_24h_1000_messages(group_history_bridge):
+    now = 1800000000
+    rows = [
+        group_history_message(i + 1, now - 8000 + i, "x" * 1000)
+        for i in range(1200)
+    ]
+    bot = synthetic_history_bot([*rows, group_history_message(-500, now)])
+    result = asyncio.run(
+        group_history_bridge.get_group_recent_context(bot, group_history_params())
+    )
+    assert result["window_seconds"] == 86400
+    assert result["max_messages"] == 1000
+    assert [row["message_id"] for row in result["messages"]] == [
+        str(i) for i in range(201, 1201)
+    ]
+    assert sum(len(row["text"]) for row in result["messages"]) == 1000000
+    assert all(row["time"] < now - 3600 for row in result["messages"])
+    assert result["truncated"] is True
+    assert result["stop_reason"] == "limit"
+    assert bot.call_action.await_count == 11
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_published_group_history_same_second_page_boundaries(group_history_bridge, descending):
+    now = 1800000000
+    rows = [group_history_message(10000 - 7 * i, now - 1) for i in range(250)]
+    bot = synthetic_history_bot(
+        [*rows, group_history_message(-500, now)], descending=descending
+    )
+    result = asyncio.run(
+        group_history_bridge.get_group_recent_context(bot, group_history_params())
+    )
+    assert [row["message_id"] for row in result["messages"]] == [
+        row["message_id"] for row in rows
+    ]
+    assert result["truncated"] is False
+    assert bot.call_action.await_count == 3
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("all_same_second", [False, True])
+def test_published_group_history_excludes_current_and_later_messages(
+    group_history_bridge, descending, all_same_second
+):
+    now = 1800000000
+    rows = [
+        group_history_message(1, now if all_same_second else now - 1),
+        group_history_message(2, now),
+        group_history_message(-500, now),
+        group_history_message(3, now),
+    ]
+    bot = AsyncMock()
+    bot.call_action.return_value = {
+        "messages": list(reversed(rows)) if descending else rows
+    }
+    result = asyncio.run(
+        group_history_bridge.get_group_recent_context(bot, group_history_params())
+    )
+    assert [row["message_id"] for row in result["messages"]] == (
+        [] if all_same_second else ["1", "2"]
+    )
+    if all_same_second:
+        assert result["truncated"] is True
+        assert result["stop_reason"] == "ambiguous_order"
+
+
+def test_published_group_history_repeat_cursor_stops_with_partial_result(group_history_bridge):
+    bot = AsyncMock()
+    bot.call_action.return_value = {
+        "messages": [
+            group_history_message(i + 1, 1800000000 - 100 + i)
+            for i in range(100)
+        ]
+    }
+    result = asyncio.run(
+        group_history_bridge.get_group_recent_context(bot, group_history_params())
+    )
+    assert len(result["messages"]) == 100
+    assert len({row["message_id"] for row in result["messages"]}) == 100
+    assert result["truncated"] is True
+    assert result["stop_reason"] == "no_progress"
+    assert bot.call_action.await_count == 2
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_published_group_history_first_full_same_second_page_is_fail_closed(
+    group_history_bridge, descending
+):
+    now = 1800000000
+    rows = [
+        *[group_history_message(i + 1, now) for i in range(98)],
+        group_history_message(-500, now),
+        group_history_message(9999, now),
+    ]
+    bot = AsyncMock()
+    bot.call_action.return_value = {
+        "messages": list(reversed(rows)) if descending else rows
+    }
+    result = asyncio.run(
+        group_history_bridge.get_group_recent_context(bot, group_history_params())
+    )
+    assert result["messages"] == []
+    assert result["truncated"] is True
+    assert result["stop_reason"] == "ambiguous_order"
+    assert bot.call_action.await_count == 1
+
+
+@pytest.mark.parametrize(
+    "failure,reason",
+    [
+        (TimeoutError("private upstream detail"), "timeout"),
+        (RuntimeError("private upstream detail"), "platform_error"),
+        ({"messages": "private invalid data"}, "invalid_page"),
+    ],
+)
+def test_published_group_history_later_failure_preserves_partial_result(
+    group_history_bridge, failure, reason
+):
+    bot = AsyncMock()
+    bot.call_action.side_effect = [
+        {"messages": [
+            group_history_message(i + 1, 1800000000 - 100 + i)
+            for i in range(100)
+        ]},
+        failure,
+    ]
+    result = asyncio.run(
+        group_history_bridge.get_group_recent_context(bot, group_history_params())
+    )
+    assert len(result["messages"]) == 100
+    assert result["truncated"] is True
+    assert result["stop_reason"] == reason
+    assert "private" not in repr(result)
+    assert bot.call_action.await_count == 2
+
+
+def test_published_group_history_marks_incomplete_message_evidence(group_history_bridge):
+    bot = AsyncMock()
+    bot.call_action.return_value = {"messages": [
+        group_history_message(1, 1800000000 - 2, "x" * 1001),
+        group_history_message(2, 1800000000 - 1, "Complete statement"),
+    ]}
+    result = asyncio.run(
+        group_history_bridge.get_group_recent_context(bot, group_history_params())
+    )
+    assert len(result["messages"][0]["text"]) == 1000
+    assert result["messages"][0]["truncated"] is True
+    assert "truncated" not in result["messages"][1]
 
 
 @pytest.mark.parametrize(

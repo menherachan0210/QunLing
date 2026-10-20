@@ -11,9 +11,9 @@ from langbot_plugin.api.entities.builtin.platform.message import (
     Source,
 )
 
-from pkg.context import ContextStore, KEY, TTL
+from pkg.context import ContextStore, KEY, TTL, MAX_SNAPSHOT_BYTES, MAX_TOTAL_SNAPSHOT_BYTES
 from pkg.errors import ImageReadError, VisionError
-from pkg.tools import execute, present_history, read_context, read_images
+from pkg.tools import execute, present_history, read_context, read_images, vision_context
 
 
 def fixture():
@@ -152,6 +152,8 @@ async def test_context_reads_same_group_once_and_separates_other_members():
         "group_id": "1001",
         "before_message_id": "-990",
         "before_time": item.timestamp,
+        "window_seconds": 86400,
+        "max_messages": 1000,
     }
     assert second["messages"][0]["speaker"] != second["messages"][1]["speaker"]
     assert second["messages"][1]["reply_to"] == "m_1"
@@ -317,4 +319,231 @@ def test_questioner_is_identified_without_disclosing_qq_id():
 def test_oversized_snapshot_is_rejected():
     plugin, _, _, item = fixture()
     with pytest.raises(VisionError):
-        plugin.contexts.save_history(item, {"messages": ["x" * (1024 * 1024)]})
+        plugin.contexts.save_history(item, {"messages": ["x" * MAX_SNAPSHOT_BYTES]})
+
+
+def large_history(timestamp, count=1000, text="earlier context"):
+    return {
+        "messages": [
+            {
+                "message_id": str(10000 + i),
+                "sender_id": str(201 + i % 3),
+                "sender_name": f"member-{i % 3}",
+                "time": timestamp - (count - i) * 60,
+                "text": text,
+                "images": [{"index": 0, "url": f"https://example.test/{i}?private=yes"}]
+                if i % 100 == 0 else [],
+                **({"reply_message_id": str(10000 + i - 1)} if i else {}),
+            }
+            for i in range(count)
+        ],
+        "window_seconds": 86400,
+        "max_messages": 1000,
+        "scanned_messages": count,
+        "truncated": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_all_thousand_messages_are_reachable_in_stable_opaque_pages():
+    plugin, _, _, item = fixture()
+    plugin.call_platform_api = AsyncMock(return_value=large_history(item.timestamp))
+    rows, cursor = [], None
+    for page in range(10):
+        params = {"limit": 100}
+        if cursor:
+            params["before_ref"] = cursor
+        result = await read_context(plugin, item, params)
+        assert len(result["messages"]) == 100
+        assert result["window_seconds"] == 86400
+        assert result["available_messages"] == 1000
+        assert result["history_truncated"]
+        cursor = result["next_before_ref"]
+        assert bool(cursor) == (page < 9)
+        rows = result["messages"] + rows
+    assert [m["message_ref"] for m in rows] == [f"m_{i}" for i in range(1, 1001)]
+    assert rows[0]["seconds_before_question"] > 3600
+    assert rows[100]["image_refs"] == ["img_2"]
+    assert rows[100]["reply_to"] == "m_100"
+    assert rows[0]["speaker"] == rows[3]["speaker"]
+    assert rows[0]["is_questioner"] and not rows[1]["is_questioner"]
+    assert "private=" not in json.dumps(rows)
+    assert "sender_id" not in json.dumps(rows)
+    plugin.call_platform_api.assert_awaited_once()
+    newest = await read_context(plugin, item, {"limit": 1})
+    assert newest["messages"] == rows[-1:]
+    assert item.image_urls["img_2"].endswith("/100?private=yes")
+
+
+@pytest.mark.asyncio
+async def test_text_budget_paginates_whole_messages_without_losing_older_text():
+    plugin, _, _, item = fixture()
+    plugin.call_platform_api = AsyncMock(
+        return_value=large_history(item.timestamp, count=40, text="字" * 1000)
+    )
+    seen, cursor = [], None
+    while True:
+        result = await read_context(plugin, item, {
+            "limit": 100, **({"before_ref": cursor} if cursor else {}),
+        })
+        rows = result["messages"]
+        assert sum(len(row["text"]) for row in rows) <= 16000
+        assert all(row["text"] == "字" * 1000 for row in rows)
+        seen = [row["message_ref"] for row in rows] + seen
+        cursor = result["next_before_ref"]
+        if cursor is None:
+            break
+    assert seen == [f"m_{i}" for i in range(1, 41)]
+    empty = await read_context(plugin, item, {"before_ref": "m_1"})
+    assert empty["status"] == "empty"
+    assert not empty["has_more_in_snapshot"]
+
+
+@pytest.mark.asyncio
+async def test_search_and_time_jump_reach_old_context_in_one_call_with_long_history():
+    plugin, _, _, item = fixture()
+    snapshot = large_history(item.timestamp, text="字" * 1000)
+    snapshot["messages"][3]["text"] = "星海企划的进度确认"
+    plugin.call_platform_api = AsyncMock(return_value=snapshot)
+    found = await read_context(plugin, item, {"search_text": "星海"})
+    assert [row["message_ref"] for row in found["messages"]] == [f"m_{i}" for i in range(2, 7)]
+    assert found["messages"][2]["text"] == "星海企划的进度确认"
+    assert not found["has_more_in_snapshot"]
+    by_time = await read_context(plugin, item, {"min_age_seconds": 59000})
+    assert by_time["messages"][-1]["seconds_before_question"] >= 59000
+    assert "m_4" in [row["message_ref"] for row in by_time["messages"]]
+    plugin.call_platform_api.assert_awaited_once()
+    empty = await read_context(plugin, item, {"search_text": "没有这个词"})
+    assert empty["status"] == "empty"
+    # A literal regexp-shaped string is not interpreted as a pattern.
+    assert (await read_context(plugin, item, {"search_text": ".*"}))["status"] == "empty"
+
+
+@pytest.mark.asyncio
+async def test_filtered_pagination_keeps_matches_neighbors_and_reference_identity():
+    plugin, _, _, item = fixture()
+    snapshot = large_history(item.timestamp, count=100)
+    for index in (3, 40, 90):
+        snapshot["messages"][index]["text"] = "Project Sun"
+    plugin.call_platform_api = AsyncMock(return_value=snapshot)
+    seen, cursor = [], None
+    while True:
+        result = await read_context(plugin, item, {
+            "search_text": "SUN", "limit": 3, "min_age_seconds": 1200,
+            **({"before_ref": cursor} if cursor else {}),
+        })
+        seen = [row["message_ref"] for row in result["messages"]] + seen
+        cursor = result["next_before_ref"]
+        if cursor is None:
+            break
+    assert seen == [f"m_{i + 1}" for i in [1, 2, 3, 4, 5, 38, 39, 40, 41, 42]]
+    plugin.call_platform_api.assert_awaited_once()
+
+
+def test_filtered_distant_hits_are_not_labeled_nearby_in_vision_context():
+    _, _, _, item = fixture()
+    item.history = large_history(item.timestamp, count=1000)
+    item.history["messages"][100]["text"] = "unique keyword"
+    item.history["messages"][900]["text"] = "unique keyword"
+    result = present_history(item, 100, search_text="unique keyword")
+    assert len(result["messages"]) == 10
+    evidence = vision_context(item, ["img_2"], "描述早先那张图", [])
+    assert all(int(row["message_ref"][2:]) < 200 for row in evidence["discussion"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("params", [
+    {"search_text": None}, {"search_text": ""}, {"search_text": "x" * 81},
+    {"search_text": "line\nbreak"}, {"min_age_seconds": True},
+    {"min_age_seconds": -1}, {"min_age_seconds": 604801},
+])
+async def test_invalid_search_parameters_do_not_fetch_history(params):
+    plugin, _, _, item = fixture()
+    plugin.call_platform_api = AsyncMock()
+    with pytest.raises(VisionError):
+        await read_context(plugin, item, params)
+    plugin.call_platform_api.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_image_from_previous_page_remains_usable_after_reading_older_page(monkeypatch):
+    plugin, _, _, item = fixture()
+    plugin.call_platform_api = AsyncMock(return_value=history(item.timestamp))
+    newest = await read_context(plugin, item, {"limit": 1})
+    await read_context(plugin, item, {"before_ref": newest["next_before_ref"]})
+    load = AsyncMock(return_value="data:image/jpeg;base64,AA==")
+    monkeypatch.setattr("pkg.tools.load_image", load)
+    plugin.invoke_llm = AsyncMock(return_value=SimpleNamespace(content="合成分析", tool_calls=[]))
+    result = await read_images(plugin, item, {
+        "image_refs": ["img_2"], "message_refs": ["m_2"], "question": "读刚才页的图",
+    })
+    assert result["status"] == "ok"
+    load.assert_awaited_once_with("https://example.test/two?private=2")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", [None, True, 1, "m_1", "https://example.test", "-990"])
+async def test_cannot_fabricate_cursor_before_reading_this_query(cursor):
+    plugin, _, _, item = fixture()
+    plugin.call_platform_api = AsyncMock()
+    with pytest.raises(VisionError):
+        await read_context(plugin, item, {"before_ref": cursor})
+    plugin.call_platform_api.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unseen_cursor_and_other_query_cursor_are_rejected():
+    plugin, _, _, item = fixture()
+    plugin.call_platform_api = AsyncMock(return_value=history(item.timestamp))
+    await read_context(plugin, item, {"limit": 1})
+    with pytest.raises(VisionError):
+        await read_context(plugin, item, {"before_ref": "m_1"})
+    _, _, _, other = fixture()
+    with pytest.raises(VisionError):
+        await read_context(plugin, other, {"before_ref": "m_2"})
+    plugin.call_platform_api.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_administrator_scope_is_forwarded_and_snapshot_is_frozen():
+    plugin, _, _, item = fixture()
+    config = {"history_hours": 6, "history_max_messages": 300}
+    plugin.get_config = lambda: config
+    snapshot = history(item.timestamp)
+    plugin.call_platform_api = AsyncMock(return_value=snapshot)
+    first = await read_context(plugin, item, {"limit": 1})
+    sent = plugin.call_platform_api.call_args.args[2]["params"]
+    assert sent["window_seconds"] == 21600 and sent["max_messages"] == 300
+    config["history_hours"] = 168
+    second = await read_context(plugin, item, {"before_ref": first["next_before_ref"]})
+    assert second["window_seconds"] == 3600  # Actual platform window takes priority.
+    assert second["messages"][0]["message_ref"] == "m_1"
+    plugin.call_platform_api.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config", [
+    {"history_hours": True}, {"history_hours": 0}, {"history_hours": 169},
+    {"history_hours": "24"}, {"history_max_messages": 99},
+    {"history_max_messages": 1001}, {"history_max_messages": 100.5},
+])
+async def test_invalid_admin_limits_fail_before_platform_call(config):
+    plugin, _, _, item = fixture()
+    plugin.get_config = lambda: config
+    plugin.call_platform_api = AsyncMock()
+    with pytest.raises(VisionError):
+        await read_context(plugin, item, {})
+    plugin.call_platform_api.assert_not_called()
+
+
+def test_snapshot_cache_bounds_total_bytes_while_preserving_latest_query():
+    plugin, ctx, _, item = fixture()
+    payload = {"messages": ["x" * (6 * 1024 * 1024)]}
+    for i in range(4):
+        ctx.query_id = i + 20
+        token = plugin.contexts.capture(plugin, ctx, "bot-a")
+        current = plugin.contexts.entries[token]
+        plugin.contexts.save_history(current, payload)
+    assert sum(entry.history_bytes for entry in plugin.contexts.entries.values()) <= MAX_TOTAL_SNAPSHOT_BYTES
+    assert current in plugin.contexts.entries.values()
+    assert len([entry for entry in plugin.contexts.entries.values() if entry.history]) == 2

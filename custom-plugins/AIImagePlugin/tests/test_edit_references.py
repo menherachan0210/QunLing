@@ -52,6 +52,7 @@ def ref_env(monkeypatch):
         runtime_revision=1,
     )
     plugin = SimpleNamespace(
+        get_config=lambda: {},
         get_installation_binding=lambda: binding,
         plugin_runtime_handler=object(),
         call_platform_api=AsyncMock(return_value={"messages": []}),
@@ -150,7 +151,13 @@ async def test_two_group_images_from_another_member_are_selectable_in_requested_
         "call_platform_api",
         {
             "action": "get_group_recent_context",
-            "params": {"group_id": "201", "before_message_id": "1", "before_time": NOW},
+            "params": {
+                "group_id": "201",
+                "before_message_id": "1",
+                "before_time": NOW,
+                "window_seconds": 86400,
+                "max_messages": 1000,
+            },
         },
     )
     encoded = json.dumps(result)
@@ -404,7 +411,8 @@ async def test_history_rejects_future_and_out_of_window_sources(ref_env):
         "messages": [
             group_message(10),
             group_message(20, timestamp=NOW + 1),
-            group_message(30, timestamp=NOW - 3601),
+            group_message(30, timestamp=NOW - 86401),
+            group_message(1, timestamp=NOW),
         ]
     }
     result = await listing(env, variables)
@@ -413,6 +421,128 @@ async def test_history_rejects_future_and_out_of_window_sources(ref_env):
         selected(env, variables, [result["images"][0]["image_ref"]])[0].url
         == picture("10").url
     )
+
+
+@pytest.mark.asyncio
+async def test_day_old_history_survives_short_lived_recent_upload_cache(ref_env):
+    env = ref_env
+    capture(env, query(picture("cached"), kind="person", query_id=2))
+    env.clock[0] += env.refs.RECENT_TTL + 1
+    variables = capture(env, query())
+    env.plugin.call_platform_api.return_value = {
+        "messages": [
+            group_message(10, timestamp=NOW - 86400),
+            group_message(11, timestamp=NOW - 7200),
+        ]
+    }
+    result = await listing(env, variables)
+    assert result["window_seconds"] == 86400
+    assert result["max_messages"] == 1000
+    assert not env.refs.STORE.recent
+    assert [
+        item.url
+        for item in selected(
+            env, variables, [row["image_ref"] for row in result["images"]]
+        )
+    ] == [picture("10").url, picture("11").url]
+
+
+@pytest.mark.asyncio
+async def test_thousand_messages_keep_only_latest_bounded_reference_metadata(ref_env):
+    env = ref_env
+    variables = capture(env, query())
+    env.plugin.call_platform_api.return_value = {
+        "messages": [
+            group_message(number, timestamp=NOW - 1100 + number)
+            for number in range(10, 1010)
+        ]
+    }
+    result = await listing(env, variables)
+    assert result["group_history_error"] is None
+    assert len(result["images"]) == env.refs.MAX_CANDIDATES == 24
+    assert result["history_messages"] == 1000
+    assert result["candidates_truncated"] is True
+    context = env.refs.STORE.get(env.plugin, variables, 1, "query-1")
+    assert [item.image.url for item in context.refs.values()] == [
+        picture(str(number)).url for number in range(986, 1010)
+    ]
+    assert len(context.refs) == 24
+    env.plugin.call_platform_api.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_history_settings_are_frozen_per_question_and_enforced(ref_env):
+    env = ref_env
+    config = {"history_hours": 2, "history_max_messages": 200}
+    env.plugin.get_config = lambda: config
+    variables = capture(env, query())
+    config.update(history_hours=168, history_max_messages=1000)
+    env.plugin.call_platform_api.return_value = {
+        "messages": [
+            group_message(10, timestamp=NOW - 7200),
+            group_message(11, timestamp=NOW - 7201),
+        ]
+    }
+    result = await listing(env, variables)
+    assert len(result["images"]) == 1
+    assert result["window_seconds"] == 7200
+    assert result["max_messages"] == 200
+    params = env.plugin.call_platform_api.await_args.args[2]["params"]
+    assert params["window_seconds"] == 7200
+    assert params["max_messages"] == 200
+    assert params["before_message_id"] == "1" and params["before_time"] == NOW
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"history_hours": 0, "history_max_messages": 99},
+        {"history_hours": 169, "history_max_messages": 1001},
+        {"history_hours": True, "history_max_messages": False},
+        {"history_hours": "24", "history_max_messages": 100.5},
+        None,
+    ],
+)
+async def test_invalid_history_settings_use_bounded_defaults(ref_env, config):
+    env = ref_env
+    env.plugin.get_config = lambda: config
+    result = await listing(env, capture(env, query()))
+    assert result["window_seconds"] == 86400
+    assert result["max_messages"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_history_response_over_configured_count_keeps_current_source(ref_env):
+    env = ref_env
+    env.plugin.get_config = lambda: {"history_max_messages": 100}
+    variables = capture(env, query(picture("current")))
+    env.plugin.call_platform_api.return_value = {
+        "messages": [group_message(number) for number in range(10, 111)]
+    }
+    result = await listing(env, variables)
+    assert result["group_history_error"]
+    assert len(result["images"]) == 1
+    assert result["images"][0]["source"] == "current"
+
+
+@pytest.mark.asyncio
+async def test_partial_host_history_is_reported_without_retry_or_later_messages(ref_env):
+    env = ref_env
+    variables = capture(env, query())
+    env.plugin.call_platform_api.return_value = {
+        "messages": [group_message(10, timestamp=NOW - 7200)],
+        "truncated": True,
+    }
+    result = await listing(env, variables)
+    assert result["history_truncated"] is True
+    assert result["history_messages"] == 1
+    assert result["candidates_truncated"] is False
+    env.plugin.call_platform_api.return_value = {
+        "messages": [group_message(20, timestamp=NOW + 1)]
+    }
+    assert await listing(env, variables) == result
+    env.plugin.call_platform_api.assert_awaited_once()
 
 
 @pytest.mark.asyncio

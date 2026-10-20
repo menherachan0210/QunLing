@@ -20,6 +20,11 @@
         <label>视觉模型<input name="vision_model" placeholder="留空使用聊天模型"></label>
         <label>联网模型<input name="search_model" placeholder="留空使用聊天模型"></label>
       </details>
+      <details open><summary>近期群聊范围</summary>
+        <label>最近多少小时<input name="group_context_hours" type="number" min="1" max="168" step="1" value="24" required></label>
+        <label>最多读取多少条消息<input name="group_context_max_messages" type="number" min="100" max="1000" step="1" value="1000" required></label>
+        <p class="note">默认回看最近 24 小时、最多 1000 条消息，文字和历史图片使用同一范围。仅用于近期群聊理解，不会建立永久聊天档案。</p>
+      </details>
       <p class="note">聊天模型需支持工具调用和识图；生图/改图需 Images 接口，联网搜索需 Responses 的 web_search。各功能共用这里的地址和密钥。保存不会产生模型调用费用。</p>
       <button id="save" disabled>保存并启用全部功能</button><p id="form-message" role="alert"></p>
     </form>

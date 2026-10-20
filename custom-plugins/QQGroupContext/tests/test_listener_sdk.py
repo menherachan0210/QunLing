@@ -416,6 +416,8 @@ async def test_natural_followup_keeps_anchor_and_questioner_through_tool_read(
                 "group_id": "1001",
                 "before_message_id": "-990",
                 "before_time": item.timestamp,
+                "window_seconds": 86400,
+                "max_messages": 1000,
             },
         },
     )
