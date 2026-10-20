@@ -95,6 +95,47 @@ def plugin_identity(plugin):
     return metadata["author"] + "/" + metadata["name"]
 
 
+def wait_for_plugins_initialized(
+    api, *, identities=None, timeout=180, sleep=None, clock=None,
+):
+    """Observe restarted workers without reinstalling or rewriting their config."""
+    identities = PLUGINS if identities is None else frozenset(identities)
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    deadline = clock() + timeout
+    while True:
+        response = api.call("GET", "/api/v1/plugins")
+        try:
+            installed = {plugin_identity(p): p for p in response["plugins"]}
+        except (KeyError, TypeError):
+            raise SetupError("插件状态返回格式无效；已保留配置，请稍后重试。") from None
+        pending = []
+        for identity in sorted(identities):
+            plugin = installed.get(identity)
+            if plugin is None:
+                pending.append(identity)
+                continue
+            status = str(plugin.get("status", "")).lower()
+            if plugin.get("enabled") is False or status in {
+                "failed", "error", "errored", "disabled", "cancelled",
+            }:
+                raise SetupError(
+                    "插件启动失败：" + identity
+                    + "；已保留配置，请检查服务日志后重新保存配置。"
+                )
+            if status != "initialized":
+                pending.append(identity)
+        if not pending:
+            return
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise SetupError(
+                "等待插件启动超时：" + "、".join(pending)
+                + "；已保留配置，请稍后重新保存配置重试。"
+            )
+        sleep(min(2, remaining))
+
+
 def ensure_plugins(api, package_dir, progress=lambda text: None, sleep=time.sleep):
     directory = Path(package_dir)
     manifest = json.loads((directory / "packages.json").read_text(encoding="utf-8"))
@@ -110,22 +151,54 @@ def ensure_plugins(api, package_dir, progress=lambda text: None, sleep=time.slee
             raise SetupError("插件包路径无效。")
         if hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
             raise SetupError("插件包校验失败，请重新构建镜像。")
+    # Worker discovery is transient during restoration. Only the workspace's
+    # persisted installation records can authorize installing/replacing a package.
+    # If this API fails, propagate the error; never infer absence from runtime.
+    response = api.call("GET", "/api/v1/plugins/_/installations")
+    installed = {}
+    try:
+        records = response["installations"]
+        if not isinstance(records, list):
+            raise ValueError
+        for record in records:
+            author, name = record["plugin_author"], record["plugin_name"]
+            digest, enabled = record["artifact_digest"], record["enabled"]
+            if (
+                not isinstance(author, str) or not author or "/" in author
+                or not isinstance(name, str) or not name or "/" in name
+                or not isinstance(digest, str) or len(digest) != 64
+                or any(char not in "0123456789abcdefABCDEF" for char in digest)
+                or type(enabled) is not bool
+            ):
+                raise ValueError
+            identity = author + "/" + name
+            if identity in installed:
+                raise ValueError
+            installed[identity] = {**record, "artifact_digest": digest.lower()}
+    except (KeyError, TypeError, ValueError):
+        raise SetupError(
+            "持久插件安装记录格式无效；未重新安装插件，请检查服务后重试。"
+        ) from None
+    # Respect intentional disablement even if another package is missing.
+    for identity in sorted(PLUGINS & installed.keys()):
+        if not installed[identity]["enabled"]:
+            raise SetupError(
+                "插件已禁用：" + identity
+                + "；请在 LangBot 管理页确认并启用后再重试，向导不会自动启用或重装。"
+            )
     ordered = sorted(
         packages,
         key=lambda p: (p["identity"] != "langbot-team/LocalAgent", p["identity"]),
     )
     for item in ordered:
-        installed = {
-            plugin_identity(p): p for p in api.call("GET", "/api/v1/plugins")["plugins"]
-        }
         current = installed.get(item["identity"])
-        digest = (
-            (current or {})
-            .get("install_info", {})
-            .get("_certification", {})
-            .get("artifact_digest")
-        )
-        if digest == item["sha256"] and current.get("status") == "initialized":
+        if current is not None and current["artifact_digest"] == item["sha256"]:
+            # A recovering worker already owns this exact package. Reinstalling
+            # would revoke its binding and interrupt restoration again.
+            progress("正在等待 " + item["identity"].split("/")[-1] + " 启动")
+            wait_for_plugins_initialized(
+                api, identities={item["identity"]}, sleep=sleep,
+            )
             continue
         progress("正在安装 " + item["identity"].split("/")[-1])
         task_id = api.install(directory / item["filename"])
@@ -145,17 +218,9 @@ def ensure_plugins(api, package_dir, progress=lambda text: None, sleep=time.slee
             sleep(2)
         else:
             raise SetupError("插件安装超时，请检查网络后重试。")
-        for _ in range(90):
-            installed = {
-                plugin_identity(p): p
-                for p in api.call("GET", "/api/v1/plugins")["plugins"]
-            }
-            current = installed.get(item["identity"])
-            if current and current.get("status") == "initialized":
-                break
-            sleep(2)
-        else:
-            raise SetupError("插件尚未就绪：" + item["identity"])
+        wait_for_plugins_initialized(
+            api, identities={item["identity"]}, sleep=sleep,
+        )
     progress("七个插件已就绪")
 
 
@@ -369,6 +434,9 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
             api.call("PUT", path, {**old, **values})
             fingerprints[identity] = digest
             remember("applied_fingerprints", fingerprints)
+    # Config PUT schedules a replacement worker; its success does not mean that
+    # Runner discovery or tool execution is ready for the new revision yet.
+    wait_for_plugins_initialized(api)
     processors = []
     for name, label in [
         ("QQTextReader", "QQ TXT 文件捕获"),

@@ -1,0 +1,179 @@
+--- a/src/langbot/pkg/api/http/controller/groups/plugins.py
++++ b/src/langbot/pkg/api/http/controller/groups/plugins.py
+@@ -385,6 +385,29 @@
+             return quart.Response('// SDK not found', status=404, mimetype='application/javascript')
+ 
+         @self.route(
++            '/_/installations',
++            methods=['GET'],
++            auth_type=group.AuthType.USER_TOKEN_OR_API_KEY,
++            permission=Permission.RESOURCE_VIEW,
++        )
++        async def persisted_installations(request_context: RequestContext) -> quart.Response:
++            """List durable installation metadata even while Runtime workers recover."""
++            model = persistence_plugin.PluginSetting
++            result = await self.ap.persistence_mgr.execute_async(
++                sqlalchemy.select(
++                    model.plugin_author,
++                    model.plugin_name,
++                    model.artifact_digest,
++                    model.enabled,
++                    model.installation_uuid,
++                    model.runtime_revision,
++                )
++                .where(model.workspace_uuid == request_context.workspace_uuid)
++                .order_by(model.plugin_author, model.plugin_name)
++            )
++            return self.success(data={'installations': [dict(row) for row in result.mappings().all()]})
++
++        @self.route(
+             '',
+             methods=['GET'],
+             auth_type=group.AuthType.USER_TOKEN_OR_API_KEY,
+--- /dev/null
++++ b/tests/integration/api/test_plugin_installations.py
+@@ -0,0 +1,144 @@
++"""Persistent plugin inventory must remain safe without any running workers."""
++
++from __future__ import annotations
++
++from types import SimpleNamespace
++from unittest.mock import AsyncMock
++
++import pytest
++import sqlalchemy as sa
++
++from tests.integration.api.test_plugins_security import (  # noqa: F401
++    WORKSPACE_UUID,
++    plugin_module,
++    plugin_security_api,
++)
++from langbot.pkg.api.http.authz import Permission
++from langbot.pkg.workspace.errors import WorkspaceNotFoundError
++
++
++pytestmark = pytest.mark.integration
++OTHER_WORKSPACE = '22222222-2222-4222-8222-222222222222'
++FIELDS = {
++    'plugin_author', 'plugin_name', 'artifact_digest', 'enabled',
++    'installation_uuid', 'runtime_revision',
++}
++
++
++@pytest.fixture
++async def inventory_api(plugin_security_api):  # noqa: F811
++    application, client, _ = plugin_security_api
++    engine = sa.create_engine('sqlite:///:memory:')
++    metadata = sa.MetaData()
++    table = sa.Table(
++        'plugin_settings', metadata,
++        sa.Column('workspace_uuid', sa.String),
++        sa.Column('plugin_author', sa.String),
++        sa.Column('plugin_name', sa.String),
++        sa.Column('artifact_digest', sa.String),
++        sa.Column('enabled', sa.Boolean),
++        sa.Column('installation_uuid', sa.String),
++        sa.Column('runtime_revision', sa.Integer),
++        sa.Column('config', sa.JSON),
++        sa.Column('install_info', sa.JSON),
++    )
++    metadata.create_all(engine)
++    with engine.begin() as connection:
++        for workspace, digest in ((WORKSPACE_UUID, 'a' * 64), (OTHER_WORKSPACE, 'b' * 64)):
++            connection.execute(table.insert(), [{
++                'workspace_uuid': workspace, 'plugin_author': 'synthetic',
++                'plugin_name': name, 'artifact_digest': digest, 'enabled': enabled,
++                'installation_uuid': f'{workspace}-{name}', 'runtime_revision': 3,
++                'config': {'api_key': 'synthetic-must-not-leak'},
++                'install_info': {'private_endpoint': 'synthetic-must-not-leak'},
++            } for name, enabled in [('Beta', False), ('Alpha', True)]])
++
++    async def execute(statement):
++        assert statement.is_select
++        assert {column.name for column in statement.selected_columns} == FIELDS
++        with engine.connect() as connection:
++            rows = connection.execute(statement).mappings().all()
++        return SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: rows))
++
++    application.persistence_mgr.execute_async = AsyncMock(side_effect=execute)
++
++    async def access(account_uuid, requested_workspace):
++        workspace = OTHER_WORKSPACE if account_uuid == 'manager-account' else WORKSPACE_UUID
++        if requested_workspace and requested_workspace != workspace:
++            raise WorkspaceNotFoundError('Workspace not found')
++        return SimpleNamespace(
++            workspace=SimpleNamespace(uuid=workspace),
++            membership=SimpleNamespace(uuid='membership', role='viewer', projection_revision=1),
++            execution=SimpleNamespace(instance_uuid='instance-test', placement_generation=1),
++        )
++
++    application.workspace_collaboration_service.resolve_account_workspace = AsyncMock(side_effect=access)
++
++    class NoRuntime:
++        def __getattr__(self, name):
++            raise AssertionError(f'Persistent inventory must not access Runtime: {name}')
++
++    application.plugin_connector = NoRuntime()
++    try:
++        yield application, client, engine, table
++    finally:
++        engine.dispose()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    ('token', 'workspace', 'digest'),
++    [('viewer-token', WORKSPACE_UUID, 'a' * 64), ('manager-token', OTHER_WORKSPACE, 'b' * 64)],
++)
++async def test_inventory_is_tenant_scoped_whitelisted_and_runtime_independent(inventory_api, token, workspace, digest):
++    application, client, engine, table = inventory_api
++    response = await client.get(
++        '/api/v1/plugins/_/installations',
++        headers={'Authorization': f'Bearer {token}', 'X-Workspace-Id': workspace},
++    )
++    assert response.status_code == 200
++    body = await response.get_json()
++    rows = body['data']['installations']
++    assert body['code'] == 0
++    assert [row['plugin_name'] for row in rows] == ['Alpha', 'Beta']
++    assert all(set(row) == FIELDS and row['artifact_digest'] == digest for row in rows)
++    assert [row['enabled'] for row in rows] == [True, False]
++    assert 'synthetic-must-not-leak' not in await response.get_data(as_text=True)
++    application.persistence_mgr.execute_async.assert_awaited_once()
++    with engine.connect() as connection:
++        assert connection.scalar(sa.select(sa.func.count()).select_from(table)) == 4
++
++
++@pytest.mark.asyncio
++async def test_inventory_rejects_unauthenticated_and_foreign_workspace_before_database(inventory_api):
++    application, client, _, _ = inventory_api
++    anonymous = await client.get('/api/v1/plugins/_/installations')
++    foreign = await client.get(
++        '/api/v1/plugins/_/installations',
++        headers={'Authorization': 'Bearer viewer-token', 'X-Workspace-Id': OTHER_WORKSPACE},
++    )
++    assert anonymous.status_code == 401
++    assert foreign.status_code == 404
++    application.persistence_mgr.execute_async.assert_not_awaited()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('can_read', [False, True])
++async def test_inventory_api_key_requires_resource_view_and_uses_key_workspace(inventory_api, can_read):
++    application, client, _, _ = inventory_api
++    identity = SimpleNamespace(
++        instance_uuid='instance-test', placement_generation=1,
++        workspace_uuid=WORKSPACE_UUID, api_key_uuid='synthetic-api-key',
++        permissions=frozenset({Permission.RESOURCE_VIEW.value}) if can_read else frozenset(),
++    )
++    application.apikey_service.authenticate_api_key = AsyncMock(return_value=identity)
++    response = await client.get(
++        '/api/v1/plugins/_/installations',
++        headers={'X-API-Key': 'synthetic-key', 'X-Workspace-Id': OTHER_WORKSPACE},
++    )
++    assert response.status_code == (200 if can_read else 403)
++    if can_read:
++        rows = (await response.get_json())['data']['installations']
++        assert rows and all(row['artifact_digest'] == 'a' * 64 for row in rows)
++    else:
++        application.persistence_mgr.execute_async.assert_not_awaited()

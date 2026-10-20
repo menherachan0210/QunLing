@@ -1,10 +1,17 @@
 """Runtime patch installer tests; all writes stay in pytest temporary folders."""
 
+import ast
+import asyncio
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+import textwrap
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+import venv
 
 import pytest
 
@@ -118,7 +125,9 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("group-message-isolation.patch", "host", False) in patcher.PATCHES
     assert ("group-history-speakers.patch", "host", False) in patcher.PATCHES
     assert ("sdk-attachment-message-budget.patch", "sdk", False) in patcher.PATCHES
-    assert len(names) == 12
+    assert ("host-managed-runtime-transport.patch", "host", False) in patcher.PATCHES
+    assert ("host-persisted-plugin-installations.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 14
 
 
 def test_all_bundled_patches_have_supported_runtime_blocks():
@@ -129,6 +138,33 @@ def test_all_bundled_patches_have_supported_runtime_blocks():
         assert payload
         assert paths
         assert all(not path.startswith("tests/") for path in paths)
+
+
+def test_persisted_plugin_inventory_patch_roundtrips_upstream_route_context(tmp_path):
+    path = "src/langbot/pkg/api/http/controller/groups/plugins.py"
+    original = (
+        "            return quart.Response('// SDK not found', status=404, mimetype='application/javascript')\n"
+        "\n"
+        "        @self.route(\n"
+        "            '',\n"
+        "            methods=['GET'],\n"
+        "            auth_type=group.AuthType.USER_TOKEN_OR_API_KEY,\n"
+    )
+    target = write(tmp_path, path, original)
+    name = "host-persisted-plugin-installations.patch"
+    source = (ROOT / "patches" / name).read_text(encoding="utf-8")
+    plan = patcher.build_plan(name, tmp_path, source, "host")
+    assert plan.state == "ready"
+    patcher.execute_plans([plan], apply=True)
+    patched = target.read_text(encoding="utf-8")
+    assert "'/_/installations'" in patched
+    assert "request_context.workspace_uuid" in patched
+    assert "plugin_connector" not in patched
+    assert "config" not in patched and "install_info" not in patched
+    assert "tests/" not in plan.payload.decode()
+    assert patcher.build_plan(name, tmp_path, source, "host").state == "already-applied"
+    assert patcher.git_apply(tmp_path, plan.payload, "--reverse").returncode == 0
+    assert target.read_text(encoding="utf-8") == original
 
 
 def test_sdk_version_and_location_are_validated(monkeypatch, tmp_path):
@@ -153,6 +189,76 @@ def test_sdk_version_and_location_are_validated(monkeypatch, tmp_path):
         patcher.inspect_python(Path("python"))
 
 
+@pytest.mark.parametrize("explicit_python", [False, True])
+def test_cli_uses_real_virtualenv_instead_of_symlink_target(
+    monkeypatch, tmp_path, explicit_python
+):
+    """Exercise Python's real venv discovery without downloading the SDK."""
+    project = tmp_path / "langbot"
+    write(
+        project,
+        "pyproject.toml",
+        '[project]\nname="langbot"\nversion="4.11.0"\n',
+    )
+    environment = (
+        tmp_path / "selected environment" if explicit_python else project / ".venv"
+    )
+    venv.EnvBuilder(with_pip=False, symlinks=sys.platform != "win32").create(
+        environment
+    )
+    python = environment / (
+        "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+    )
+    probe = "import sysconfig; print(sysconfig.get_path('purelib'))"
+    purelib = Path(
+        subprocess.check_output(
+            [str(python), "-I", "-c", probe], text=True, encoding="utf-8"
+        ).strip()
+    ).resolve()
+    assert purelib.is_relative_to(environment.resolve())
+    if sys.platform != "win32":
+        assert python.is_symlink()
+        base_purelib = Path(
+            subprocess.check_output(
+                [str(python.resolve()), "-I", "-c", probe],
+                text=True,
+                encoding="utf-8",
+            ).strip()
+        ).resolve()
+        assert base_purelib != purelib
+
+    # A minimal distribution fixture is enough for the installer's real isolated
+    # metadata probe; no SDK imports, network, or installed environment is changed.
+    write(purelib, "langbot_plugin/__init__.py", "")
+    target = write(purelib, "langbot_plugin/example.py")
+    write(
+        purelib,
+        "langbot_plugin-0.7.11.dist-info/METADATA",
+        "Metadata-Version: 2.1\nName: langbot-plugin\nVersion: 0.7.11\n",
+    )
+    write(
+        tmp_path,
+        "patches/example.patch",
+        diff(patcher.SDK_PREFIX + "langbot_plugin/example.py"),
+    )
+    monkeypatch.setattr(patcher, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(patcher, "PATCHES", (("example.patch", "sdk", False),))
+    original_build_plan = patcher.build_plan
+
+    def only_temporary_environment(name, root, source, component):
+        # If environment selection regresses, never patch a global installation.
+        assert root == purelib
+        return original_build_plan(name, root, source, component)
+
+    monkeypatch.setattr(patcher, "build_plan", only_temporary_environment)
+    monkeypatch.chdir(tmp_path)
+    args = ["--langbot", "langbot", "--component", "sdk", "--apply"]
+    if explicit_python:
+        args += ["--python", str(python.relative_to(tmp_path))]
+    assert patcher.main(args) == 0
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
 def test_linux_cli_skips_windows_patch_and_defaults_to_check_only(
     monkeypatch, tmp_path
 ):
@@ -175,7 +281,8 @@ def test_linux_cli_skips_windows_patch_and_defaults_to_check_only(
         patcher, "execute_plans", lambda plans, apply: calls.append((plans, apply))
     )
     assert patcher.main(["--langbot", str(tmp_path), "--python", sys.executable]) == 0
-    assert len(observed) == 11
+    assert len(observed) == 13
+    assert ("host-persisted-plugin-installations.patch", "host") in observed
     assert ("group-message-isolation.patch", "host") in observed
     assert ("group-history-speakers.patch", "host") in observed
     assert ("sdk-attachment-message-budget.patch", "sdk") in observed
@@ -346,3 +453,124 @@ def test_attachment_budget_patch_is_narrow_and_idempotent(tmp_path, sdk_path):
     assert target.read_text(encoding="utf-8") == expected
     assert patcher.git_apply(sdk_root, payload, "--reverse").returncode == 0
     assert target.read_text(encoding="utf-8") == original
+
+
+@pytest.fixture
+def patched_transport(tmp_path):
+    """Patch the unmodified upstream branch, then execute that resulting AST."""
+    fixture = ROOT / "tests/fixtures/plugin_runtime/connector_transport.py.txt"
+    original = fixture.read_text(encoding="utf-8")
+    path = "src/langbot/pkg/plugin/connector.py"
+    target = write(tmp_path, path, original)
+    name = "host-managed-runtime-transport.patch"
+    source = (ROOT / "patches" / name).read_text(encoding="utf-8")
+    plan = patcher.build_plan(name, tmp_path, source, "host")
+    assert plan.state == "ready"
+    patcher.execute_plans([plan], apply=True)
+    patched = target.read_text(encoding="utf-8")
+    assert patcher.build_plan(name, tmp_path, source, "host").state == "already-applied"
+    assert patcher.git_apply(tmp_path, plan.payload, "--reverse").returncode == 0
+    assert target.read_text(encoding="utf-8") == original
+
+    excerpt = patched[patched.index("            task_coro:") :]
+    selection = next(
+        node
+        for node in ast.parse(textwrap.dedent(excerpt)).body
+        if isinstance(node, ast.If)
+    )
+    function = ast.parse("async def select_transport():\n    pass").body[0]
+    function.body = [
+        selection,
+        ast.Return(value=ast.Await(value=ast.Name(id="task_coro", ctx=ast.Load()))),
+    ]
+    module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    return compile(module, str(target), "exec")
+
+
+@pytest.mark.parametrize(
+    "host_platform,standalone,transport,expected",
+    [
+        ("docker", False, None, "external_ws"),
+        ("docker", False, "stdio", "stdio"),
+        ("docker", False, "unknown", "external_ws"),
+        ("docker", True, None, "external_ws"),
+        ("docker", True, "stdio", "external_ws"),
+        ("linux", False, None, "stdio"),
+        ("linux", False, "stdio", "stdio"),
+        ("linux", True, None, "external_ws"),
+        ("linux", True, "stdio", "external_ws"),
+        ("win32", False, None, "managed_ws"),
+        ("win32", False, "stdio", "managed_ws"),
+        ("win32", True, None, "external_ws"),
+        ("win32", True, "stdio", "external_ws"),
+    ],
+)
+def test_host_runtime_transport_preserves_defaults_and_standalone_priority(
+    monkeypatch, patched_transport, host_platform, standalone, transport, expected
+):
+    if transport is None:
+        monkeypatch.delenv("LANGBOT_PLUGIN_RUNTIME_TRANSPORT", raising=False)
+    else:
+        monkeypatch.setenv("LANGBOT_PLUGIN_RUNTIME_TRANSPORT", transport)
+    stdio = Mock(return_value=SimpleNamespace(run=AsyncMock(return_value="connected")))
+    websocket = Mock(
+        return_value=SimpleNamespace(run=AsyncMock(return_value="connected"))
+    )
+    host = SimpleNamespace(
+        ap=SimpleNamespace(
+            logger=Mock(),
+            instance_config=SimpleNamespace(
+                data={
+                    "plugin": {"runtime_ws_url": "ws://configured.invalid/control/ws"}
+                }
+            ),
+        ),
+        _control_headers=Mock(return_value={"test-control": "synthetic"}),
+        _control_token="synthetic",
+        _start_runtime_subprocess=AsyncMock(),
+        _connected=SimpleNamespace(set=Mock()),
+    )
+    platform = SimpleNamespace(
+        get_platform=Mock(return_value=host_platform),
+        use_websocket_to_connect_plugin_runtime=Mock(return_value=standalone),
+    )
+    callback = Mock()
+    namespace = {
+        "self": host,
+        "platform": platform,
+        "os": os,
+        "sys": sys,
+        "ws_client_controller": SimpleNamespace(WebSocketClientController=websocket),
+        "stdio_client_controller": SimpleNamespace(StdioClientController=stdio),
+        "PLUGIN_RUNTIME_CONTROL_TOKEN_ENV": "LANGBOT_PLUGIN_RUNTIME_CONTROL_TOKEN",
+        "new_connection_callback": callback,
+        "connect_errors": [],
+    }
+    exec(patched_transport, namespace)
+    assert asyncio.run(namespace["select_transport"]()) == "connected"
+    host.ctrl.run.assert_awaited_once_with(callback)
+    if expected == "stdio":
+        websocket.assert_not_called()
+        host._start_runtime_subprocess.assert_not_called()
+        host._control_headers.assert_not_called()
+        assert stdio.call_args.kwargs["command"] == sys.executable
+        assert stdio.call_args.kwargs["args"] == [
+            "-m",
+            "langbot_plugin.cli.__init__",
+            "rt",
+            "-s",
+        ]
+        assert stdio.call_args.kwargs["env"] == dict(os.environ)
+    else:
+        stdio.assert_not_called()
+        managed = expected == "managed_ws"
+        host._control_headers.assert_called_once_with(allow_generate=managed)
+        assert websocket.call_args.kwargs["ws_url"] == (
+            "ws://localhost:5400/control/ws"
+            if managed
+            else "ws://configured.invalid/control/ws"
+        )
+        if managed:
+            host._start_runtime_subprocess.assert_awaited_once()
+        else:
+            host._start_runtime_subprocess.assert_not_called()

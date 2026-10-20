@@ -1,0 +1,64 @@
+# Unmodified transport selection excerpt from LangBot v4.11.0 connector.py.
+# Upstream source and Apache-2.0 license: https://github.com/langbot-app/LangBot/tree/v4.11.0
+                        await notify_disconnect()
+
+            task_coro: typing.Coroutine[Any, Any, Any]
+            if platform.get_platform() == 'docker' or platform.use_websocket_to_connect_plugin_runtime():
+                self.ap.logger.info('use websocket to connect to plugin runtime')
+                control_headers = self._control_headers(allow_generate=False)
+                ws_url = self.ap.instance_config.data.get('plugin', {}).get(
+                    'runtime_ws_url',
+                    'ws://langbot_plugin_runtime:5400/control/ws',
+                )
+
+                async def connection_failed(
+                    ctrl: ws_client_controller.WebSocketClientController,
+                    exc: Exception | None = None,
+                ) -> None:
+                    del ctrl
+                    connect_errors.append(exc or RuntimeError('WebSocket connection failed'))
+                    self._connected.set()
+
+                self.ctrl = ws_client_controller.WebSocketClientController(
+                    ws_url=ws_url,
+                    make_connection_failed_callback=connection_failed,
+                    additional_headers=control_headers,
+                )
+                task_coro = self.ctrl.run(new_connection_callback)
+            elif platform.get_platform() == 'win32':
+                # Windows cannot use the stdio subprocess transport, so launch
+                # a managed runtime and authenticate its WebSocket controller.
+                self.ap.logger.info('(windows) use cmd to launch plugin runtime and communicate via ws')
+                control_headers = self._control_headers(allow_generate=True)
+                await self._start_runtime_subprocess(
+                    '-m',
+                    'langbot_plugin.cli.__init__',
+                    'rt',
+                    env_overrides={PLUGIN_RUNTIME_CONTROL_TOKEN_ENV: self._control_token},
+                )
+                ws_url = 'ws://localhost:5400/control/ws'
+
+                async def connection_failed(
+                    ctrl: ws_client_controller.WebSocketClientController,
+                    exc: Exception | None = None,
+                ) -> None:
+                    del ctrl
+                    connect_errors.append(exc or RuntimeError('WebSocket connection failed'))
+                    self._connected.set()
+
+                self.ctrl = ws_client_controller.WebSocketClientController(
+                    ws_url=ws_url,
+                    make_connection_failed_callback=connection_failed,
+                    additional_headers=control_headers,
+                )
+                task_coro = self.ctrl.run(new_connection_callback)
+            else:
+                self.ap.logger.info('use stdio to connect to plugin runtime')
+                self.ctrl = stdio_client_controller.StdioClientController(
+                    command=sys.executable,
+                    args=['-m', 'langbot_plugin.cli.__init__', 'rt', '-s'],
+                    env=os.environ.copy(),
+                    capture_stderr=False,
+                )
+                task_coro = self.ctrl.run(new_connection_callback)
+

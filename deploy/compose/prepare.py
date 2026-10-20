@@ -54,7 +54,13 @@ def download_verified(asset: dict, *, opener=None) -> bytes:
     return raw
 
 
-def extract_tree(raw: bytes, destination: Path, *, prefix: str = "") -> int:
+def extract_tree(
+    raw: bytes,
+    destination: Path,
+    *,
+    prefix: str = "",
+    document_links: dict[str, str] | None = None,
+) -> int:
     """Preflight a verified ZIP before extracting regular files to a new tree."""
     if destination.exists():
         raise ValueError("Source destination already exists; refusing to overwrite")
@@ -76,9 +82,38 @@ def extract_tree(raw: bytes, destination: Path, *, prefix: str = "") -> int:
                 path.is_absolute()
                 or any(part in {"", ".", ".."} for part in relative.split("/"))
                 or any(char in relative for char in "\\:\x00")
-                or stat.S_ISLNK(member.external_attr >> 16)
             ):
                 raise ValueError("Unsafe entry in public source archive")
+            if stat.S_ISLNK(member.external_attr >> 16):
+                target = (document_links or {}).get(relative)
+                if (
+                    not isinstance(target, str)
+                    or not target
+                    or PurePosixPath(target).is_absolute()
+                    or any(
+                        part in {"", ".", "..", ".git"} for part in target.split("/")
+                    )
+                    or any(char in target for char in "\\:\x00")
+                    or member.file_size > 4096
+                    or archive.read(member) != target.encode("utf-8")
+                ):
+                    raise ValueError("Unsafe entry in public source archive")
+                try:
+                    target_member = archive.getinfo(prefix + target)
+                except KeyError:
+                    raise ValueError("Pinned document link target is missing") from None
+                if (
+                    target_member.is_dir()
+                    or stat.S_IFMT(target_member.external_attr >> 16)
+                    not in {0, stat.S_IFREG}
+                    or ".git" in path.parts
+                ):
+                    raise ValueError(
+                        "Pinned document link must reference a regular file"
+                    )
+                # Materialize the explicitly pinned alias as a normal file. Its
+                # own path is preserved; no filesystem symlink is ever created.
+                member = target_member
             if ".git" in path.parts or member.is_dir():
                 continue
             if relative in names:
@@ -122,7 +157,14 @@ def prepare_sources(root: Path):
                 target.write_bytes(archive.read(path))
     sdk = lock["plugin_sdk_source"]
     sdk_source = root / "upstream/langbot-plugin-sdk"
-    extract_tree(download_verified(sdk), sdk_source, prefix=sdk["prefix"])
+    extract_tree(
+        download_verified(sdk),
+        sdk_source,
+        prefix=sdk["prefix"],
+        # Upstream v0.7.11 contains this documentation alias. Its bytes and
+        # target are checked above; all unlisted archive links remain rejected.
+        document_links={"CLAUDE.md": "AGENTS.md"},
+    )
     for required in (
         "LICENSE",
         "README.md",

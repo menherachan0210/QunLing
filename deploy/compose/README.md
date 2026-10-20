@@ -24,7 +24,9 @@ ssh -N \
 
 ## 构建内容
 
-镜像从固定 SHA-256 的 LangBot 4.11.0 完整发布包开始，包含已编译前端。依赖依据上游 `uv.lock` 安装，SDK 固定为 0.7.11；构建会调用项目补丁安装器，核对全部 12 项清单，在 Linux 应用其中 11 项并跳过 Windows 专用补丁。不匹配时直接停止构建。
+镜像从固定 SHA-256 的 LangBot 4.11.0 完整发布包开始，包含已编译前端。依赖依据上游 `uv.lock` 安装，SDK 固定为 0.7.11；构建会调用项目补丁安装器，核对全部 14 项清单，在 Linux 应用其中 13 项并跳过 Windows 专用补丁。不匹配时直接停止构建。
+
+应用容器设置 `LANGBOT_PLUGIN_RUNTIME_TRANSPORT=stdio`，由 Host 在同一容器中启动并管理 Plugin Runtime；无需单独的 `langbot_plugin_runtime` 服务。对应 Host 补丁只覆盖 Docker 的默认连接方式，不改变全局平台识别；未设置该变量时保留上游行为，显式 `--standalone-runtime` 仍优先连接外部 Runtime。
 
 镜像准备以下七个插件包，供引导导入：
 
@@ -58,7 +60,7 @@ Compose 使用五个命名卷：
 | `napcat-config` | NapCat WebUI 与 OneBot 配置 |
 | `napcat-plugins` | NapCat 插件数据 |
 
-初始化服务只准备缺失状态，不重置已有配置。应用启动不会重新套补丁或重新构建插件；这些操作在镜像构建时完成。普通重启：
+初始化服务只准备缺失状态，不重置已有配置。应用启动不会重新套补丁或重新构建插件；这些操作在镜像构建时完成。向导通过受工作区权限保护的只读接口 `/api/v1/plugins/_/installations` 核对数据库中的包摘要；相同包即使正在恢复、尚未出现在运行列表中，也只等待就绪，不重复安装。该接口不返回插件配置或密钥，补丁来源与许可见 [SOURCE_LOCATIONS.md](SOURCE_LOCATIONS.md)。普通重启：
 
 ```bash
 docker compose -f deploy/compose/compose.yaml restart
@@ -77,4 +79,4 @@ docker compose -f deploy/compose/compose.yaml logs --tail=100 app wizard napcat
 
 此目录的脚本与 Compose 约束有离线测试。GitHub Actions 的 `Linux image and fresh initialization` 作业会真实构建镜像，在全新命名卷上安装七个插件，再通过设置页接口提交纯虚构的模型名和密钥，AI 地址固定为不提供服务的 `http://127.0.0.1:1/v1`。检查覆盖提供方、聊天与视觉模型、本地记忆库、流水线、QQ Bot、两个文件事件处理器和插件参数关联；重启后比较凭据摘要、插件摘要与资源 UUID，确认不重复创建。NapCat 管理接口需可访问并保持未登录。检查不调用模型、不登录 QQ，也不发送消息。
 
-当前开发主机未安装 Docker。新增 CI 作业需要在 GitHub 上实际运行，只有作业通过才代表容器初始化检查已通过；部署后仍需完成首次引导并检查 QQ 连通性。
+此部署流程已在 Linux 服务器实际完成镜像构建、全新数据卷初始化、七个插件安装、AI 配置与 QQ 连接验证；聊天、识图和本地记忆嵌入也已实测。GitHub Actions 仍以对应提交的作业结果为准。每个新部署仍需完成首次引导，并验证自己的 QQ 连接和 AI 服务所支持的功能。

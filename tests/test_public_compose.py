@@ -73,6 +73,7 @@ def test_compose_has_only_loopback_admin_ports_and_no_runtime_exposure():
         assert service["platform"] == "linux/amd64"
     assert services["app"]["command"] == ["app"]
     assert services["app"]["environment"]["BOX__ENABLED"] == "false"
+    assert services["app"]["environment"]["LANGBOT_PLUGIN_RUNTIME_TRANSPORT"] == "stdio"
     assert services["app"]["volumes"] == ["langbot-data:/opt/qq-ai-bot/langbot/data"]
     assert services["wizard"]["environment"]["QQBOT_LANGBOT_URL"] == "http://app:5300"
     assert services["wizard"]["environment"]["QQBOT_NAPCAT_URL"] == "http://napcat:6099"
@@ -182,6 +183,88 @@ def test_archive_symlinks_and_duplicate_names_are_rejected(tmp_path):
         prepare.extract_tree(raw, tmp_path / "duplicate-source")
 
 
+def source_link(name):
+    entry = zipfile.ZipInfo(name)
+    entry.create_system = 3
+    entry.external_attr = (stat.S_IFLNK | 0o777) << 16
+    return entry
+
+
+def test_pinned_sdk_document_alias_is_materialized_as_an_ordinary_file(tmp_path):
+    raw = make_zip(
+        [
+            ("sdk/AGENTS.md", b"Upstream documentation\n"),
+            (source_link("sdk/CLAUDE.md"), b"AGENTS.md"),
+        ]
+    )
+    destination = tmp_path / "sdk"
+    assert (
+        prepare.extract_tree(
+            raw,
+            destination,
+            prefix="sdk/",
+            document_links={"CLAUDE.md": "AGENTS.md"},
+        )
+        == 2
+    )
+    assert (destination / "CLAUDE.md").read_bytes() == (
+        destination / "AGENTS.md"
+    ).read_bytes()
+    assert not (destination / "CLAUDE.md").is_symlink()
+    assert stat.S_ISREG((destination / "CLAUDE.md").stat().st_mode)
+
+
+@pytest.mark.parametrize(
+    "link_target, mapping, target_name, target_kind",
+    [
+        (b"../outside", {"CLAUDE.md": "AGENTS.md"}, "AGENTS.md", "file"),
+        (b"../outside", {"CLAUDE.md": "../outside"}, "../outside", "file"),
+        (b"/absolute", {"CLAUDE.md": "/absolute"}, "/absolute", "file"),
+        (b"OTHER.md", {"CLAUDE.md": "AGENTS.md"}, "AGENTS.md", "file"),
+        (b"AGENTS.md", {"CLAUDE.md": "AGENTS.md"}, "AGENTS.md", "link"),
+        (b"AGENTS.md", {"CLAUDE.md": "AGENTS.md"}, "missing", "file"),
+        (b"AGENTS.md", {}, "AGENTS.md", "file"),
+    ],
+)
+def test_document_alias_policy_rejects_escape_changed_or_indirect_targets_before_write(
+    tmp_path, link_target, mapping, target_name, target_kind
+):
+    target = (
+        source_link("sdk/" + target_name)
+        if target_kind == "link"
+        else "sdk/" + target_name
+    )
+    raw = make_zip(
+        [
+            (source_link("sdk/CLAUDE.md"), link_target),
+            (target, b"target contents"),
+        ]
+    )
+    destination = tmp_path / "sdk"
+    with pytest.raises(ValueError):
+        prepare.extract_tree(raw, destination, prefix="sdk/", document_links=mapping)
+    assert not destination.exists()
+
+
+def test_pinned_document_allowance_does_not_allow_another_archive_link(tmp_path):
+    raw = make_zip(
+        [
+            ("sdk/AGENTS.md", b"upstream"),
+            (source_link("sdk/CLAUDE.md"), b"AGENTS.md"),
+            (source_link("sdk/other.md"), b"AGENTS.md"),
+        ]
+    )
+    destination = tmp_path / "sdk"
+    with pytest.raises(ValueError, match="Unsafe"):
+        prepare.extract_tree(
+            raw,
+            destination,
+            prefix="sdk/",
+            document_links={"CLAUDE.md": "AGENTS.md"},
+        )
+    assert not destination.exists()
+
+
 def test_public_source_extraction_only_selects_pinned_subtree(tmp_path):
     raw = make_zip(
         [
@@ -228,6 +311,8 @@ def test_prepared_image_retains_complete_runtime_source_and_upstream_licenses(
                 (sdk_prefix + "LICENSE", b"SDK license"),
                 (sdk_prefix + "README.md", b"License scopes"),
                 (sdk_prefix + "pyproject.toml", b"[project]\nversion='0.7.11'\n"),
+                (sdk_prefix + "AGENTS.md", b"Upstream source documentation"),
+                (source_link(sdk_prefix + "CLAUDE.md"), b"AGENTS.md"),
                 (sdk_prefix + "src/langbot_plugin/runtime/LICENSE", b"Runtime license"),
                 (
                     sdk_prefix + "src/langbot_plugin/runtime/main.py",
@@ -255,6 +340,8 @@ def test_prepared_image_retains_complete_runtime_source_and_upstream_licenses(
         sdk / "src/langbot_plugin/runtime/LICENSE"
     ).read_bytes() == b"Runtime license"
     assert (sdk / "LICENSE").read_bytes() == b"SDK license"
+    assert (sdk / "CLAUDE.md").read_bytes() == (sdk / "AGENTS.md").read_bytes()
+    assert not (sdk / "CLAUDE.md").is_symlink()
     assert (root / "custom-plugins/LocalAgent/UPSTREAM_LICENSE").is_file()
     assert len(downloaded) == 3 and set(downloaded) == set(archives)
 
@@ -406,7 +493,46 @@ def test_real_init_and_access_commands_agree_with_bootstrap_and_preserve_state(
 @pytest.mark.parametrize(
     "role,status,body,healthy",
     [
-        ("app", 200, b'{"code":0,"msg":"ok","resources":{}}', True),
+        (
+            "app",
+            200,
+            b'{"code":0,"msg":"ok","resources":{"runtimes":{"plugin_runtime_connected":true}}}',
+            True,
+        ),
+        (
+            "app",
+            200,
+            b'{"code":0,"msg":"ok","resources":{"runtimes":{"plugin_runtime_connected":false}}}',
+            False,
+        ),
+        (
+            "app",
+            200,
+            b'{"code":0,"msg":"ok","resources":{"runtimes":{"plugin_runtime_connected":null}}}',
+            False,
+        ),
+        (
+            "app",
+            200,
+            b'{"code":0,"msg":"ok","resources":{"runtimes":{"plugin_runtime_connected":1}}}',
+            False,
+        ),
+        ("app", 200, b'{"code":0,"msg":"ok","resources":{}}', False),
+        ("app", 200, b'{"code":0,"msg":"ok"}', False),
+        ("app", 200, b'{"code":0,"msg":"ok","resources":null}', False),
+        ("app", 200, b'{"code":0,"msg":"ok","resources":[]}', False),
+        (
+            "app",
+            200,
+            b'{"code":0,"msg":"ok","resources":{"runtimes":null}}',
+            False,
+        ),
+        (
+            "app",
+            200,
+            b'{"code":0,"msg":"ok","resources":{"runtimes":[]}}',
+            False,
+        ),
         ("wizard", 200, b'{"status":"ok"}', True),
         ("app", 200, b'{"status":"ok"}', False),
         ("wizard", 200, b'{"code":0,"msg":"ok"}', False),

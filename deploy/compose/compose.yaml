@@ -32,6 +32,7 @@ services:
       API__HOST: 0.0.0.0
       API__PORT: "5300"
       BOX__ENABLED: "false"
+      LANGBOT_PLUGIN_RUNTIME_TRANSPORT: stdio
       ANONYMIZED_TELEMETRY: "False"
     ports:
       - "127.0.0.1:5300:5300"

@@ -23,6 +23,8 @@ import tomllib
 BASE_DIR = Path(__file__).resolve().parent
 SDK_PREFIX = ".venv/Lib/site-packages/"
 PATCHES = (
+    ("host-managed-runtime-transport.patch", "host", False),
+    ("host-persisted-plugin-installations.patch", "host", False),
     ("onebot-group-trigger.patch", "host", False),
     ("chroma-delete-count.patch", "host", False),
     ("onebot-image-vision.patch", "host", False),
@@ -277,7 +279,9 @@ def main(argv: list[str] | None = None) -> int:
             python = args.python or langbot / ".venv" / (
                 "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
             )
-            info = inspect_python(python.resolve())
+            # A POSIX venv executable is normally a symlink to the base Python.
+            # Keep its entry path so Python finds the venv's pyvenv.cfg/site-packages.
+            info = inspect_python(python.absolute())
             print(
                 f"SDK target: {info['purelib']} (langbot-plugin {info['sdk_version']})"
             )

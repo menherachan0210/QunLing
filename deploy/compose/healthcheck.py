@@ -1,4 +1,4 @@
-"""Local HTTP liveness checks that need no administrative credentials."""
+"""Local readiness checks that need no administrative credentials."""
 
 from __future__ import annotations
 
@@ -20,7 +20,14 @@ def check(role: str) -> bool:
                 return False
             if role == "wizard":
                 return body.get("status") == "ok"
-            return body.get("code") == 0 and body.get("msg") == "ok"
+            resources = body.get("resources")
+            runtimes = resources.get("runtimes") if isinstance(resources, dict) else None
+            return (
+                body.get("code") == 0
+                and body.get("msg") == "ok"
+                and isinstance(runtimes, dict)
+                and runtimes.get("plugin_runtime_connected") is True
+            )
     except (HTTPError, OSError, ValueError, TypeError):
         return False
 

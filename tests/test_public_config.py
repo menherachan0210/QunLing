@@ -47,9 +47,26 @@ class FakeLangBot:
         self.counter = 0
         self.memory_records = ["synthetic-memory-that-must-survive"]
         self.mask_secrets = False
+        self.installations = []
+        self.plugins = [
+            {
+                "manifest": {"manifest": {"metadata": {
+                    "author": identity.split("/")[0], "name": identity.split("/")[1],
+                }}},
+                "status": "initialized",
+                "enabled": True,
+            }
+            for identity in sorted(setup.PLUGINS)
+        ]
 
     def call(self, method, path, data=None):
         self.calls.append((method, path, deepcopy(data)))
+        if path == "/api/v1/plugins/_/installations":
+            assert method == "GET"
+            return {"installations": deepcopy(self.installations)}
+        if path == "/api/v1/plugins":
+            assert method == "GET"
+            return {"plugins": deepcopy(self.plugins)}
         if path.startswith("/api/v1/plugins/") and path.endswith("/config"):
             identity = path[len("/api/v1/plugins/") : -len("/config")]
             if method == "GET":
@@ -103,6 +120,112 @@ def run_configure(api, config=None, record=None):
 
 def row(api, endpoint, uuid):
     return next(v for v in api.records[endpoint] if v["uuid"] == uuid)
+
+
+class ReadinessClock:
+    def __init__(self):
+        self.now = 0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, delay):
+        self.sleeps.append(delay)
+        self.now += delay
+
+
+def test_plugin_readiness_requires_all_seven_in_the_same_snapshot():
+    api = FakeLangBot()
+    ready = deepcopy(api.plugins)
+    missing = ready.pop()
+    api.plugins = ready
+    api.plugins[0]["status"] = "starting"
+    clock = ReadinessClock()
+
+    def advance(delay):
+        clock.sleep(delay)
+        if len(clock.sleeps) == 1:
+            # One recovers while another temporarily disappears during restart.
+            api.plugins[0]["status"] = "initialized"
+            api.plugins.append(missing)
+            api.plugins[1]["status"] = "mounted"
+        else:
+            api.plugins[1]["status"] = "initialized"
+
+    setup.wait_for_plugins_initialized(api, sleep=advance, clock=clock.monotonic)
+    assert clock.sleeps == [2, 2]
+    assert api.calls == [("GET", "/api/v1/plugins", None)] * 3
+
+
+@pytest.mark.parametrize("change", [{"status": "failed"}, {"enabled": False}])
+def test_plugin_readiness_fails_early_without_exposing_runtime_details(change):
+    api = FakeLangBot()
+    api.plugins[0].update(change, error_message="synthetic-private-runtime-details")
+    clock = ReadinessClock()
+    with pytest.raises(SetupError, match="插件启动失败") as error:
+        setup.wait_for_plugins_initialized(api, sleep=clock.sleep, clock=clock.monotonic)
+    assert "synthetic-private-runtime-details" not in str(error.value)
+    assert clock.sleeps == []
+    assert api.calls == [("GET", "/api/v1/plugins", None)]
+
+
+def test_configure_waits_after_put_before_creating_processors(monkeypatch):
+    api = FakeLangBot()
+    clock = ReadinessClock()
+    waiter = setup.wait_for_plugins_initialized
+    api.plugins[0]["status"] = "starting"
+
+    def advance(delay):
+        assert not api.records["/api/v1/agents"]
+        assert not api.records["/api/v1/platform/bots"]
+        puts = [call for call in api.calls if call[0] == "PUT" and "/plugins/" in call[1]]
+        assert len(puts) == 4
+        clock.sleep(delay)
+        api.plugins[0]["status"] = "initialized"
+
+    monkeypatch.setattr(
+        setup, "wait_for_plugins_initialized",
+        lambda api: waiter(api, sleep=advance, clock=clock.monotonic),
+    )
+    result = run_configure(api)
+    assert result["configured"]
+    assert clock.sleeps == [2]
+    polls = [i for i, call in enumerate(api.calls) if call[1] == "/api/v1/plugins"]
+    assert all(call[0] == "GET" for call in api.calls[polls[0]:polls[-1] + 1])
+    assert len(api.records["/api/v1/agents"]) == 2
+
+
+def test_readiness_timeout_preserves_progress_and_retry_does_not_rewrite_plugins(monkeypatch):
+    api = FakeLangBot()
+    api.plugins = []
+    clock = ReadinessClock()
+    waiter = setup.wait_for_plugins_initialized
+    monkeypatch.setattr(
+        setup, "wait_for_plugins_initialized",
+        lambda api: waiter(api, timeout=3, sleep=clock.sleep, clock=clock.monotonic),
+    )
+    saved = []
+    with pytest.raises(SetupError, match="等待插件启动超时"):
+        setup.configure(
+            api, settings(), {}, saved.append,
+            "synthetic-token", "http://langbot:5300", "/opt/tools/7zz",
+        )
+    assert clock.sleeps == [2, 1]
+    assert saved[-1]["memory_uuid"] and saved[-1]["pipeline_uuid"]
+    assert not saved[-1].get("configured")
+    assert not api.records["/api/v1/agents"]
+    assert not api.records["/api/v1/platform/bots"]
+    polls = [i for i, call in enumerate(api.calls) if call[1] == "/api/v1/plugins"]
+    assert len(polls) == 3
+    assert all(call[0] == "GET" for call in api.calls[polls[0]:])
+    memory_id = saved[-1]["memory_uuid"]
+    api.plugins = FakeLangBot().plugins
+    api.calls.clear()
+    result = run_configure(api, record=saved[-1])
+    assert result["configured"] and result["memory_uuid"] == memory_id
+    assert len(api.records["/api/v1/knowledge/bases"]) == 1
+    assert not any(call[0] == "PUT" and "/plugins/" in call[1] for call in api.calls)
 
 
 def test_empty_install_configures_distinct_model_roles_memory_processors_and_bot():
@@ -354,38 +477,259 @@ def package_release(tmp_path):
     return packages
 
 
+def persistent_installation(item, *, enabled=True):
+    author, name = item["identity"].split("/")
+    return {
+        "plugin_author": author,
+        "plugin_name": name,
+        "artifact_digest": item["sha256"],
+        "enabled": enabled,
+        "installation_uuid": "synthetic-installation-" + name,
+        "runtime_revision": 1,
+    }
+
+
+class PackageInstaller(FakeLangBot):
+    def __init__(self, packages):
+        super().__init__()
+        self.packages = packages
+        self.plugins = []
+        self.installed = []
+
+    def call(self, method, path, data=None):
+        if path.startswith("/api/v1/system/tasks/"):
+            self.calls.append((method, path, deepcopy(data)))
+            assert method == "GET"
+            return {"runtime": {"state": "FINISHED", "exception": None}}
+        return super().call(method, path, data)
+
+    def install(self, path):
+        item = next(p for p in self.packages if p["filename"] == path.name)
+        author, name = item["identity"].split("/")
+        self.installed.append(item["identity"])
+        self.plugins = [
+            p for p in self.plugins if setup.plugin_identity(p) != item["identity"]
+        ]
+        self.plugins.append({
+            "manifest": {"manifest": {"metadata": {"author": author, "name": name}}},
+            "status": "initialized",
+            "install_info": {"_certification": {"artifact_digest": item["sha256"]}},
+        })
+        self.installations = [
+            record for record in self.installations
+            if (record["plugin_author"], record["plugin_name"]) != (author, name)
+        ]
+        self.installations.append(persistent_installation(item))
+        return len(self.installed)
+
+
 def test_install_seven_packages_localagent_first_and_skip_matching_initialized(tmp_path):
     packages = package_release(tmp_path)
-
-    class Installer:
-        def __init__(self):
-            self.plugins = []
-            self.installed = []
-
-        def call(self, method, path, data=None):
-            assert method == "GET"
-            if path == "/api/v1/plugins":
-                return {"plugins": deepcopy(self.plugins)}
-            assert path.startswith("/api/v1/system/tasks/")
-            return {"runtime": {"state": "FINISHED", "exception": None}}
-
-        def install(self, path):
-            item = next(p for p in packages if p["filename"] == path.name)
-            author, name = item["identity"].split("/")
-            self.installed.append(item["identity"])
-            self.plugins.append({
-                "manifest": {"manifest": {"metadata": {"author": author, "name": name}}},
-                "status": "initialized",
-                "install_info": {"_certification": {"artifact_digest": item["sha256"]}},
-            })
-            return len(self.installed)
-
-    api = Installer()
+    api = PackageInstaller(packages)
     setup.ensure_plugins(api, tmp_path, sleep=lambda _: None)
     assert api.installed[0] == "langbot-team/LocalAgent"
     assert set(api.installed) == setup.PLUGINS and len(api.installed) == 7
     setup.ensure_plugins(api, tmp_path, sleep=lambda _: None)
     assert len(api.installed) == 7
+
+
+def restarting_installer(packages):
+    api = FakeLangBot()
+    api.installations = [persistent_installation(item) for item in packages]
+    by_identity = {item["identity"]: item for item in packages}
+    for plugin in api.plugins:
+        item = by_identity[setup.plugin_identity(plugin)]
+        plugin.update({
+            "status": "starting",
+            "install_info": {"_certification": {"artifact_digest": item["sha256"]}},
+        })
+    api.install = lambda path: pytest.fail("Matching packages must never be reinstalled")
+    return api
+
+
+def test_restart_waits_for_matching_package_instead_of_reinstalling(tmp_path):
+    api = restarting_installer(package_release(tmp_path))
+    clock = ReadinessClock()
+
+    def recover(delay):
+        clock.sleep(delay)
+        for plugin in api.plugins:
+            plugin["status"] = "initialized"
+
+    setup.ensure_plugins(api, tmp_path, sleep=recover)
+    assert clock.sleeps == [2]
+    assert all(method == "GET" for method, _, _ in api.calls)
+    assert api.calls[0] == ("GET", "/api/v1/plugins/_/installations", None)
+
+
+@pytest.mark.parametrize("missing", ["all", "langbot-team/AIImagePlugin"])
+def test_persisted_packages_missing_from_runtime_are_waited_for_without_install(
+    tmp_path, missing,
+):
+    api = restarting_installer(package_release(tmp_path))
+    ready = deepcopy(api.plugins)
+    for plugin in ready:
+        plugin["status"] = "initialized"
+    api.plugins = [
+        plugin for plugin in ready
+        if missing != "all" and setup.plugin_identity(plugin) != missing
+    ]
+    clock = ReadinessClock()
+
+    def recover(delay):
+        clock.sleep(delay)
+        api.plugins = deepcopy(ready)
+
+    setup.ensure_plugins(api, tmp_path, sleep=recover)
+    assert clock.sleeps == [2]
+    assert api.calls[0] == ("GET", "/api/v1/plugins/_/installations", None)
+    assert all(method == "GET" for method, _, _ in api.calls)
+
+
+def test_persisted_digest_takes_precedence_over_runtime_package_metadata(tmp_path):
+    api = restarting_installer(package_release(tmp_path))
+    for plugin in api.plugins:
+        plugin["status"] = "initialized"
+        plugin["install_info"]["_certification"]["artifact_digest"] = "f" * 64
+    setup.ensure_plugins(api, tmp_path, sleep=lambda _: pytest.fail("Already ready"))
+    assert all(method == "GET" for method, _, _ in api.calls)
+
+
+@pytest.mark.parametrize("reason", ["missing", "changed"])
+def test_only_missing_or_changed_persisted_package_is_installed(tmp_path, reason):
+    packages = package_release(tmp_path)
+    api = PackageInstaller(packages)
+    setup.ensure_plugins(api, tmp_path, sleep=lambda _: None)
+    api.installed.clear()
+    selected = "langbot-team/AIImagePlugin"
+    if reason == "missing":
+        api.installations = [
+            item for item in api.installations if item["plugin_name"] != "AIImagePlugin"
+        ]
+    else:
+        next(
+            item for item in api.installations if item["plugin_name"] == "AIImagePlugin"
+        )["artifact_digest"] = "0" * 64
+    # Runtime still advertises the release digest. It cannot override the DB.
+    setup.ensure_plugins(api, tmp_path, sleep=lambda _: None)
+    assert api.installed == [selected]
+    setup.ensure_plugins(api, tmp_path, sleep=lambda _: None)
+    assert api.installed == [selected]
+
+
+def test_finished_install_task_still_waits_for_worker_initialization(tmp_path):
+    api = PackageInstaller(package_release(tmp_path))
+    install = api.install
+    sleeps = []
+
+    def starting_install(path):
+        task_id = install(path)
+        api.plugins[-1]["status"] = "starting"
+        return task_id
+
+    def recover(delay):
+        sleeps.append(delay)
+        api.plugins[-1]["status"] = "initialized"
+
+    api.install = starting_install
+    setup.ensure_plugins(api, tmp_path, sleep=recover)
+    assert len(api.installed) == 7
+    assert sleeps == [2] * 7
+
+
+@pytest.mark.parametrize("digest_changed", [False, True])
+def test_disabled_persisted_package_stops_before_any_install(tmp_path, digest_changed):
+    packages = package_release(tmp_path)
+    api = PackageInstaller(packages)
+    # Other packages are absent, so fail before the first potentially valid install.
+    item = next(p for p in packages if p["identity"] == "langbot-team/AIImagePlugin")
+    record = persistent_installation(item, enabled=False)
+    if digest_changed:
+        record["artifact_digest"] = "0" * 64
+    api.installations = [record]
+    with pytest.raises(SetupError, match="插件已禁用"):
+        setup.ensure_plugins(api, tmp_path)
+    assert api.installed == []
+    assert api.calls == [("GET", "/api/v1/plugins/_/installations", None)]
+    assert api.installations == [record]
+
+
+def test_persistent_installation_api_failure_never_falls_back_to_runtime(tmp_path):
+    api = restarting_installer(package_release(tmp_path))
+    calls = []
+
+    def unavailable(method, path, data=None):
+        calls.append((method, path))
+        assert path == "/api/v1/plugins/_/installations"
+        raise SetupError("Persistent API unavailable")
+
+    api.call = unavailable
+    with pytest.raises(SetupError, match="Persistent API unavailable"):
+        setup.ensure_plugins(api, tmp_path)
+    assert calls == [("GET", "/api/v1/plugins/_/installations")]
+
+
+@pytest.mark.parametrize("invalid", ["missing", "null", "duplicate", "digest", "enabled"])
+def test_invalid_persistent_installations_never_authorize_reinstallation(
+    tmp_path, invalid,
+):
+    packages = package_release(tmp_path)
+    api = restarting_installer(packages)
+    records = [persistent_installation(item) for item in packages]
+    response = {"installations": records}
+    if invalid == "missing":
+        response = {}
+    elif invalid == "null":
+        response["installations"] = None
+    elif invalid == "duplicate":
+        records.append(deepcopy(records[0]))
+    elif invalid == "digest":
+        records[0]["artifact_digest"] = None
+    else:
+        records[0]["enabled"] = "false"
+    calls = []
+
+    def malformed(method, path, data=None):
+        calls.append((method, path))
+        assert path == "/api/v1/plugins/_/installations"
+        return response
+
+    api.call = malformed
+    with pytest.raises(SetupError, match="持久插件安装记录格式无效"):
+        setup.ensure_plugins(api, tmp_path)
+    assert calls == [("GET", "/api/v1/plugins/_/installations")]
+
+
+@pytest.mark.parametrize("state", ["failed", "starting"])
+def test_matching_package_failure_or_timeout_never_falls_back_to_install(
+    tmp_path, monkeypatch, state,
+):
+    api = restarting_installer(package_release(tmp_path))
+    for plugin in api.plugins:
+        plugin["status"] = state
+    clock = ReadinessClock()
+    waiter = setup.wait_for_plugins_initialized
+    monkeypatch.setattr(
+        setup, "wait_for_plugins_initialized",
+        lambda api, **kwargs: waiter(
+            api, **{**kwargs, "timeout": 3, "clock": clock.monotonic},
+        ),
+    )
+    with pytest.raises(SetupError, match="启动失败" if state == "failed" else "启动超时"):
+        setup.ensure_plugins(api, tmp_path, sleep=clock.sleep)
+    assert clock.sleeps == ([] if state == "failed" else [2, 1])
+    assert all(method == "GET" for method, _, _ in api.calls)
+    assert api.calls[0] == ("GET", "/api/v1/plugins/_/installations", None)
+
+
+def test_single_plugin_wait_does_not_require_unrelated_plugins_to_be_ready():
+    api = FakeLangBot()
+    selected = api.plugins[0]
+    identity = setup.plugin_identity(selected)
+    for plugin in api.plugins[1:]:
+        plugin["status"] = "starting"
+    setup.wait_for_plugins_initialized(api, identities={identity})
+    assert api.calls == [("GET", "/api/v1/plugins", None)]
 
 
 def test_bad_release_hash_is_rejected_before_any_install(tmp_path):
