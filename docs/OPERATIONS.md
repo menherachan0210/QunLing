@@ -1,10 +1,10 @@
 # 启动、更新与恢复
 
-全新部署按照[首页](../README.md)进行。服务器当前支持 Linux amd64，Windows 使用 Docker Desktop 的 Linux 容器。根目录 `bot.sh` 与 `scripts/Public-Bot.ps1` 操作同一份 Compose，Windows 的三个 `.cmd` 是后者的快捷入口。
+全新部署按照[首页](../README.md)进行，Windows 从环境安装到排障的完整步骤见 [Windows 本机教程](WINDOWS.md)。服务器当前支持 Linux amd64，Windows 使用 Docker Desktop 的 Linux 容器。根目录 `bot.sh` 与 `scripts/Public-Bot.ps1` 操作同一份 Compose，Windows 的三个 `.cmd` 是后者的快捷入口。
 
 ## 设置入口
 
-在服务器项目目录执行 `bash bot.sh url`，没有 Docker 权限时用 `sudo bash bot.sh url`，即可重新显示带 `#token=` 的完整设置链接，无需重启机器人。Windows 本机容器部署执行 `powershell -File scripts/Public-Bot.ps1 url -OpenBrowser`，或直接双击 `Open-Bot.cmd`。
+在服务器项目目录执行 `bash bot.sh url`，没有 Docker 权限时用 `sudo bash bot.sh url`，即可重新显示带 `#token=` 的完整设置链接，无需重启机器人。Windows 本机容器部署在项目根目录执行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Public-Bot.ps1" -Action url -OpenBrowser`，或直接双击 `Open-Bot.cmd`。
 
 服务器部署默认只开放服务器自身的回环地址。自己的电脑需要保持 SSH 隧道连接；`ssh -N` 只转发端口，不会显示链接或令牌，输入密码后一直等待是正常的。基础设置只需转发 5310，完整的双终端操作步骤见[首页“服务器管理页：获取带令牌的链接”](../README.md#服务器管理页获取带令牌的链接)。需要高级管理页时，可使用以下隧道：
 
@@ -54,7 +54,7 @@ docker compose -f deploy/compose/compose.yaml run --rm --no-deps updater worker 
 
 ## 手动构建与源码开发
 
-普通 `bash bot.sh up` / `Start-Bot.cmd` 会优先恢复已经启用的部署快照；不存在快照时才做首次构建，因此从旧下载目录启动不会自动降级。要应用本地改动，先完成私有备份，再在该目录运行 `bash bot.sh rebuild`；Windows 使用 `powershell -File scripts/Public-Bot.ps1 rebuild`。此操作明确按本地源码构建，若本地目录仍是旧代码就会引入旧版本，操作前确认所用版本。
+普通 `bash bot.sh up` / `Start-Bot.cmd` 会优先恢复已经启用的部署快照；不存在快照时才做首次构建，因此从旧下载目录启动不会自动降级。要应用本地改动，先完成私有备份，再在该目录运行 `bash bot.sh rebuild`；Windows 使用 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Public-Bot.ps1" -Action rebuild`。此操作明确按本地源码构建，若本地目录仍是旧代码就会引入旧版本，操作前确认所用版本。
 
 初次构建和安装插件都需要联网。缺少依赖或插件初始化失败时，向导不会假装完成；查看 `bash bot.sh logs`，恢复网络后重新启动服务。不要在新版源码上直接复用宿主机虚拟环境。
 

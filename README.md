@@ -10,12 +10,32 @@ Windows 与 Linux 使用同一套 Linux amd64 容器。建议预留 **8 GiB 内�
 
 ### Windows：双击启动
 
-1. 安装并启动 [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/)，启用 WSL 2，使用 **Linux 容器**。确认 Docker Desktop 已正常运行。
-2. [下载项目 ZIP](https://github.com/menherachan0210/QunLing/archive/refs/heads/main.zip)，**完整解压**到一个固定目录；不需要安装 Git 或 Python，不要在压缩包窗口中直接运行。
-3. 双击 **`Start-Bot.cmd`**。首次会构建镜像，成功后自动打开设置页；没有自动打开时，双击 **`Open-Bot.cmd`**。
-4. 在设置页填写 AI 服务并扫码登录 QQ，具体步骤见下方“完成设置”。以后用同一目录启动；双击 **`Stop-Bot.cmd`** 可停止服务并保留数据。
+本节用于**让机器人运行在 Windows 本机**。如果只是用 Windows 电脑管理已部署的 Linux 服务器，请直接看下方“服务器管理页”，使用 SSH 隧道访问服务器。
 
-仅支持运行 Linux amd64 容器的环境；Windows ARM 和 Windows 容器模式不在当前部署支持范围内。已有旧版本机 `langbot/.venv`、`napcat/` 环境的目录仍走兼容启动逻辑，不会自动改为容器或迁移历史。
+1. 安装并启动 [Docker Desktop 的 Windows x86_64 版本](https://docs.docker.com/desktop/setup/install/windows-install/)，启用 WSL 2，使用 **Linux 容器**。WSL 安装、虚拟化和 Docker 设置的操作见 [Windows 完整部署教程](docs/WINDOWS.md#1-准备-wsl-2-和-docker-desktop)。
+2. [下载项目 ZIP](https://github.com/menherachan0210/QunLing/archive/refs/heads/main.zip)，**完整解压**到固定目录，例如 `D:\Apps\QunLing`。进入能看到 `Start-Bot.cmd`、`scripts`、`deploy` 的那一层；不需要另装 Git、Python、QQ 客户端或 7-Zip。
+3. 确认 Docker Desktop 的引擎已经运行，再双击 **`Start-Bot.cmd`**。首次需要下载、构建镜像并安装插件，请等启动完成；构建途中不要关闭窗口。
+4. 成功后会自动打开带令牌的设置页；没有自动打开时，双击 **`Open-Bot.cmd`**。本机部署不需要 SSH 隧道。插件就绪后填写 AI 服务并扫码登录 QQ，页面显示“机器人已连接”后即可使用。
+5. 以后先启动 Docker Desktop，再用同一目录的 `Start-Bot.cmd` 启动。`Open-Bot.cmd` 用于重新打开设置页，`Stop-Bot.cmd` 用于停止并保留数据。成功启动后可以关闭命令窗口和网页，Docker Desktop 仍需运行；电脑关机或休眠时，本机机器人无法继续在线。
+
+可以在 **CMD 或 PowerShell** 先检查环境：
+
+```text
+docker compose version
+docker info --format "{{.OSType}}/{{.Architecture}}"
+```
+
+第一条应正常显示 Docker Compose 的版本号，第二条应显示 `linux/x86_64` 或 `linux/amd64`。若报错，先按 [Windows 排障说明](docs/WINDOWS.md#6-常见问题)处理，再启动项目。
+
+需要手动查看专属链接时，在**项目根目录**打开 CMD 或 PowerShell，执行：
+
+```text
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Public-Bot.ps1" -Action url
+```
+
+复制输出的完整 `http://127.0.0.1:5310/#token=...` 链接打开。若页面只显示“设置令牌”，可以重新双击 `Open-Bot.cmd`，或把 `#token=` 后的字符串填入令牌框并点击“连接”；不要填写 AI API Key。
+
+仅支持运行 Linux amd64 容器的环境；Windows ARM 和 Windows 容器模式不在当前部署支持范围内。已有旧版本机 `langbot/.venv`、`napcat/` 环境的目录仍走兼容启动逻辑，不会自动改为容器或迁移历史。完整的首次设置、启停、网页更新、日志与常见错误处理见 **[Windows 完整部署教程](docs/WINDOWS.md)**。
 
 ### Linux：服务器部署
 
@@ -107,9 +127,9 @@ http://127.0.0.1:5310/#token=YOUR_SETUP_TOKEN
 | 启动 | 双击 `Start-Bot.cmd` | `bash bot.sh up` |
 | 打开设置 | 双击 `Open-Bot.cmd` | `bash bot.sh url`，再打开完整链接 |
 | 停止并保留数据 | 双击 `Stop-Bot.cmd` | `bash bot.sh down` |
-| 查看状态 | `powershell -File scripts/Public-Bot.ps1 status` | `bash bot.sh status` |
-| 查看日志 | `powershell -File scripts/Public-Bot.ps1 logs` | `bash bot.sh logs` |
-| 按本地源码重新构建（开发用） | `powershell -File scripts/Public-Bot.ps1 rebuild` | `bash bot.sh rebuild` |
+| 查看状态 | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Public-Bot.ps1" -Action status` | `bash bot.sh status` |
+| 查看日志 | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Public-Bot.ps1" -Action logs` | `bash bot.sh logs` |
+| 按本地源码重新构建（开发用） | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Public-Bot.ps1" -Action rebuild` | `bash bot.sh rebuild` |
 
 **容器部署的更新入口在设置页“版本更新”。** 检查版本后可查看目标提交，点击更新时固定到该 SHA；系统会构建候选镜像、备份并校验五个业务数据卷，再重启并检查服务。失败时尝试恢复备份和旧镜像，结果会显示在页面。ZIP 下载的部署同样可用，无需在本机执行 `git pull`。可更新的版本必须已发布到远端仓库；本机尚未提交或推送的修改不会出现在版本检查中。
 
