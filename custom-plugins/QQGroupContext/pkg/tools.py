@@ -9,6 +9,7 @@ from langbot_plugin.api.proxies.query_based_api import QueryBasedAPIProxy
 
 from pkg.errors import ImageReadError, VisionError
 from pkg.media import load_image
+from qunling.assets import AssetError
 
 
 VISION_SYSTEM = """为当前问题提供有依据的图片分析，使用简体中文。按图片编号指出与问题有关的可见证据，再结合所附发言解释或比较。
@@ -467,15 +468,21 @@ async def execute(tool, action, params, query_id, query_uuid):
         context = tool.plugin.contexts.get(tool.plugin, variables, query_id, query_uuid)
         if str(await api.get_bot_uuid()) != context.bot:
             raise VisionError("机器人与当前群上下文不匹配。")
-        result = await (
-            read_context(tool.plugin, context, params)
-            if action == "context"
-            else read_images(tool.plugin, context, params)
-        )
+        if action == "import_images":
+            from pkg.asset_bridge import import_images
+            result = await import_images(tool.plugin, context, params, api)
+        else:
+            result = await (
+                read_context(tool.plugin, context, params)
+                if action == "context"
+                else read_images(tool.plugin, context, params)
+            )
     except ImageReadError as exc:
         result = exc.result()
     except VisionError as exc:
         result = {"status": "error", "error": str(exc)}
+    except AssetError as exc:
+        result = {"status": "error", "error_code": exc.code, "error": str(exc)}
     except TimeoutError:
         result = {"status": "error", "error": "群聊图片分析超时，未自动重试。"}
     except Exception:

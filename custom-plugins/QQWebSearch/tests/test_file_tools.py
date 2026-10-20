@@ -14,6 +14,8 @@ from pkg import context as state
 from pkg import file_tools, tools
 from pkg.context import QueryContext, QueryStore
 from pkg.errors import WebError
+from qunling.assets import AssetError, AssetStore
+from qunling.scope import Scope
 
 
 def attachment(raw=b"public attachment", name="example.txt"):
@@ -49,6 +51,121 @@ async def test_download_prepares_a_query_scoped_ref_without_sending(monkeypatch)
     assert "data" not in result and "base64" not in result
     assert context.file_delivery == {}
     download.assert_awaited_once_with("https://files.example/example.txt", None)
+    assert result["shared_asset_unavailable"]["code"] == "shared_asset_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_download_registers_shared_asset_with_only_verified_scope(monkeypatch, tmp_path):
+    plugin, context = fixture()
+    item = attachment()
+    scope = Scope("workspace", "bot", "group:trusted", "sender")
+    api = SimpleNamespace(reply=AsyncMock())
+    resolve = AsyncMock(return_value={"scope": scope.as_dict(), "created": 1, "request_key": "first"})
+    monkeypatch.setattr(file_tools, "query_context", resolve)
+    monkeypatch.setattr(file_tools, "download_file", AsyncMock(return_value=item))
+    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path))
+    result = await file_tools.prepare_file(
+        plugin, context, {"url": item["source_url"]}, api=api
+    )
+    assert result["file_ref"] in context.files
+    assert result["asset_ref"].startswith("asset_")
+    resolve.assert_awaited_once_with(plugin, api)
+    store = AssetStore.from_env()
+    assert store.read(scope, result["asset_ref"]) == item["data"]
+    assert store.get(scope, result["asset_ref"])["origin"] == "web"
+    with pytest.raises(AssetError):
+        store.read(Scope("workspace", "bot", "group:other", "sender"), result["asset_ref"])
+    assert "shared_asset_unavailable" not in result
+    api.reply.assert_not_awaited()
+    assert not context.file_delivery
+
+
+@pytest.mark.asyncio
+async def test_missing_shared_scope_keeps_original_sendable_file_without_guessing_identity(monkeypatch):
+    plugin, context = fixture()
+    monkeypatch.setattr(file_tools, "download_file", AsyncMock(return_value=attachment()))
+    monkeypatch.setattr(file_tools, "query_context", AsyncMock(side_effect=AssetError(
+        "scope_unavailable", "synthetic-private-context"
+    )))
+    create = SimpleNamespace(from_env=lambda: pytest.fail("unverified scope must not open store"))
+    monkeypatch.setattr(file_tools, "AssetStore", create)
+    api = SimpleNamespace(reply=AsyncMock())
+    result = await file_tools.prepare_file(
+        plugin, context, {"url": "https://files.example/example.txt"}, api=api
+    )
+    assert "asset_ref" not in result and result["file_ref"] in context.files
+    assert "synthetic-private-context" not in json.dumps(result)
+    assert result["shared_asset_unavailable"]["code"] == "shared_asset_unavailable"
+    assert (await file_tools.send_file(context, api, {"file_ref": result["file_ref"]}))["status"] == "sent"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_sender", ["web", "attachment"])
+@pytest.mark.parametrize("failure", [False, True])
+async def test_shared_and_web_delivery_cannot_repeat_each_other(monkeypatch, tmp_path, first_sender, failure):
+    from qunling.transfers import send_attachment
+    plugin, context = fixture()
+    owner = Scope("workspace", "bot", "group:trusted", "sender")
+    shared = {"scope": owner.as_dict(), "created": 1, "request_key": "first"}
+    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(file_tools, "query_context", AsyncMock(return_value=shared))
+    monkeypatch.setattr(file_tools, "download_file", AsyncMock(return_value=attachment()))
+    api = SimpleNamespace(reply=AsyncMock(side_effect=RuntimeError("private") if failure else None))
+    result = await file_tools.prepare_file(plugin, context, {"url": "https://files.example/a.txt"}, api=api)
+    store = AssetStore.from_env()
+
+    async def web_send():
+        return await file_tools.send_file(context, api, {"file_ref": result["file_ref"]}, plugin=plugin)
+
+    async def attachment_send():
+        return await send_attachment(store, owner, shared, api, result["asset_ref"])
+
+    calls = [web_send, attachment_send] if first_sender == "web" else [attachment_send, web_send]
+    if failure:
+        for call in calls:
+            with pytest.raises((WebError, AssetError)):
+                await call()
+    else:
+        assert (await calls[0]())["status"] == "sent"
+        assert (await calls[1]())["status"] == "sent"
+    assert api.reply.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_duplicate_shared_send_does_not_downgrade_confirmed_receipt(monkeypatch, tmp_path):
+    plugin, context = fixture()
+    owner = Scope("workspace", "bot", "group:trusted", "sender")
+    shared = {"scope": owner.as_dict(), "created": 1, "request_key": "first"}
+    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(file_tools, "query_context", AsyncMock(return_value=shared))
+    monkeypatch.setattr(file_tools, "download_file", AsyncMock(return_value=attachment()))
+    api = SimpleNamespace(reply=AsyncMock())
+    result = await file_tools.prepare_file(plugin, context, {"url": "https://files.example/a.txt"}, api=api)
+    await file_tools.send_file(context, api, {"file_ref": result["file_ref"]}, plugin=plugin)
+    with pytest.raises(WebError, match="重复"):
+        await file_tools.send_file(context, api, {"file_ref": result["file_ref"]}, plugin=plugin)
+    assert context.file_delivery[result["sha256"]] == "sent"
+    assert AssetStore.from_env().delivery(owner, "first", result["asset_ref"]) == "sent"
+    api.reply.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_shared_send_scope_failure_does_not_claim_delivery(monkeypatch, tmp_path):
+    plugin, context = fixture()
+    owner = Scope("workspace", "bot", "group:trusted", "sender")
+    shared = {"scope": owner.as_dict(), "created": 1, "request_key": "first"}
+    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path))
+    resolve = AsyncMock(return_value=shared)
+    monkeypatch.setattr(file_tools, "query_context", resolve)
+    monkeypatch.setattr(file_tools, "download_file", AsyncMock(return_value=attachment()))
+    api = SimpleNamespace(reply=AsyncMock())
+    result = await file_tools.prepare_file(plugin, context, {"url": "https://files.example/a.txt"}, api=api)
+    resolve.side_effect = AssetError("scope_unavailable", "请求上下文暂不可用。")
+    with pytest.raises(WebError):
+        await file_tools.send_file(context, api, {"file_ref": result["file_ref"]}, plugin=plugin)
+    assert not context.file_delivery
+    assert AssetStore.from_env().delivery(owner, "first", result["asset_ref"]) is None
+    api.reply.assert_not_awaited()
 
 
 @pytest.mark.asyncio

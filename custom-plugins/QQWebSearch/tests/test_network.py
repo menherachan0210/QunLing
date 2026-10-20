@@ -9,9 +9,12 @@ from types import SimpleNamespace
 import zlib
 
 import pytest
+from unittest.mock import AsyncMock
 
 from pkg import network
 from pkg.errors import WebError
+from qunling import network as shared_network
+from qunling.net_errors import NetworkError
 
 
 @pytest.mark.parametrize(
@@ -69,6 +72,96 @@ def test_public_http_urls_are_accepted(url):
     assert network.validate_public_url(url) == url
 
 
+def test_shared_transport_preserves_plugin_patch_points_and_error_identity():
+    assert network is shared_network
+    assert WebError is NetworkError
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+async def test_transient_get_failure_retries_once_then_returns_bytes(monkeypatch, status):
+    calls = fake_session(monkeypatch, [Response(status=status), Response(b"recovered")])
+    result = await network.fetch_public("https://example.test/retry")
+    assert result.body == b"recovered"
+    assert calls == ["https://example.test/retry"] * 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,code", [
+    (401, "authentication_required"), (403, "access_denied"), (404, "not_found"),
+    (429, "rate_limited"), (501, "http_server_error"),
+])
+async def test_auth_denied_quota_and_permanent_status_do_not_retry(monkeypatch, status, code):
+    calls = fake_session(monkeypatch, [Response(status=status)])
+    with pytest.raises(WebError) as caught:
+        await network.fetch_public("https://example.test/denied")
+    assert caught.value.code == code and caught.value.retryable is False
+    assert caught.value.attempts == 1 and len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [
+    TimeoutError(), network.aiohttp.ClientConnectionError("synthetic-secret"),
+    network.aiohttp.ClientPayloadError("synthetic-secret"),
+])
+async def test_get_transport_transients_retry_once_with_shared_deadline(monkeypatch, failure):
+    result = network.Fetched("https://example.test/file", b"okay", "text/plain")
+    fetch = AsyncMock(side_effect=[failure, result])
+    monkeypatch.setattr(network, "_fetch", fetch)
+    assert await network.fetch_public(result.url, timeout=2) == result
+    assert fetch.await_count == 2
+    assert all(0 < call.kwargs["timeout"] <= 2 for call in fetch.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_get_exhausts_two_attempts_without_leaking_transport_exception(monkeypatch):
+    fetch = AsyncMock(side_effect=network.aiohttp.ClientConnectionError("private-token"))
+    monkeypatch.setattr(network, "_fetch", fetch)
+    with pytest.raises(WebError) as caught:
+        await network.fetch_public("https://example.test/file", timeout=2)
+    assert fetch.await_count == caught.value.attempts == 2
+    assert caught.value.retryable is False and caught.value.code == "connection_failed"
+    assert caught.value.next_action == "try_other_source"
+    assert "private-token" not in json.dumps(caught.value.result())
+
+
+@pytest.mark.asyncio
+async def test_tls_verification_failure_is_not_retried(monkeypatch):
+    fetch = AsyncMock(side_effect=network.aiohttp.ServerFingerprintMismatch(
+        b"expected", b"actual", "example.test", 443
+    ))
+    monkeypatch.setattr(network, "_fetch", fetch)
+    with pytest.raises(WebError) as caught:
+        await network.fetch_public("https://example.test/file")
+    assert caught.value.code == "tls_error"
+    fetch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_short_deadline_does_not_create_retry_or_outlive_total_budget(monkeypatch):
+    async def slow(*args, **kwargs):
+        await asyncio.sleep(5)
+    fetch = AsyncMock(side_effect=slow)
+    monkeypatch.setattr(network, "_fetch", fetch)
+    start = asyncio.get_running_loop().time()
+    with pytest.raises(WebError) as caught:
+        await network.fetch_public("https://example.test/file", timeout=0.03)
+    assert asyncio.get_running_loop().time() - start < 1
+    assert caught.value.code == "network_timeout"
+    fetch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_document_transport_accepts_40mib_budget_but_file_default_stays_20mib(monkeypatch):
+    fetched = network.Fetched("https://example.test/doc", b"document", "application/pdf")
+    fetch = AsyncMock(return_value=fetched)
+    monkeypatch.setattr(network, "_fetch", fetch)
+    await network.fetch_public_file(fetched.url)
+    assert fetch.await_args.kwargs["max_bytes"] == 20 * 1024 * 1024
+    await network.fetch_public_file(fetched.url, max_bytes=40 * 1024 * 1024)
+    assert fetch.await_args.kwargs["max_bytes"] == 40 * 1024 * 1024
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("addresses", [[], ["127.0.0.1"], ["8.8.8.8", "127.0.0.1"]])
 async def test_dns_rejects_empty_private_or_mixed_answers(monkeypatch, addresses):
@@ -116,6 +209,19 @@ async def test_dns_failure_is_safe(monkeypatch):
         await network.PublicResolver().resolve("private-source.example", 443)
     assert "private-source" not in str(caught.value)
     assert "never-log" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("errno,retryable", [
+    (socket.EAI_AGAIN, True), (socket.EAI_NONAME, False),
+])
+async def test_dns_only_retries_temporary_resolution_failure(monkeypatch, errno, retryable):
+    resolve = AsyncMock(side_effect=socket.gaierror(errno, "private-host-name"))
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", resolve)
+    with pytest.raises(WebError) as caught:
+        await network.PublicResolver().resolve("example.test", 443)
+    assert caught.value.code == "dns_error" and caught.value.retryable is retryable
+    assert "private-host-name" not in str(caught.value)
 
 
 class Response:
@@ -297,7 +403,7 @@ async def test_error_redaction_and_cancellation(monkeypatch, caplog):
     [
         {"max_bytes": 0},
         {"max_bytes": True},
-        {"max_bytes": 6 * 1024 * 1024},
+        {"max_bytes": 41 * 1024 * 1024},
         {"timeout": 0},
         {"timeout": float("nan")},
         {"timeout": float("inf")},
@@ -758,25 +864,28 @@ async def test_attachment_fetch_preserves_final_content_disposition(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_attachment_limit_does_not_raise_existing_image_download_limit(
+async def test_shared_fetch_allows_explicit_large_documents_but_keeps_small_default(
     monkeypatch,
 ):
     raw = b"x" * (5 * 1024 * 1024 + 1)
-    calls = fake_session(monkeypatch, [Response(raw)])
+    calls = fake_session(monkeypatch, [Response(raw), Response(raw), Response(raw)])
     result = await network.fetch_public_file("https://example.test/package.bin")
     assert result.body == raw
-    with pytest.raises(WebError, match="大小限制"):
+    assert (await network.fetch_public(
+        "https://example.test/package.bin", max_bytes=len(raw)
+    )).body == raw
+    with pytest.raises(WebError, match="大小"):
         await network.fetch_public(
-            "https://example.test/package.bin", max_bytes=len(raw)
+            "https://example.test/package.bin"
         )
-    assert calls == ["https://example.test/package.bin"]
+    assert calls == ["https://example.test/package.bin"] * 3
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"max_bytes": 20 * 1024 * 1024 + 1},
+        {"max_bytes": 40 * 1024 * 1024 + 1},
         {"max_bytes": 0},
         {"max_bytes": True},
         {"timeout": 61},

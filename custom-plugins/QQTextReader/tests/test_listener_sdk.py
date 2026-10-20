@@ -8,6 +8,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from langbot_plugin.api.entities import events
@@ -21,6 +22,10 @@ from langbot_plugin.api.entities.builtin.platform.events import (
 from langbot_plugin.api.entities.builtin.provider.message import Message
 from langbot_plugin.api.entities.builtin.provider.session import LauncherTypes
 from langbot_plugin.entities.io.context import InstallationBinding
+from qunling.assets import AssetStore
+from qunling.inbox import Inbox
+from qunling.integration import CONTEXT_KEY
+from qunling.scope import Scope
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +37,9 @@ PRIVATE_INLINE = (
 
 @pytest.fixture
 def env(monkeypatch):
+    # These existing assertions describe the legacy fallback contract. A global
+    # production data directory must not silently switch their code path.
+    monkeypatch.delenv("QUNLING_DATA_DIR", raising=False)
     for name, path in (
         ("pkg.reader", "pkg/reader.py"),
         ("pkg.text_context", "pkg/text_context.py"),
@@ -48,6 +56,9 @@ def env(monkeypatch):
     class FakeHostProxy:
         def __init__(self, *, query_id, query_uuid, plugin_runtime_handler):
             assert (query_id, query_uuid) == (42, "private-query-id")
+            # They are real SDK attributes, not Host calls or I/O capabilities.
+            self.query_id = query_id
+            self.query_uuid = query_uuid
 
         async def get_bot_uuid(self):
             state.calls.append("get_bot_uuid")
@@ -83,6 +94,24 @@ def env(monkeypatch):
         get_installation_binding=lambda: binding,
     )
     return SimpleNamespace(module=module, cache=cache, listener=listener, state=state)
+
+
+@pytest.fixture
+def shared_env(env, monkeypatch, tmp_path):
+    from qunling import network, transfers
+
+    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path / "shared-files"))
+    forbidden = AsyncMock(side_effect=lambda *args, **kwargs: pytest.fail(
+        "Capturing attachment metadata and injecting a prompt must not download or send."
+    ))
+    monkeypatch.setattr(network, "fetch_public", forbidden)
+    monkeypatch.setattr(network, "fetch_public_file", forbidden)
+    monkeypatch.setattr(transfers, "fetch_public_file", forbidden)
+    env.listener.plugin.call_platform_api = forbidden
+    env.listener.plugin.send_message = forbidden
+    env.forbidden_io = forbidden
+    env.store = AssetStore.from_env()
+    return env
 
 
 def private_file(**changes):
@@ -302,3 +331,76 @@ async def test_host_error_cannot_expose_exception_or_assert_a_file_is_available(
     await env.listener.inject_prompt(ctx)
     assert "不可用" in ctx.event.default_prompt[-1].content
     assert_private(env, ctx.event.default_prompt)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("group", [False, True])
+@pytest.mark.parametrize("quoted", [False, True])
+@pytest.mark.parametrize("inline", [False, True])
+async def test_shared_sdk_capture_and_prompt_use_trusted_context_without_io(shared_env, group, quoted, inline):
+    env = shared_env
+    original = private_file(base64=PRIVATE_INLINE if inline else "")
+    component = message.Quote(origin=message.MessageChain([original])) if quoted else original
+    await capture(env, [component], group=group)
+    descriptor = env.state.variables[CONTEXT_KEY]
+    owner = Scope(**descriptor["scope"])
+    assert descriptor["query_uuid"] == "private-query-id"
+    assert owner.bot_id == "private-bot-id"
+    assert owner.conversation_id == ("group:private-chat-id" if group else "person:private-chat-id")
+    assert owner.actor_id == "private-sender-id"
+    assert len(descriptor["inbox_refs"]) == 1 and not descriptor["unresolved_quote"]
+    selected = Inbox(env.store).get(owner, descriptor["inbox_refs"][0])
+    assert selected["name"] == original.name
+    if inline:
+        assert env.store.read(owner, selected["asset_ref"]) == PRIVATE_TEXT.encode()
+        env.store.require_visible(owner, selected["asset_ref"], descriptor)
+    else:
+        assert selected["asset_ref"] is None
+        assert selected["url"] == original.url
+
+    ctx = prompt_context()
+    persona = ctx.event.default_prompt[0].model_dump()
+    history = [item.model_dump() for item in ctx.event.prompt]
+    await env.listener.inject_prompt(ctx)
+    guidance = ctx.event.default_prompt[-1].content
+    assert "file_workspace" in guidance and "本轮到达前可用附件 1 个" in guidance
+    assert "current=true" in guidance and "send_attachment" in guidance
+    assert "该状态不是阅读请求" in guidance
+    assert ctx.event.default_prompt[0].model_dump() == persona
+    assert [item.model_dump() for item in ctx.event.prompt] == history
+    assert_private(env, ctx.event.default_prompt)
+    before = [item.model_dump() for item in ctx.event.default_prompt]
+    await env.listener.inject_prompt(ctx)
+    assert [item.model_dump() for item in ctx.event.default_prompt] == before
+    env.forbidden_io.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shared_unresolved_quote_reports_obstacle_without_selecting_old_file(shared_env):
+    env = shared_env
+    await capture(env, [private_file()])
+    await capture(env, [message.Quote(origin=message.MessageChain([]))])
+    descriptor = env.state.variables[CONTEXT_KEY]
+    assert not descriptor["inbox_refs"] and descriptor["unresolved_quote"]
+    ctx = prompt_context()
+    await env.listener.inject_prompt(ctx)
+    guidance = ctx.event.default_prompt[-1].content
+    assert "file_workspace" in guidance
+    assert "不能擅自用其他历史文件替代" in guidance
+    assert "current=true" not in guidance
+    assert_private(env, ctx.event.default_prompt)
+    env.forbidden_io.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shared_context_with_wrong_query_falls_back_without_listing_assets(shared_env):
+    env = shared_env
+    await capture(env, [private_file()])
+    env.state.variables[CONTEXT_KEY]["query_uuid"] = "private-unrelated-query"
+    ctx = prompt_context()
+    await env.listener.inject_prompt(ctx)
+    guidance = ctx.event.default_prompt[-1].content
+    assert "file_workspace" not in guidance
+    assert "read_text_attachment({})" in guidance
+    assert_private(env, ctx.event.default_prompt)
+    env.forbidden_io.assert_not_awaited()

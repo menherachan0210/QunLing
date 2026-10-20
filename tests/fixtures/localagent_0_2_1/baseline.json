@@ -1,0 +1,8 @@
+{
+  "version": "0.2.1",
+  "upstream_commit": "3016b5c763bb3f3c7df942d470df08b8ba643f5d",
+  "sha256": {
+    "pkg/agent_core/langbot.py": "dc16818ac81dacf37dd6ee799dec4fcd8235ffab4602ede30d29633e78626fc0",
+    "pkg/run_assembly.py": "ab08c6a18a108cfc6048f158b09ad874577451072dce0bbaa3aa9d15c33a3afe"
+  }
+}

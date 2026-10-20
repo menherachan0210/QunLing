@@ -1,0 +1,16 @@
+diff --git a/.venv/Lib/site-packages/langbot_plugin/api/entities/builtin/runner/resources.py b/.venv/Lib/site-packages/langbot_plugin/api/entities/builtin/runner/resources.py
+--- a/.venv/Lib/site-packages/langbot_plugin/api/entities/builtin/runner/resources.py
++++ b/.venv/Lib/site-packages/langbot_plugin/api/entities/builtin/runner/resources.py
+@@ -30,6 +30,12 @@
+ 
+     tool_name: str
+     """Tool name."""
++
++    source: str | None = None
++    """Host-resolved source kind; never inferred from tool result content."""
++
++    source_id: str | None = None
++    """Host-bound provider identity used to validate trusted task hints."""
+ 
+     tool_type: str | None = None
+     """Tool type, including ``platform`` for Host-authorized platform actions."""

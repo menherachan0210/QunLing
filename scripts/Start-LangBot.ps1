@@ -35,8 +35,12 @@ try {
     $env:PYTHONUTF8 = '1'
     $env:PYTHONIOENCODING = 'utf-8'
     $env:ANONYMIZED_TELEMETRY = 'False'
+    if (-not $env:QUNLING_DATA_DIR) { $env:QUNLING_DATA_DIR = Join-Path $taskApp 'data\qunling' }
     $env:PATH = (Join-Path $taskApp '.venv\Scripts') + ';' + (Join-Path $taskRoot '.tools\Scripts') + ';' + $env:PATH
-    $taskProcess = Start-Process -FilePath $taskPython -ArgumentList @('-u', 'main.py') -WorkingDirectory $taskApp -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $taskState 'langbot.stdout.log') -RedirectStandardError (Join-Path $taskState 'langbot.stderr.log')
+    & $taskPython (Join-Path $taskRoot 'scripts\Setup-FileRuntime.py')
+    if ($LASTEXITCODE -ne 0) { throw 'File runtime setup failed; LangBot was not started.' }
+    $taskSupervisor = Join-Path $taskRoot 'scripts\Run-LangBot.py'
+    $taskProcess = Start-Process -FilePath $taskPython -ArgumentList @('-u', ('"' + $taskSupervisor + '"')) -WorkingDirectory $taskApp -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $taskState 'langbot.stdout.log') -RedirectStandardError (Join-Path $taskState 'langbot.stderr.log')
     @{ pid = $taskProcess.Id; started = $taskProcess.StartTime.ToUniversalTime().ToString('o'); executable = $taskPython } | ConvertTo-Json | Set-Content -LiteralPath $taskPidFile -Encoding UTF8
     Write-Output ('LangBot started, PID ' + $taskProcess.Id + '. WebUI: http://127.0.0.1:5300')
 } finally {

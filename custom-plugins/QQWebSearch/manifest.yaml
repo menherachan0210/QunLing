@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   author: local
   name: QQWebSearch
-  version: 0.2.0
+  version: 0.3.0
   label:
     en_US: Web Search, Images and Attachments
     zh_Hans: 联网查询、搜图与附件上传

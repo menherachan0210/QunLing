@@ -1,16 +1,31 @@
 # 开发与发布验证
 
-框架和插件来源见 [ARCHITECTURE](docs/ARCHITECTURE.md)，许可边界见 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md)。新功能优先放独立插件；兼容修复保留可重放补丁，不修改用户正在运行的缓存。
+框架和插件来源见 [ARCHITECTURE](docs/ARCHITECTURE.md)，许可边界见 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md)。共享文件、任务和网络机制维护在 `qunling/`，QQ／模型适配维护在插件；兼容修复保留可重放补丁，不修改用户正在运行的缓存。
 
 ## 离线测试
 
-使用 Python 3.12 环境，安装 `pytest requests pyyaml qrcode pillow` 后，在仓库根目录执行：
+使用单独的 Python 3.12 环境，在仓库根目录安装普通测试和解析依赖：
 
 ```bash
-python -m pytest tests -q
+python -m pip install pytest pytest-asyncio requests PyYAML qrcode Pillow aiohttp -r qunling/requirements.txt
+python -m pytest tests --ignore=tests/test_attachment_transport_budget.py --ignore=tests/test_file_pipeline.py --ignore=tests/test_file_tool_integration.py -q
 ```
 
-这是部署、初始化、补丁与传输契约测试，不调用模型、不登录 QQ。插件测试需要插件声明的依赖；在安装了固定 SDK 的开发环境中单独执行对应 `custom-plugins/<名称>/tests`，避免多个插件的同名模块混在同一解释器中。
+这层覆盖部署、初始化、固定来源补丁、文件格式与任务生命周期，不需要安装 LangBot/SDK。它不调用模型、不登录 QQ；RAR/7z 的原生用例需要完整的 7-Zip，可通过 `QUNLING_TEST_7ZIP`／`QQCOMIC_TEST_7Z` 指定可信程序，缺少时会明确跳过。额外 RAR 测试样本用 `QUNLING_TEST_ARCHIVES` 指定，不能拿用户附件替代合成样本。
+
+被排除的三个测试文件覆盖真实 SDK 消息及发送接口，在已准备好固定 SDK 的开发环境或部署镜像中执行。插件测试也在该环境按插件**分别启动 Python**，避免不同插件的同名 `pkg` 模块混在一起。例如：
+
+```bash
+python -m pytest tests/test_attachment_transport_budget.py tests/test_file_pipeline.py tests/test_file_tool_integration.py -q
+python -m pytest custom-plugins/QQTextReader/tests -q
+python -m pytest custom-plugins/QQComicTranslator/tests -q
+```
+
+CI 的 `public-tests` 包含 `tests/test_task*.py` 和不需要 SDK 的 `tests/test_file*.py`，仅安装上面的普通依赖。`linux-compose` 先构建实际应用镜像，再用一次性容器运行完整文件／任务／传输回归以及六个插件的离线测试；测试依赖预先下载为 wheels，执行时 `--network none`，不启动业务入口。随后才验收容器初始化、插件安装和更新回滚。以上各层不能互相代替，新增 Linux 构建应以该提交的 CI 实际结果为准。
+
+新增文件格式应实现真实类型检查、结构导航、分页／检索、明确能力与限制，并补合成样本和失败边界；不要只增加扩展名判断。产物遵循固定 schema，通过共享任务与授权资产发送，不能接受任意代码、宿主路径或收件人。共享处理子进程有资源限制，但不是完整 OS 沙箱；不要把它改成通用命令执行入口。
+
+持久任务应覆盖重启、租约失效、重复请求、取消、配额和交付未知等状态。`file_workspace` 只有 `create`／`extract` 接受顶层 `deliver=true`，仅在用户明确要求发送时设置；Host outbox 使用原请求的可信路由，不给中间产物自动登记发送，也不重新尝试 `unconfirmed`。继续执行提示只能来自明确授权工具，不能绕过 24 轮对话预算、重置任务期限或重复付费请求。直接图片 LabelPlus 测试位于漫画插件，已有译文转 TXT 则应走共享文件生成与发送，不增加重复翻译路由。
 
 `scripts/Verify-*.py` 多数用于已有原生开发环境，部分会调用实际模型或访问网络、产生费用；先读文件说明和 `--help`，不要作为所有新用户的安装步骤。脚本从自身位置寻找项目根目录；新增工具也应遵循这一点，不依赖调用者当前工作目录，不把运行数据写入 `scripts/`。
 
@@ -29,8 +44,9 @@ python -m pytest tests -q
 - 确认 `git status --short` 没有私有数据。只提交源码、测试、脱敏示例和文档。
 - `.local/`、`langbot/`、`napcat/`、下载产物、数据库、密钥、聊天和 QQ 登录状态不可提交。Docker 构建另用显式白名单。
 - 运行 `python scripts/Check-Release.py` 检查候选文件；自动检查不能替代人工审阅，也不重写 Git 历史。
-- `.github/workflows/ci.yml` 检查离线用例与 Linux 容器的全新初始化。首次实际成功前，不宣称已通过 Linux 容器验收。
-- 容器自动检查没有 QQ 账号和 AI Key。发布稳定版前人工验收登录、@触发、多人上下文、图片、TXT、漫画和附件收发。
+- `.github/workflows/ci.yml` 检查离线用例、实际镜像内的 worker／插件、Linux 全新初始化与更新恢复。首次实际成功前，不宣称已通过该版本的 Linux 容器验收。
+- 容器自动检查没有 QQ 账号和 AI Key。发布稳定版前人工验收登录、@触发、多人上下文、多源网页、文件阅读／生成／发送、直接图片与压缩包 LabelPlus。
+- 共享资产、任务参数、结果与交付回执都可能包含私有内容；它们留在 LangBot 数据卷中，不进入测试样本、构建上下文或 Release。
 - 上游升级必须一起更新锁定来源、摘要、补丁与测试，不依赖 `latest`。
 - 遵守各组件许可，提供修改版 Runtime 对应源码与构建信息；根 Apache 许可不覆盖所有上游组件。
 

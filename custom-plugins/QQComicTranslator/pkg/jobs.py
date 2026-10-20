@@ -149,7 +149,7 @@ class JobManager:
             else None
         )
 
-    async def start(self, session, attachment, raw, model_uuid):
+    async def start(self, session, attachment, raw, model_uuid, *, page_names=None):
         scope = scope_key(session)
         digest = hashlib.sha256(raw).hexdigest()
         async with self.lock:
@@ -175,10 +175,15 @@ class JobManager:
             with await asyncio.to_thread(
                 open_archive, raw, self.plugin.get_config().get("seven_zip_path")
             ) as archive:
+                if page_names is not None and (
+                    not isinstance(page_names, (list, tuple))
+                    or len(page_names) != len(archive.pages)
+                ):
+                    raise JobError("漫画图片与原文件名的对应关系无效，未开始翻译。")
                 pages = [
                     {
                         "index": page.index,
-                        "name": page.basename,
+                        "name": page_names[page.index] if page_names is not None else page.basename,
                         "result": None,
                         "error": "",
                     }

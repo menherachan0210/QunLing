@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: import_group_context_images
+  label:
+    en_US: Import selected group images
+    zh_Hans: 导入选定的群历史图片
+  description:
+    en_US: Turn shown image_refs into actual scoped file assets without an extra vision call.
+    zh_Hans: 将已定位的群图片保存为可处理的文件，不额外调用视觉模型。
+spec:
+  parameters:
+    type: object
+    required: [image_refs]
+    properties:
+      image_refs:
+        type: array
+        minItems: 1
+        maxItems: 4
+        uniqueItems: true
+        items:
+          type: string
+    additionalProperties: false
+  llm_prompt: |
+    First locate the user's intended images with read_recent_group_context.
+    Only use image_refs actually shown in that query's fixed history snapshot.
+    This downloads the original bytes into asset_refs for file_workspace and
+    start_comic_from_assets. It does not translate, bill a vision model or send.
+    Use this when a referenced/history picture is needed for a file or LabelPlus
+    task; don't require the user to package it into ZIP. Select the exact intended
+    images, not later or unrelated ones. A partial result identifies successful
+    assets and failed refs; never silently substitute missing pages.
+    QQ history may lack original filenames; stable names are returned explicitly.
+    Limit: 1–4 images per call, 8 successful images and 3 import attempts per query.
+execution:
+  python:
+    path: import_group_context_images.py
+    attr: ImportGroupContextImages

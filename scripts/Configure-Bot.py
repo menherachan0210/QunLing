@@ -56,7 +56,7 @@ runner = config['ai']['runner_config'][runner_id]
 runner['model'] = {'primary': state['models']['gpt-6.1-sol'], 'fallbacks': [], 'reasoning': {}}
 runner['knowledge-bases'] = [memory_uuid]
 runner['box-enabled'] = False
-runner['max-tool-iterations'] = 12
+runner['max-tool-iterations'] = 24
 runner['prompt'] = [{'role': 'system', 'content': (
     '你是一个中文 QQ 助手，回答自然、清楚，默认简洁。可以根据用户发送的图片回答问题。'
     '区分当前说话人与其他群成员，不把别人的信息归到当前用户。'

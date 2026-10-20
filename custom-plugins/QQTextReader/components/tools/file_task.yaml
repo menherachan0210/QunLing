@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: file_task
+  label:
+    en_US: File task progress
+    zh_Hans: 文件任务进度
+  description:
+    en_US: Inspect, wait for or cancel persistent file tasks in the current scope.
+    zh_Hans: 查看、等待或取消当前用户在本会话的持久文件任务。
+spec:
+  parameters:
+    type: object
+    required: [action]
+    properties:
+      action:
+        type: string
+        enum: [list, status, cancel]
+      task_id:
+        type: string
+      wait_seconds:
+        type: integer
+        minimum: 0
+        maximum: 15
+        default: 10
+    additionalProperties: false
+  llm_prompt: |
+    list accepts only action. status/cancel require task_id from file_workspace or
+    this tool's list. status optionally waits 0–15 seconds (default 10).
+    Continue pending work using status, without requiring a new user confirmation.
+    Cancellation is only for a user's stop/cancel request. Completed processing
+    returns result and artifact refs; it has not sent files. Use send_attachment
+    if delivery is part of the original request. Do not resubmit work merely because
+    it is still running. Failed tasks explain a category; preserve partial outputs.
+execution:
+  python:
+    path: file_task.py
+    attr: FileTask

@@ -196,7 +196,7 @@ def inspect_configuration(state, api):
         runner["model"]["primary"] == chat["uuid"]
         and runner["knowledge-bases"].count(memory["uuid"]) == 1
         and runner["box-enabled"] is False
-        and runner["max-tool-iterations"] >= 12,
+        and runner["max-tool-iterations"] >= 24,
         "runner bindings",
     )
     require(

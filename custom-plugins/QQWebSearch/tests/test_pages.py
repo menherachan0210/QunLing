@@ -188,6 +188,10 @@ async def test_read_page_preserves_final_source_url_and_uses_bounded_fetch(monke
         "url": "https://example.test/final",
         "title": "",
         "text": "Result",
+        "full_text": "Result",
+        "content_truncated": False,
+        "quality": "readable",
+        "links": [],
         "images": [],
     }
 

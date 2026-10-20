@@ -9,7 +9,9 @@ from langbot_plugin.api.proxies.query_based_api import QueryBasedAPIProxy
 
 from pkg.archive import ArchiveError
 from pkg.attachment_context import (
+    MISSING,
     QUERY_CONTEXT_KEY,
+    UNSUPPORTED,
     capture_context,
     select_attachment,
     select_session,
@@ -18,6 +20,9 @@ from pkg.attachment_context import (
 PROMPT_MARKER = "[QQComicTranslator 漫画任务状态]"
 TOOL_GUIDANCE = (
     "仅按用户明确意图操作：请求翻译漫画压缩包时使用 start_comic_translation({})；"
+    "单张或多张漫画图片无需手动打包：先用 file_workspace list/import 获取准确 asset_ref，"
+    "再用 start_comic_from_assets({asset_refs:[...]}) 开始生成 LabelPlus；共享压缩包资产也可用此入口。"
+    "引用未解析时先用群聊图片/上下文工具定位确切原图，不能猜测或用其他近期图片替代。"
     "查询进度使用 comic_translation_status({})；续做使用 resume_comic_translation({})；"
     "取消使用 cancel_comic_translation({})。不需要固定触发措辞。"
     "附件可用性不是开始翻译请求，不能自动启动。工具参数不接受路径、URL、QQ 号或文件 ID。"
@@ -73,8 +78,21 @@ class ArchiveContextListener(EventListener):
             try:
                 select_attachment(self.plugin, variables)
             except ArchiveError as exc:
+                state = str(exc)
+                if state == MISSING:
+                    state = (
+                        "没有可供旧压缩包入口使用的近期附件。"
+                        "这不代表图片不可用；单张或多张图片请先从 file_workspace"
+                        " 获取准确资产，再使用 start_comic_from_assets，无需用户打包。"
+                    )
+                elif state == UNSUPPORTED:
+                    state = (
+                        "当前附件不是可读取的 ZIP、RAR 或 7z，或文件超过 40 MiB。"
+                        "如当前附件是漫画图片，请用 file_workspace 核验并导入后交给"
+                        " start_comic_from_assets，无需转换为压缩包。"
+                    )
                 guidance = (
-                    f"压缩包附件状态：{exc} 查询、取消或续做已有任务仍可使用对应工具。"
+                    f"压缩包附件状态：{state} 查询、取消或续做已有任务仍可使用对应工具。"
                 )
             else:
                 guidance = (

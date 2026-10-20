@@ -12,6 +12,8 @@ from pkg.errors import WebError
 from pkg.network import Fetched, fetch_public, validate_public_url
 
 MAX_TEXT_CHARS = 16000
+MAX_STORED_TEXT_CHARS = 128000
+MAX_LINKS = 80
 MAX_IMAGES = 16
 MAX_TITLE_CHARS = 300
 MAX_ALT_CHARS = 200
@@ -184,6 +186,11 @@ class PageParser(HTMLParser):
         self.og_seen = set()
         self.other_seen = set()
         self.elements = 0
+        self.scripts = 0
+        self.links = []
+        self.link_seen = set()
+        self.active_link = None
+        self.text_clipped = False
 
     def count_element(self):
         self.elements += 1
@@ -194,7 +201,8 @@ class PageParser(HTMLParser):
         return bool(self.stack and self.stack[-1][1])
 
     def append_text(self, text):
-        room = MAX_TEXT_CHARS * 2 - self.text_size
+        room = MAX_STORED_TEXT_CHARS * 2 - self.text_size
+        self.text_clipped |= len(text) > room
         if room > 0:
             self.parts.append(text[:room])
             self.text_size += min(len(text), room)
@@ -212,6 +220,21 @@ class PageParser(HTMLParser):
             )
         )
         parent_muted = self.muted()
+        if tag == "script":
+            self.scripts += 1
+        if tag == "a":
+            self.finish_link()
+            href = attrs.get("href")
+            if (
+                not parent_muted and not hidden and isinstance(href, str)
+                and href.strip() and not href.lstrip().startswith("#")
+            ):
+                try:
+                    target = validate_public_url(urldefrag(urljoin(self.base, href.strip()))[0])
+                except (WebError, ValueError):
+                    target = None
+                if target and target not in self.link_seen and len(self.links) < MAX_LINKS:
+                    self.active_link = {"url": target, "parts": []}
         if tag == "base" and not self.base_seen:
             self.base_seen = True
             try:
@@ -267,6 +290,8 @@ class PageParser(HTMLParser):
 
     def handle_endtag(self, tag):
         self.count_element()
+        if tag == "a":
+            self.finish_link()
         if tag == "title":
             self.title_active = False
         for index in range(len(self.stack) - 1, -1, -1):
@@ -277,6 +302,11 @@ class PageParser(HTMLParser):
             self.append_text("\n")
 
     def handle_data(self, data):
+        if self.active_link is not None and not self.muted():
+            parts = self.active_link["parts"]
+            room = 240 - sum(map(len, parts))
+            if room > 0:
+                parts.append(data[:room])
         if self.title_active:
             room = MAX_TITLE_CHARS * 2 - self.title_size
             if room > 0:
@@ -285,7 +315,16 @@ class PageParser(HTMLParser):
         elif not self.muted():
             self.append_text(data)
 
+    def finish_link(self):
+        link, self.active_link = self.active_link, None
+        if link is None:
+            return
+        title = clean_text("".join(link["parts"]))[:240] or urlsplit(link["url"]).path[:240]
+        self.links.append({"url": link["url"], "title": title})
+        self.link_seen.add(link["url"])
+
     def result(self):
+        self.finish_link()
         images = []
         seen = set()
         for image in self.og_images + self.other_images:
@@ -294,10 +333,37 @@ class PageParser(HTMLParser):
                 images.append(image)
                 if len(images) == MAX_IMAGES:
                     break
+        text = clean_text("".join(self.parts))
+        title = clean_text("".join(self.title_parts))[:MAX_TITLE_CHARS]
+        quality = "readable"
+        challenge = re.search(
+            r"just a moment|attention required|verify (?:that )?you are human|"
+            r"checking your browser|access denied|请完成.*验证|安全验证|人机验证",
+            title + "\n" + text[:300], re.I,
+        )
+        if challenge and len(text) < 2000:
+            quality = "access_challenge"
+        elif not text:
+            quality = "javascript_required" if self.scripts else "no_readable_text"
+        elif len(text) < 500 and re.search(
+            r"(?:enable|turn on|requires?) javascript|javascript (?:is )?(?:required|disabled)|"
+            r"请(?:开启|启用|允许).{0,15}javascript|you need to enable javascript",
+            text, re.I,
+        ):
+            quality = "javascript_required"
+        elif self.scripts and len(text) < 120 and re.fullmatch(
+            r"(?:loading(?:\.\.\.|…)?|正在加载(?:中)?[.…。]*|加载中[.…。]*)",
+            text.strip(), re.I,
+        ):
+            quality = "javascript_required"
         return {
             "url": self.url,
-            "title": clean_text("".join(self.title_parts))[:MAX_TITLE_CHARS],
-            "text": clean_text("".join(self.parts))[:MAX_TEXT_CHARS],
+            "title": title,
+            "text": text[:MAX_TEXT_CHARS],
+            "full_text": text[:MAX_STORED_TEXT_CHARS],
+            "content_truncated": self.text_clipped or len(text) > MAX_STORED_TEXT_CHARS,
+            "quality": quality,
+            "links": self.links,
             "images": images,
         }
 
@@ -305,13 +371,19 @@ class PageParser(HTMLParser):
 def _parse_page(fetched: Fetched) -> dict:
     content_type = fetched.content_type.split(";", 1)[0].strip().lower()
     if content_type not in {"text/html", "application/xhtml+xml", "text/plain"}:
-        raise WebError("该链接不是可读取的 HTML 网页或纯文本。")
+        raise WebError("该链接不是可读取的 HTML 网页或纯文本。",
+                       code="unsupported_content_type", next_action="use_document_reader_or_other_source")
     decoded = _decode(fetched)
     if content_type == "text/plain":
+        text = clean_text(decoded)
         return {
             "url": fetched.url,
             "title": "",
-            "text": clean_text(decoded)[:MAX_TEXT_CHARS],
+            "text": text[:MAX_TEXT_CHARS],
+            "full_text": text[:MAX_STORED_TEXT_CHARS],
+            "content_truncated": len(text) > MAX_STORED_TEXT_CHARS,
+            "quality": "readable" if text else "no_readable_text",
+            "links": [],
             "images": [],
         }
     parser = PageParser(fetched.url)
@@ -327,4 +399,5 @@ async def read_page(url: str) -> dict:
     except WebError:
         raise
     except Exception:
-        raise WebError("网页内容解析失败，无法确认正文或图片。") from None
+        raise WebError("网页内容解析失败，无法确认正文或图片。",
+                       code="page_parse_failed", next_action="try_other_source") from None

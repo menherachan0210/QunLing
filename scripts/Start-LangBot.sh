@@ -12,6 +12,8 @@ export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 export ANONYMIZED_TELEMETRY=False
 export PATH="$TASK_APP/.venv/bin:$PATH"
+export QUNLING_DATA_DIR="${QUNLING_DATA_DIR:-$TASK_APP/data/qunling}"
 umask 077
 cd "$TASK_APP"
-exec "$TASK_PYTHON" -u main.py
+"$TASK_PYTHON" "$TASK_ROOT/scripts/Setup-FileRuntime.py"
+exec "$TASK_PYTHON" -u "$TASK_ROOT/scripts/Run-LangBot.py"

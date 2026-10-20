@@ -11,10 +11,11 @@
 | LangBot；`patches/` 中的 Host 补丁 | [LangBot v4.11.0](https://github.com/langbot-app/LangBot/tree/v4.11.0) | [Apache-2.0](https://github.com/langbot-app/LangBot/blob/v4.11.0/LICENSE)。框架源码由部署流程获取；本仓库维护兼容补丁。 |
 | `langbot-plugin` 的 API、SDK、CLI | [SDK v0.7.11](https://github.com/langbot-app/langbot-plugin-sdk/tree/v0.7.11) | [Apache-2.0](https://github.com/langbot-app/langbot-plugin-sdk/blob/v0.7.11/LICENSE)，但不覆盖下一行的 Runtime 目录。 |
 | `langbot_plugin/runtime/` | [Runtime v0.7.11](https://github.com/langbot-app/langbot-plugin-sdk/tree/v0.7.11/src/langbot_plugin/runtime) | [AGPLv3 原文](licenses/LangBot-Runtime-AGPL-3.0.txt)。官方 [README](https://github.com/langbot-app/langbot-plugin-sdk/blob/v0.7.11/README.md) 明确将 Runtime 与 Apache 部分分开。 |
-| 官方 `langbot-team/LocalAgent` | [Runner/LocalAgent](https://github.com/langbot-app/langbot-plugins/tree/main/Runner/LocalAgent)，已核对版本 0.2.1 | 来自 [langbot-plugins](https://github.com/langbot-app/langbot-plugins/blob/main/LICENSE) 的 Apache-2.0 插件；安装运行产物不作为本仓库源码上传。 |
+| `langbot-team/LocalAgent` | [Runner/LocalAgent](https://github.com/langbot-app/langbot-plugins/tree/3016b5c763bb3f3c7df942d470df08b8ba643f5d/Runner/LocalAgent)，固定版本 0.2.1 | 来自 langbot-plugins 的 Apache-2.0 插件；构建时应用工具来源校验与有限继续补丁，保留原身份和许可。 |
 | `custom-plugins/AIImagePlugin/` | [langbot-plugins](https://github.com/langbot-app/langbot-plugins/tree/3016b5c763bb3f3c7df942d470df08b8ba643f5d/misc/AIImagePlugin)，基线 0.1.6，提交 `3016b5c763bb3f3c7df942d470df08b8ba643f5d` | 继承 Apache-2.0。来源另存 `upstream-source.json`；本地版本扩展为生成／编辑、参考图选择与受限下载，详见该目录的 `README_LOCAL.md` 和 `NOTICE`。 |
 | `custom-plugins/LongTermMemory/` | [KnowledgeEngine/LongTermMemory](https://github.com/langbot-app/langbot-plugins/tree/main/KnowledgeEngine/LongTermMemory)，基线 0.2.7 | 继承仓库 Apache-2.0。该本地副本没有记录精确上游提交，不将版本号冒充提交哈希；兼容修改由源码、版本后缀及补丁记录。 |
 | `QQTextReader`、`QQComicTranslator`、`QQGroupContext`、`QQWebSearch` | 本仓库 `custom-plugins/` 下的四个独立插件 | 本项目原创，Apache-2.0；调用第三方 SDK 不改变其各自许可。 |
+| `qunling/` | 本仓库共享文件、任务与交付基础 | 本项目原创，Apache-2.0；插件打包时包含根 LICENSE 和 NOTICE。 |
 
 Apache 原文副本：[Apache-2.0.txt](licenses/Apache-2.0.txt)。六个本地插件目录也各带 `LICENSE`，以便独立打包时保留许可；两个继承插件另带来源与修改告知。保留 `langbot-team` 安装身份是为了兼容现有配置和数据，不代表上游认可或维护这些本地修改。
 
@@ -28,6 +29,7 @@ Apache 原文副本：[Apache-2.0.txt](licenses/Apache-2.0.txt)。六个本地�
 | `sdk-windows-dependency-temp.patch` | `langbot_plugin/runtime/`：沿用 AGPLv3 |
 | `sdk-attachment-message-budget.patch` | `langbot_plugin/runtime/`：沿用 AGPLv3 |
 | `sdk-dedicated-background.patch` | `api/definition/plugin.py` 为 Apache-2.0 部分；`runtime/` 中的修改沿用 AGPLv3 |
+| `sdk-tool-provenance.patch` | `api/entities/builtin/runner/resources.py`：Apache-2.0 部分 |
 
 这些是针对上游 0.7.11 的本地修改，不是官方发行版。发布修改后的 Runtime 或派生镜像时，应保留许可证、修改说明，并提供与运行版本相符的对应源码及构建／安装信息；对经网络交互使用修改版的用户，还需落实 AGPLv3 第 13 条的源码获取要求。仅放置一个许可链接不能替代对应源码的实际可得性。
 
@@ -50,6 +52,15 @@ NapCatQQ 使用 [Limited Redistribution License](https://github.com/NapNeko/NapC
 LabelPlus 作为输出文件格式的兼容目标。格式根据 [LabelFileManager.cs](https://github.com/LabelPlus/LabelPlus/blob/master/LabelPlus/LabelFileManager.cs) 和 [PS-Script 文本解析器](https://github.com/LabelPlus/PS-Script/blob/master/src/text_parser.ts) 核对；本仓库实现自己的 TXT 序列化器，不分发 LabelPlus／Photoshop 程序或其解析器。格式兼容不表示商标授权或项目背书。
 
 ## 依赖与发布材料
+
+以下解析依赖固定在 `qunling/requirements.txt`；版本与许可已核对该版本安装包的 `METADATA` 及许可文件，副本与摘要保留在 `licenses/`：
+
+| 依赖 | 来源／固定版本 | 许可证 |
+| --- | --- | --- |
+| pypdf | [py-pdf/pypdf](https://github.com/py-pdf/pypdf)，6.21.1 | [BSD-3-Clause](licenses/pypdf-6.21.1-LICENSE.txt) |
+| python-docx | [python-openxml/python-docx](https://github.com/python-openxml/python-docx)，1.2.0 | [MIT](licenses/python-docx-1.2.0-LICENSE.txt) |
+| openpyxl | [openpyxl/openpyxl](https://foss.heptapod.net/openpyxl/openpyxl)，3.1.5 | [MIT](licenses/openpyxl-3.1.5-LICENSE.txt) |
+| python-pptx | [scanny/python-pptx](https://github.com/scanny/python-pptx)，1.0.2 | [MIT](licenses/python-pptx-1.0.2-LICENSE.txt) |
 
 Python、Node、操作系统镜像、数据库、Python 包、字体及用户下载文件不因本项目的根许可证而被重新许可。本文件列出直接集成的主要组件，不是完整的软件物料清单；构建镜像或分发依赖时需继续保留各包自带许可与版权声明。
 

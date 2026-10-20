@@ -6,7 +6,9 @@ import argparse
 import hashlib
 import io
 import json
+import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import stat
 import subprocess
@@ -37,6 +39,60 @@ EXCLUDED_PARTS = {
     "dist",
     "data",
 }
+LOCAL_AGENT_PATCH_TARGETS = {
+    "pkg/agent_core/langbot.py", "pkg/run_assembly.py", "pkg/task_continuation.py",
+}
+
+
+def apply_local_agent_patch(staging: Path, root: Path):
+    """Patch only an isolated, pinned source staging tree; never runtime caches."""
+    import yaml
+
+    metadata = yaml.safe_load((staging / "manifest.yaml").read_text(encoding="utf-8"))["metadata"]
+    expected = json.loads(LOCK.read_text(encoding="utf-8"))["upstream_plugins"]["local_agent_version"]
+    if (metadata.get("author"), metadata.get("name"), str(metadata.get("version"))) != (
+        "langbot-team", "LocalAgent", expected
+    ):
+        raise ValueError("LocalAgent continuation patch requires its pinned upstream version")
+    patch = (root / "patches/localagent-task-continuation.patch").read_text(encoding="utf-8")
+    patch = patch.replace("\r\n", "\n")
+    paths = []
+    for block in re.split(r"(?=^diff --git )", patch, flags=re.M):
+        if not block.strip():
+            continue
+        match = re.match(r"diff --git a/(\S+) b/(\S+)\n", block)
+        if not match or match[1] != match[2] or match[1] not in LOCAL_AGENT_PATCH_TARGETS:
+            raise ValueError("Unexpected LocalAgent continuation patch target")
+        path = match[1]
+        if path in paths:
+            raise ValueError("Duplicate LocalAgent patch target")
+        paths.append(path)
+        target = staging / path
+        if not target.resolve().is_relative_to(staging.resolve()) or target.is_symlink():
+            raise ValueError("Redirected LocalAgent patch target")
+        new_file = path == "pkg/task_continuation.py"
+        before = "--- /dev/null\n" if new_file else f"--- a/{path}\n"
+        if before not in block or f"+++ b/{path}\n" not in block:
+            raise ValueError("Invalid LocalAgent patch source header")
+        if not new_file and not target.is_file():
+            raise ValueError("Pinned LocalAgent source file is missing")
+        if re.search(r"^(?:rename |copy |GIT binary patch|deleted file mode)", block, re.M):
+            raise ValueError("Unsupported LocalAgent patch operation")
+    if set(paths) != LOCAL_AGENT_PATCH_TARGETS:
+        raise ValueError("Incomplete LocalAgent continuation patch")
+    env = os.environ.copy()
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"):
+        env.pop(key, None)
+    env["GIT_CEILING_DIRECTORIES"] = str(staging.resolve().parent)
+    def apply(*options):
+        return subprocess.run(
+            ["git", "apply", "--whitespace=nowarn", *options, "-"], cwd=staging,
+            input=patch.encode("utf-8"), capture_output=True, timeout=30, env=env,
+        )
+    if apply("--reverse", "--check").returncode == 0:
+        return
+    if apply("--check").returncode or apply().returncode or apply("--reverse", "--check").returncode:
+        raise ValueError("LocalAgent source does not safely match the pinned continuation patch")
 
 
 def download_verified(asset: dict, *, opener=None) -> bytes:
@@ -232,6 +288,18 @@ def build_packages(root: Path):
                 ]
 
             shutil.copytree(source, staging, ignore=exclude)
+            if name == "LocalAgent":
+                apply_local_agent_patch(staging, root)
+            shared = root / "qunling"
+            if not (shared / "__init__.py").is_file():
+                raise ValueError("Shared QunLing source package is missing")
+            # Each plugin has an isolated import path. Include the same public
+            # sources without leaking host state or creating private parser envs.
+            shutil.copytree(shared, staging / "qunling", ignore=exclude)
+            for notice in ("LICENSE", "NOTICE"):
+                if not (root / notice).is_file():
+                    raise ValueError("Shared package license metadata is missing")
+                shutil.copyfile(root / notice, staging / "qunling" / notice)
             subprocess.run(
                 [sys.executable, "-m", "langbot_plugin.cli", "build", "-o", str(built)],
                 cwd=staging,

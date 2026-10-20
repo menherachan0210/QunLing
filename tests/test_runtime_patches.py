@@ -128,7 +128,9 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("sdk-attachment-message-budget.patch", "sdk", False) in patcher.PATCHES
     assert ("host-managed-runtime-transport.patch", "host", False) in patcher.PATCHES
     assert ("host-persisted-plugin-installations.patch", "host", False) in patcher.PATCHES
-    assert len(names) == 14
+    assert ("sdk-tool-provenance.patch", "sdk", False) in patcher.PATCHES
+    assert ("file-outbox-host.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 16
 
 
 def test_all_bundled_patches_have_supported_runtime_blocks():
@@ -282,7 +284,7 @@ def test_linux_cli_skips_windows_patch_and_defaults_to_check_only(
         patcher, "execute_plans", lambda plans, apply: calls.append((plans, apply))
     )
     assert patcher.main(["--langbot", str(tmp_path), "--python", sys.executable]) == 0
-    assert len(observed) == 13
+    assert len(observed) == len(patcher.PATCHES) - 1
     assert ("host-persisted-plugin-installations.patch", "host") in observed
     assert ("group-message-isolation.patch", "host") in observed
     assert ("group-history-speakers.patch", "host") in observed

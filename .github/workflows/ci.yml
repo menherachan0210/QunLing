@@ -25,12 +25,18 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - name: Install offline test dependencies
-        run: python -m pip install pytest PyYAML requests qrcode Pillow
+      - name: Install public test and document parser dependencies
+        run: python -m pip install pytest pytest-asyncio PyYAML requests qrcode Pillow aiohttp -r qunling/requirements.txt
       - name: Check publishable files for private runtime state and credentials
         run: python scripts/Check-Release.py
-      - name: Test setup, source isolation and patch installer
-        run: python -m pytest tests/test_public*.py tests/test_runtime_patches.py tests/test_release_check.py tests/test_script_paths.py -q
+      - name: Test public setup, files, tasks and fixed-source patches without the SDK
+        # These two suites exercise actual SDK message delivery in linux-compose.
+        run: >-
+          python -m pytest tests/test_public*.py tests/test_runtime_patches.py
+          tests/test_release_check.py tests/test_script_paths.py
+          tests/test_task*.py tests/test_file*.py
+          --ignore=tests/test_file_pipeline.py
+          --ignore=tests/test_file_tool_integration.py -q
 
   linux-compose:
     name: Linux image and fresh initialization
@@ -60,6 +66,31 @@ jobs:
           push: false
           cache-from: type=gha,scope=qqbot-linux-amd64
           cache-to: type=gha,scope=qqbot-linux-amd64,mode=min
+      - name: Download test-only wheels for the isolated image checks
+        run: >-
+          python -m pip download --only-binary=:all:
+          --dest "$RUNNER_TEMP/qunling-test-wheels" pytest pytest-asyncio
+      - name: Test actual SDK, file worker and each plugin without network access
+        timeout-minutes: 15
+        run: |
+          docker run --rm --network none \
+            --entrypoint /bin/sh \
+            --mount "type=bind,source=$PWD,target=/workspace,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/qunling-test-wheels,target=/wheels,readonly" \
+            -e PYTHONPATH=/workspace \
+            -e QUNLING_DATA_DIR=/tmp/qunling-ci \
+            -e QQCOMIC_TEST_7Z=/usr/local/bin/7zz \
+            -e QUNLING_TEST_7ZIP=/usr/local/bin/7zz \
+            qq-ai-bot-local:4.11.0 -ec '
+              uv pip install --python "$VIRTUAL_ENV/bin/python" --no-index --find-links=/wheels pytest pytest-asyncio
+              cd /workspace
+              python -m pytest tests/test_task*.py tests/test_file*.py tests/test_attachment_transport_budget.py -q -p no:cacheprovider
+              python -m qunling.daemon --once
+              for plugin in QQTextReader QQGroupContext QQWebSearch QQComicTranslator AIImagePlugin LongTermMemory; do
+                cd "/workspace/custom-plugins/$plugin"
+                PYTHONPATH="$PWD:/workspace" python -m pytest tests -q -p no:cacheprovider
+              done
+            '
       - name: Build the separate deployment updater
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:

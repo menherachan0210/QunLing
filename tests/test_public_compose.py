@@ -121,7 +121,11 @@ def test_explicit_docker_copies_never_import_workstation_runtimes():
         "deploy/compose/sources.lock.json",
         "scripts/Apply-RuntimePatches.py",
         "scripts/Setup-ArchiveTools.py",
+        "scripts/Setup-FileRuntime.py",
+        "scripts/Run-LangBot.py",
         "scripts/chat_style.py",
+        "qunling",
+        "qunling/requirements.txt",
         "LICENSE",
         "NOTICE",
         "THIRD_PARTY_NOTICES.md",
@@ -384,11 +388,20 @@ def test_build_packages_requires_all_seven_and_emits_verifiable_index(
         source.mkdir(parents=True)
         (source / "manifest.yaml").write_text("source", encoding="utf-8")
     calls = []
+    (tmp_path / "qunling").mkdir()
+    (tmp_path / "qunling/__init__.py").write_text('"""Synthetic public source."""')
+    for notice in ("LICENSE", "NOTICE"):
+        (tmp_path / notice).write_text("Synthetic license metadata")
+    patch_plugin = Mock()
+    monkeypatch.setattr(prepare, "apply_local_agent_patch", patch_plugin)
 
     def build(command, *, cwd, check):
         assert check is True
         assert command[:4] == [sys.executable, "-m", "langbot_plugin.cli", "build"]
         name = cwd.name
+        assert (cwd / "qunling/__init__.py").is_file()
+        assert (cwd / "qunling/LICENSE").is_file()
+        assert (cwd / "qunling/NOTICE").is_file()
         calls.append(name)
         metadata = {
             "metadata": {
@@ -409,6 +422,7 @@ def test_build_packages_requires_all_seven_and_emits_verifiable_index(
     index = json.loads((tmp_path / "packages/packages.json").read_text())
     assert calls == list(prepare.PLUGIN_NAMES)
     assert len(index) == 7
+    patch_plugin.assert_called_once()
     for item in index:
         package = tmp_path / "packages" / item["filename"]
         assert hashlib.sha256(package.read_bytes()).hexdigest() == item["sha256"]
@@ -437,7 +451,7 @@ def test_entrypoint_init_calls_idempotent_state_preparer_only(
 @pytest.mark.parametrize(
     "role,expected",
     [
-        ("app", ["-u", "main.py"]),
+        ("app", ["-u", "SUPERVISOR"]),
         ("wizard", ["-u", "-m", "bootstrap.server"]),
         ("access", ["-u", "-m", "bootstrap.server", "--url"]),
     ],
@@ -457,6 +471,8 @@ def test_app_and_wizard_exec_without_standalone_runtime(
     monkeypatch.setattr(entrypoint.os, "execv", execute)
     with pytest.raises(ReplacedProcess):
         entrypoint.main([role])
+    expected = [str(tmp_path / "scripts/Run-LangBot.py") if value == "SUPERVISOR" else value
+                for value in expected]
     execute.assert_called_once_with(sys.executable, [sys.executable, *expected])
     assert chdir.call_args.args[0] == (
         tmp_path / "langbot" if role == "app" else tmp_path

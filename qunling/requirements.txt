@@ -1,0 +1,5 @@
+# Pinned document parsers used by the shared file task worker.
+pypdf==6.21.1
+python-docx==1.2.0
+openpyxl==3.1.5
+python-pptx==1.0.2

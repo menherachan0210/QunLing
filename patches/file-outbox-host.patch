@@ -1,0 +1,30 @@
+diff --git a/src/langbot/pkg/core/app.py b/src/langbot/pkg/core/app.py
+--- a/src/langbot/pkg/core/app.py
++++ b/src/langbot/pkg/core/app.py
+@@ -402,6 +402,14 @@
+                     core_entities.LifecycleControlScope.PLATFORM,
+                 ],
+             )
++            if os.environ.get('QUNLING_DATA_DIR'):
++                from qunling.delivery import run_forever as run_file_outbox
++
++                self._qunling_file_outbox = self.task_mgr.create_task(
++                    run_file_outbox(self),
++                    name='qunling-file-outbox',
++                    scopes=[core_entities.LifecycleControlScope.APPLICATION],
++                )
+             self.task_mgr.create_task(
+                 self.ctrl.run(),
+                 name='query-controller',
+@@ -634,6 +642,11 @@
+ 
+             if self.task_mgr is not None:
+                 self.task_mgr.cancel_by_scope(core_entities.LifecycleControlScope.APPLICATION)
++            file_outbox = getattr(self, '_qunling_file_outbox', None)
++            if file_outbox is not None:
++                file_outbox.task.cancel()
++                with contextlib.suppress(asyncio.CancelledError, Exception):
++                    await file_outbox.task
+             plugin_runtime_task = getattr(self, '_plugin_runtime_initialization_task', None)
+             if plugin_runtime_task is not None and not plugin_runtime_task.done():
+                 plugin_runtime_task.cancel()

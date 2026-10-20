@@ -412,7 +412,7 @@ def test_tool_schemas_expose_no_credentials_or_arbitrary_send_destination():
     expected = {
         "search_web": {"query"},
         "search_web_images": {"query"},
-        "read_web_page": {"url"},
+        "read_web_page": {"url", "page_ref", "offset", "find_text"},
         "send_web_images": {"image_refs"},
     }
     for name, properties in expected.items():
@@ -421,7 +421,7 @@ def test_tool_schemas_expose_no_credentials_or_arbitrary_send_destination():
         )
         schema = document["spec"]["parameters"]
         assert set(schema["properties"]) == properties
-        assert set(schema["required"]) == properties
+        assert set(schema["required"]) == (set() if name == "read_web_page" else properties)
         assert schema["additionalProperties"] is False
 
 

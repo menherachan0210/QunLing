@@ -1,6 +1,6 @@
 qq-ai-bot
 
-The original scripts, configuration, documentation and independent plugins in
+The original scripts, configuration, documentation, qunling shared package and independent plugins in
 this repository are made available under Apache License 2.0, as selected by the
 project maintainer. This notice does not replace upstream license terms.
 
@@ -10,6 +10,8 @@ original author/name identities and attribution are retained. Local changes
 include image generation/editing, bounded downloads, conversation scope,
 memory authorization and deletion compatibility. See THIRD_PARTY_NOTICES.md
 and the plugin-specific notices for source and modification details.
+The pinned LocalAgent source receives a local bounded-continuation patch at
+build time; its original identity and Apache-2.0 attribution are retained.
 
 The LangBot plugin infrastructure has separate licenses:
 SDK/API/CLI portions are Apache-2.0; src/langbot_plugin/runtime/ is AGPLv3.

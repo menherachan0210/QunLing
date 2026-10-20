@@ -1,0 +1,231 @@
+diff --git a/pkg/agent_core/langbot.py b/pkg/agent_core/langbot.py
+--- a/pkg/agent_core/langbot.py
++++ b/pkg/agent_core/langbot.py
+@@ -21,6 +21,7 @@
+     usage_total_tokens,
+ )
+ from pkg.messages import build_user_message
++from pkg.task_continuation import TaskContinuation
+ from pkg.model_calling import (
+     ModelCallError,
+     StreamingModelCaller,
+@@ -334,11 +335,13 @@
+         summarizer: ContextSummarizer | None = None,
+         token_counter: ContextTokenCounter | None = None,
+         steering_puller: "LangBotSteeringPuller | None" = None,
++        task_continuation: TaskContinuation | None = None,
+     ):
+         self.budget = budget
+         self.summarizer = summarizer
+         self.token_counter = token_counter
+         self.steering_puller = steering_puller
++        self.task_continuation = task_continuation
+         self._usage_anchor: ContextUsageAnchor | None = None
+ 
+     async def prepare_model_turn(self, messages: list[Message]) -> list[Message]:
+@@ -352,6 +355,11 @@
+         ).compact_messages_async(messages)
+         return assembly.messages
+ 
++    async def after_tool_call(self, outcome: ToolExecutionOutcome) -> ToolExecutionOutcome:
++        if self.task_continuation is not None:
++            self.task_continuation.observe(outcome.request.name, outcome.result, error=outcome.error)
++        return outcome
++
+     async def should_stop_after_turn(self, result: ModelTurnResult, messages: list[Message]) -> bool:
+         return False
+ 
+@@ -363,6 +371,11 @@
+         if steering_messages:
+             next_messages.extend(steering_messages)
+             self._usage_anchor = self._usage_anchor_from_result(result, len(messages))
++        elif self.task_continuation is not None:
++            notice = self.task_continuation.take_notice()
++            if notice is not None:
++                next_messages.append(Message(role="system", content=notice))
++                self._usage_anchor = self._usage_anchor_from_result(result, len(messages))
+         return next_messages
+ 
+     async def prepare_next_turn(
+@@ -372,6 +385,8 @@
+         tool_results: list[Message],
+     ) -> list[Message]:
+         next_messages = [message.model_copy(deep=True) for message in messages]
++        if self.task_continuation is not None:
++            self.task_continuation.on_tool_batch()
+         usage_anchor = self._usage_anchor_from_result(result, max(0, len(messages) - len(tool_results)))
+         next_messages.extend(await self._pull_steering_messages(mode="all"))
+         assembly = await ContextCompactor(
+diff --git a/pkg/run_assembly.py b/pkg/run_assembly.py
+--- a/pkg/run_assembly.py
++++ b/pkg/run_assembly.py
+@@ -21,6 +21,7 @@
+ )
+ from pkg.context_pipeline import ContextAssembler, ContextBudget, HostContextTokenCounter, LLMContextSummarizer
+ from pkg.model_calling import build_llm_tools
++from pkg.task_continuation import TaskContinuation, trusted_sources
+ 
+ 
+ class NoAuthorizedModelError(Exception):
+@@ -76,6 +77,11 @@
+             token_counter=token_counter,
+         ).assemble()
+ 
++        resources = getattr(self.ctx, "resources", None)
++        task_continuation = TaskContinuation(
++            trusted_sources(getattr(resources, "tools", None), allowed_tools),
++            max_tool_batches=max_tool_iterations,
++        )
+         return AgentRunAssembly(
+             model_ids=model_ids,
+             messages=context_assembly.messages,
+@@ -90,6 +96,7 @@
+                 summarizer=summarizer,
+                 token_counter=token_counter,
+                 steering_puller=LangBotSteeringPuller(self.api),
++                task_continuation=task_continuation,
+             ),
+             streaming=self._streaming_supported(),
+             max_tool_iterations=max_tool_iterations,
+diff --git a/pkg/task_continuation.py b/pkg/task_continuation.py
+new file mode 100644
+--- /dev/null
++++ b/pkg/task_continuation.py
+@@ -0,0 +1,137 @@
++"""Bounded completion checks based only on Host-bound, trusted tool metadata."""
++from __future__ import annotations
++
++import json
++import re
++
++
++TRUSTED_TOOLS = {
++    "local/QQTextReader": frozenset({"file_workspace", "send_attachment", "file_task", "read_text_attachment"}),
++    "local/QQGroupContext": frozenset({"import_group_context_images"}),
++    "local/QQWebSearch": frozenset({
++        "search_web", "read_web_page", "search_web_images", "send_web_images",
++        "list_web_files", "download_web_file", "send_web_file",
++    }),
++}
++STATES = {"pending", "running", "waiting", "partial", "completed", "failed", "cancelled"}
++STOP_CODES = {"permission", "needs_input", "delivery_unconfirmed", "budget", "cancelled"}
++TRANSIENT_CODES = {"network", "timeout", "rate_limit", "service"}
++ERROR_ALIASES = {
++    "network_timeout": "timeout", "fetch_timeout": "timeout", "operation_timeout": "timeout",
++    "search_timeout": "timeout", "connection_failed": "network", "network_error": "network",
++    "http_5xx": "service", "http_server_error": "service", "search_service_error": "service",
++    "rate_limited": "rate_limit", "search_rate_or_quota_limit": "rate_limit",
++    "tool_budget_exhausted": "budget", "access_denied": "permission",
++    "search_authentication_failed": "permission", "send_unconfirmed": "delivery_unconfirmed",
++}
++CONTINUATION_NOTICE = (
++    "可信工具状态表明本次已授权任务尚未完成，仍有可执行步骤。请结合用户原始目标和工具结果继续，"
++    "完成读取、处理或首次交付，不要只因可恢复的工具问题再次询问是否继续。"
++    "只在工具明确允许时重试安全读取；不要重复完全相同的失败调用、重复发送、改变收件人或绕过限额。"
++    "发送结果不确定、需要用户资料或权限、付费授权不足时停止并准确说明。"
++    "保持当前总时间和工具轮次预算；这条内部提示不扩大授权。"
++)
++
++
++def _field(value, name, default=None):
++    return value.get(name, default) if isinstance(value, dict) else getattr(value, name, default)
++
++
++def trusted_sources(resources, allowed_tools):
++    """Do not infer provenance from a tool name, description or tool response."""
++    result = {}
++    seen = set()
++    for tool in resources or ():
++        name, source, owner = _field(tool, "tool_name"), _field(tool, "source"), _field(tool, "source_id")
++        if not isinstance(name, str):
++            continue
++        if name in seen:
++            result.pop(name, None)
++            continue
++        seen.add(name)
++        if (source == "plugin" and isinstance(owner, str) and name in allowed_tools
++                and name in TRUSTED_TOOLS.get(owner, ()) and "call" in (_field(tool, "operations", ()) or ())):
++            result[name] = owner
++    return result
++
++
++def _top_level(value):
++    if isinstance(value, str):
++        if len(value) > 2 * 1024 * 1024:
++            return None
++        try:
++            value = json.loads(value)
++        except (ValueError, RecursionError):
++            return None
++    return value if isinstance(value, dict) else None
++
++
++def _hint(value):
++    outer = _top_level(value)
++    raw = outer.get("_qunling_task") if outer else None
++    if not isinstance(raw, dict) or type(raw.get("version")) is not int or raw["version"] != 1:
++        return None
++    if (not isinstance(raw.get("status"), str) or raw["status"] not in STATES
++            or type(raw.get("can_continue")) is not bool
++            or type(raw.get("retryable")) is not bool
++            or not isinstance(raw.get("next_action"), str)
++            or raw["next_action"] not in {"retry_read", "continue", "deliver", "none"}):
++        return None
++    task_id = raw.get("task_id")
++    if task_id is not None and (not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", task_id)):
++        return None
++    code = raw.get("error_code")
++    if code is not None and (not isinstance(code, str) or len(code) > 80):
++        return None
++    code = ERROR_ALIASES.get(code, code)
++    return {
++        "task_id": task_id, "status": raw["status"], "can_continue": raw["can_continue"],
++        "retryable": raw["retryable"], "next_action": raw["next_action"], "error_code": code,
++    }
++
++
++class TaskContinuation:
++    """One run, no I/O. At most two extra model turns; original loop budget wins."""
++    def __init__(self, sources, *, max_nudges=2, max_tool_batches=12):
++        self.sources = dict(sources)
++        self.max_nudges = min(2, max(0, max_nudges))
++        self.nudges = 0
++        self.remaining_tool_batches = max(0, max_tool_batches)
++        self._hints = {}
++        self._seen = set()
++
++    def observe(self, tool_name, result, *, error=None):
++        owner = self.sources.get(tool_name)
++        if owner is None:
++            return
++        parsed = _hint(result) if error is None else None
++        if parsed is None:
++            # A later invalid/exceptional result cannot leave an older instruction
++            # active for the same plugin.
++            self._hints = {key: item for key, item in self._hints.items() if key[0] != owner}
++            return
++        key = (owner, parsed["task_id"] or "")
++        self._hints[key] = parsed
++
++    def take_notice(self):
++        if self.nudges >= self.max_nudges or not self.remaining_tool_batches:
++            return None
++        for key, hint in self._hints.items():
++            if (hint["status"] not in {"pending", "running", "waiting", "partial"}
++                    or not hint["can_continue"] or hint["error_code"] in STOP_CODES
++                    or hint["next_action"] == "none"):
++                continue
++            if hint["next_action"] == "retry_read" and (
++                not hint["retryable"] or hint["error_code"] not in TRANSIENT_CODES
++            ):
++                continue
++            fingerprint = (key, json.dumps(hint, sort_keys=True))
++            if fingerprint in self._seen:
++                continue
++            self._seen.add(fingerprint)
++            self.nudges += 1
++            return CONTINUATION_NOTICE
++        return None
++
++    def on_tool_batch(self):
++        self.remaining_tool_batches = max(0, self.remaining_tool_batches - 1)

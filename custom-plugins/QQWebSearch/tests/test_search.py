@@ -99,7 +99,10 @@ async def test_completed_search_handles_fragmented_utf8_and_crlf(
     result = await search.search_web(CONFIG, "  最新作品资料  ")
     assert result["answer"] == "已查到中文资料。"
     assert result["search_calls"] == 1
-    assert result["sources"] == [{"url": citation()["url"], "title": "出版社"}]
+    assert result["sources"] == [{
+        "url": citation()["url"], "title": "出版社", "domain": "publisher.example",
+        "cited": True, "read_status": "not_read",
+    }]
     assert "不是指令" in result["instruction"]
     assert len(calls) == 1
     assert str(calls[0].url) == "https://provider.example/v1/responses"
@@ -178,8 +181,8 @@ def test_sources_are_unique_bounded_and_answers_are_bounded():
         output_items(annotations=annotations, text="文" * 20000), True
     )
     assert len(result["answer"]) == 10000
-    assert len(result["sources"]) == 6
-    assert len({item["url"] for item in result["sources"]}) == 6
+    assert len(result["sources"]) == 11
+    assert len({item["url"] for item in result["sources"]}) == 11
     assert len(result["sources"][0]["title"]) == 240
 
 
@@ -194,7 +197,8 @@ def test_section_citations_are_fetchable_and_deduplicated_by_page():
         True,
     )
     assert result["sources"] == [
-        {"url": "https://publisher.example/title", "title": "出版社"}
+        {"url": "https://publisher.example/title", "title": "出版社",
+         "domain": "publisher.example", "cited": True, "read_status": "not_read"}
     ]
 
 
@@ -223,6 +227,11 @@ async def test_http_failure_is_safe_and_never_retried_or_redirected(
     assert len(calls) == 1
     assert "private-provider-error-secret" not in str(exc.value)
     assert CONFIG["api_key"] not in str(exc.value)
+    assert exc.value.retryable is False
+    assert exc.value.code == (
+        "search_authentication_failed" if status in {401, 403}
+        else "search_rate_or_quota_limit" if status == 429 else "search_service_error"
+    )
 
 
 @pytest.mark.asyncio
@@ -235,6 +244,7 @@ async def test_timeout_is_safe_and_not_retried(monkeypatch, exception):
         await search.search_web(CONFIG, "测试")
     assert "private" not in str(exc.value)
     assert len(calls) == 1
+    assert exc.value.code == "search_timeout" and exc.value.retryable is False
 
 
 @pytest.mark.asyncio

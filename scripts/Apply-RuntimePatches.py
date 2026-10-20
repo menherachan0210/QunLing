@@ -33,10 +33,12 @@ PATCHES = (
     ("onebot-group-context.patch", "host", False),
     ("group-message-isolation.patch", "host", False),
     ("group-history-speakers.patch", "host", False),
+    ("file-outbox-host.patch", "host", False),
     ("sdk-image-tool-timeout.patch", "sdk", False),
     ("sdk-dedicated-background.patch", "sdk", False),
     ("sdk-windows-dependency-temp.patch", "sdk", True),
     ("sdk-attachment-message-budget.patch", "sdk", False),
+    ("sdk-tool-provenance.patch", "sdk", False),
 )
 
 
@@ -134,10 +136,9 @@ def runtime_payload(source: str, component: str) -> tuple[bytes, tuple[str, ...]
             lines.insert(0, f"diff --git a/{original} b/{original}\n")
         if original.startswith("tests/"):
             continue
-        prefix = (
-            "src/langbot/" if component == "host" else SDK_PREFIX + "langbot_plugin/"
-        )
-        if not original.startswith(prefix):
+        prefixes = (("src/langbot/",) if component == "host"
+                    else (SDK_PREFIX + "langbot_plugin/", "langbot_plugin/"))
+        if not original.startswith(prefixes):
             raise PatchError(f"Unexpected {component} patch target: {original}")
         mapped = original if component == "host" else original.removeprefix(SDK_PREFIX)
         safe_path(mapped)

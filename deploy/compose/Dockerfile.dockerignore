@@ -2,7 +2,11 @@
 !scripts/
 !scripts/Apply-RuntimePatches.py
 !scripts/Setup-ArchiveTools.py
+!scripts/Setup-FileRuntime.py
+!scripts/Run-LangBot.py
 !scripts/chat_style.py
+!qunling/
+!qunling/**
 !LICENSE
 !NOTICE
 !THIRD_PARTY_NOTICES.md

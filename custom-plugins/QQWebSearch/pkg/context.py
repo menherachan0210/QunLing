@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import json
 import secrets
 import time
 
@@ -25,6 +26,11 @@ class QueryContext:
     counts: dict = field(default_factory=dict)
     images: dict = field(default_factory=dict)
     files: dict = field(default_factory=dict)
+    pages: dict = field(default_factory=dict)
+    page_urls: dict = field(default_factory=dict)
+    page_failures: dict = field(default_factory=dict)
+    read_urls: set = field(default_factory=set)
+    page_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     file_delivery: dict = field(default_factory=dict)
     delivery: str | None = None
     active: int = 0
@@ -33,7 +39,8 @@ class QueryContext:
     def claim(self, action, limit):
         count = self.counts.get(action, 0)
         if count >= limit:
-            raise WebError("本轮该工具已达到调用上限，请使用已有结果；不要重复调用。")
+            raise WebError("本轮该工具已达到调用上限，请使用已有结果；不要重复调用。",
+                           code="tool_budget_exhausted", next_action="use_existing_evidence")
         self.counts[action] = count + 1
 
 
@@ -94,8 +101,20 @@ class QueryStore:
             for collection in (c.images, c.files)
             for value in collection.values()
         )
+        size += sum(
+            len(json.dumps(page, ensure_ascii=False).encode("utf-8"))
+            for context in self.entries.values() for page in context.pages.values()
+        )
         if size + added > MAX_BYTES:
             raise WebError("临时文件或图片缓存已满，请稍后重新提问。")
+
+    def remember_page(self, context, url, page):
+        self.reserve_bytes(len(json.dumps(page, ensure_ascii=False).encode("utf-8")))
+        ref = "webpage_" + secrets.token_urlsafe(12)
+        context.pages[ref] = page
+        context.page_urls[url] = ref
+        context.page_urls[page["url"]] = ref
+        return ref
 
     def remember_file(self, context, item):
         for ref, existing in context.files.items():

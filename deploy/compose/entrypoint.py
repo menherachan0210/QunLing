@@ -38,7 +38,11 @@ def main(argv=None):
         os.chdir(ROOT / "langbot")
         # Both Host and its automatically managed stdio Runtime use this cwd.
         # Do not pass --standalone-runtime or publish Runtime transport ports.
-        os.execv(sys.executable, [sys.executable, "-u", "main.py"])
+        os.environ.setdefault("QUNLING_DATA_DIR", str(ROOT / "langbot/data/qunling"))
+        os.execv(
+            sys.executable,
+            [sys.executable, "-u", str(ROOT / "scripts/Run-LangBot.py")],
+        )
     os.execv(sys.executable, [sys.executable, "-u", "-m", "bootstrap.server"])
 
 

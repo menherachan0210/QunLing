@@ -6,8 +6,8 @@ metadata:
     en_US: Download public attachment
     zh_Hans: 下载公开文件
   description:
-    en_US: Download a public file of at most 20 MiB into a temporary query cache and return a file_ref.
-    zh_Hans: 下载最多20 MiB的公开文件，返回本轮附件编号，尚不发送。
+    en_US: Download a public file of at most 20 MiB; return file_ref and an asset_ref when shared storage is available.
+    zh_Hans: 下载最多20 MiB的公开文件，返回附件编号；可用时同时登记共享文件引用，尚不发送。
 spec:
   parameters:
     type: object
@@ -28,6 +28,8 @@ spec:
     Limit is 20 MiB per file, regardless of type.
     Preserve the correct original file extension. A webpage, login screen or GitHub directory is not the requested attachment.
     Downloading returns file_ref and verified byte count/hash; it does not send or execute the file or inspect archive contents.
+    When asset_ref is returned, pass it to the attachment tools to read or transform supported documents.
+    shared_asset_unavailable means shared parsing is unavailable for this download; the file_ref still supports sending.
     If the user asked to upload/send it, continue with send_web_file. Do not merely provide a link after a successful download.
     Errors must be stated truthfully. Do not disguise mismatched content with another extension or retry to evade limits.
 execution:

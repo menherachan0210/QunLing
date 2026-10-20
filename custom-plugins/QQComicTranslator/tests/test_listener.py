@@ -283,6 +283,27 @@ async def test_unavailable_context_is_truthful_without_leaking_attachment_metada
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chain",
+    [
+        [message.Image(url="https://private-image.invalid/image.png")],
+        [private_file(name="private-page.png")],
+    ],
+)
+async def test_image_prompt_does_not_request_user_to_package_archive(env, chain):
+    await capture(env, chain)
+    ctx = prompt_context()
+    await env.listener.inject_prompt(ctx)
+    guidance = ctx.event.default_prompt[-1].content
+    assert "file_workspace" in guidance
+    assert "start_comic_from_assets" in guidance
+    assert "无需" in guidance
+    assert "请发送或引用 ZIP" not in guidance
+    assert "请重新发送" not in guidance
+    assert_private(env, ctx.event.default_prompt)
+
+
+@pytest.mark.asyncio
 async def test_expired_recent_token_replaces_old_available_prompt(env):
     await capture(env, [private_file()])
     await capture(env)

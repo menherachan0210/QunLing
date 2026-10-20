@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: send_attachment
+  label:
+    en_US: Send a registered attachment
+    zh_Hans: 发送已登记附件
+  description:
+    en_US: Deliver a downloaded or generated asset to this chat with duplicate protection.
+    zh_Hans: 将已下载或生成的文件实际发送到当前聊天，保护发送幂等。
+spec:
+  parameters:
+    type: object
+    required: [asset_ref]
+    properties:
+      asset_ref:
+        type: string
+        description: file_workspace、file_task 或 download_web_file 返回的 asset_ref。
+    additionalProperties: false
+  llm_prompt: |
+    Use when the user requests a file or delivery of the result. Accept only an
+    actual asset_ref returned by file tools, not URLs, local paths or recipients.
+    It sends the real file into the current chat. Only status=sent confirms success.
+    A delivery_unconfirmed result means QQ may have accepted it: do not retry the
+    same upload automatically or claim success. Ask the user to check receipt if
+    needed. A file already sent in this request returns already_sent=true.
+execution:
+  python:
+    path: send_attachment.py
+    attr: SendAttachment

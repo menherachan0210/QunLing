@@ -67,6 +67,9 @@ class QueryContext:
     vision_used: bool = False
     vision_inflight: bool = False
     image_read_attempts: int = 0
+    import_attempts: int = 0
+    import_inflight: bool = False
+    imported_assets: dict[str, dict] = field(default_factory=dict)
     active: bool = False
     history_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 

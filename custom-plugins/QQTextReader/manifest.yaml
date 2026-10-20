@@ -3,13 +3,13 @@ kind: Plugin
 metadata:
   author: local
   name: QQTextReader
-  version: 0.1.0
+  version: 0.2.0
   description:
-    en_US: Read bounded TXT attachments in the same QQ conversation without a sandbox.
-    zh_Hans: 无需沙箱，安全读取同一 QQ 会话中用户上传的有界 TXT 附件。
+    en_US: Scoped document reading, archive navigation, durable processing and file delivery.
+    zh_Hans: 统一附件阅读、压缩包导航、持久文件处理与可靠回传。
   label:
-    en_US: QQ TXT Reader
-    zh_Hans: QQ TXT 阅读器
+    en_US: QQ File Workspace
+    zh_Hans: QQ 文件工作区
   icon: assets/icon.svg
 spec:
   config: []

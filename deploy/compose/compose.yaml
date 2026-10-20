@@ -35,6 +35,7 @@ services:
       API__PORT: "5300"
       BOX__ENABLED: "false"
       LANGBOT_PLUGIN_RUNTIME_TRANSPORT: stdio
+      QUNLING_DATA_DIR: /opt/qq-ai-bot/langbot/data/qunling
       ANONYMIZED_TELEMETRY: "False"
     ports:
       - "127.0.0.1:5300:5300"

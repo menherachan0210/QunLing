@@ -28,5 +28,33 @@
     "source": "Official 7-Zip 26.04 archive installed by scripts/Setup-ArchiveTools.py (download and SHA-256 pinned there)",
     "upstream": "https://github.com/ip7z/7zip/releases/tag/26.04",
     "sha256": "1790374e5352329cedb46ee3808930a88e9ca2f08b82b10fcf5cf605d2c301b1"
+  },
+  {
+    "file": "pypdf-6.21.1-LICENSE.txt",
+    "source": "Installed pypdf==6.21.1 distribution: pypdf-6.21.1.dist-info/licenses/LICENSE",
+    "upstream": "https://pypi.org/project/pypdf/6.21.1/",
+    "retrieved_on": "2026-10-20",
+    "sha256": "a97ac230e5f33ef10a5367a850eb01f91f1a0b064e34742c7794d2294557f524"
+  },
+  {
+    "file": "python-docx-1.2.0-LICENSE.txt",
+    "source": "Installed python-docx==1.2.0 distribution: python_docx-1.2.0.dist-info/licenses/LICENSE",
+    "upstream": "https://pypi.org/project/python-docx/1.2.0/",
+    "retrieved_on": "2026-10-20",
+    "sha256": "7652f271e46d0d533e9dc463f3b5fcbdcacf4d6a9c8d6b554d15efd0f37f6132"
+  },
+  {
+    "file": "openpyxl-3.1.5-LICENSE.txt",
+    "source": "Installed openpyxl==3.1.5 distribution: openpyxl-3.1.5.dist-info/LICENCE.rst",
+    "upstream": "https://pypi.org/project/openpyxl/3.1.5/",
+    "retrieved_on": "2026-10-20",
+    "sha256": "0c84bb42f5d367e5ebf9fc2dde35b16141df5ee0fdc189250858bc6c5560f69e"
+  },
+  {
+    "file": "python-pptx-1.0.2-LICENSE.txt",
+    "source": "Installed python-pptx==1.0.2 distribution: python_pptx-1.0.2.dist-info/LICENSE",
+    "upstream": "https://pypi.org/project/python-pptx/1.0.2/",
+    "retrieved_on": "2026-10-20",
+    "sha256": "7652f271e46d0d533e9dc463f3b5fcbdcacf4d6a9c8d6b554d15efd0f37f6132"
   }
 ]

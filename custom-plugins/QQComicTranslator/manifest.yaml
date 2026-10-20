@@ -3,13 +3,13 @@ kind: Plugin
 metadata:
   author: local
   name: QQComicTranslator
-  version: 0.2.0
+  version: 0.3.0
   label:
-    en_US: Archived Comics to LabelPlus
-    zh_Hans: 压缩包漫画翻译与 LabelPlus 导出
+    en_US: Comic Images and Archives to LabelPlus
+    zh_Hans: 漫画图片与压缩包翻译、LabelPlus 导出
   description:
-    en_US: Translate ZIP, RAR and 7z comic images in the background with LabelPlus TXT delivery.
-    zh_Hans: 后台翻译 ZIP、RAR、7z 漫画图片，记录文字位置并回传 LabelPlus TXT。
+    en_US: Translate single/multiple image assets or ZIP, RAR and 7z comics with LabelPlus TXT delivery.
+    zh_Hans: 后台翻译单图、多图或 ZIP、RAR、7z 漫画，保留文件名与文字位置并回传 LabelPlus TXT。
   icon: assets/icon.svg
 spec:
   config:

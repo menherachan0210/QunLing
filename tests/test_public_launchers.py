@@ -468,5 +468,9 @@ def test_native_linux_entrypoint_keeps_original_app_directory(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
+    assert len(lines) == 5
     assert lines[0].endswith("/legacy project with spaces/langbot")
-    assert lines[1:] == ["-u", "main.py"]
+    assert lines[1].endswith("/legacy project with spaces/scripts/Setup-FileRuntime.py")
+    assert lines[2] == lines[0]
+    assert lines[3] == "-u"
+    assert lines[4].endswith("/legacy project with spaces/scripts/Run-LangBot.py")
