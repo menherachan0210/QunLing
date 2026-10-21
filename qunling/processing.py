@@ -15,10 +15,10 @@ from qunling.assets import AssetError, AssetStore, safe_name
 from qunling.scope import Scope
 
 OPERATIONS = {
-    "inspect": ({"asset_ref"}, {"asset_ref"}),
-    "read": ({"asset_ref", "selector"}, {"asset_ref"}),
-    "search": ({"asset_ref", "query", "selector", "limit"}, {"asset_ref", "query"}),
-    "extract": ({"asset_ref", "member", "filename"}, {"asset_ref", "member"}),
+    "inspect": ({"asset_ref", "password"}, {"asset_ref"}),
+    "read": ({"asset_ref", "selector", "password"}, {"asset_ref"}),
+    "search": ({"asset_ref", "query", "selector", "limit", "password"}, {"asset_ref", "query"}),
+    "extract": ({"asset_ref", "member", "filename", "password"}, {"asset_ref", "member"}),
     "create": ({"format", "payload", "filename"}, {"format", "payload", "filename"}),
 }
 
@@ -29,6 +29,16 @@ def validate_operation(operation, args):
     allowed, required = OPERATIONS[operation]
     if set(args) - allowed or required - set(args):
         raise AssetError("invalid_parameters", "文件操作参数不完整或含不支持的字段。")
+    if "password" in args:
+        password = args["password"]
+        try:
+            password_size = len(password.encode("utf-8")) if isinstance(password, str) else 0
+        except UnicodeError:
+            password_size = 1025
+        if (not isinstance(password, str) or not password
+                or any(c in password for c in "\r\n\x00")
+                or password_size > 1024):
+            raise AssetError("invalid_parameters", "压缩包密码应为不含换行或空字符的字符串，最多 1024 字节。")
     try:
         raw = json.dumps(args, ensure_ascii=False, allow_nan=False).encode()
     except (ValueError, TypeError, RecursionError):
@@ -46,9 +56,12 @@ def validate_operation(operation, args):
 async def run_operation(store: AssetStore, scope: Scope, operation: str, args: dict) -> dict:
     validate_operation(operation, args)
     args = dict(args)
+    password = args.pop("password", None)
     with tempfile.TemporaryDirectory(prefix="qunling-file-") as temporary:
         root = Path(temporary)
         request = {"operation": operation, "args": args}
+        if password is not None:
+            request["password_supplied"] = True
         if operation != "create":
             item = store.get(scope, args["asset_ref"])
             # Prefix prevents collision with fixed protocol filenames.
@@ -78,12 +91,20 @@ async def run_operation(store: AssetStore, scope: Scope, operation: str, args: d
         options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
         process = await asyncio.create_subprocess_exec(
             sys.executable, "-I", str(Path(__file__).with_name("_process_worker.py")),
-            cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            cwd=root, env=env, stdin=subprocess.PIPE if password is not None else subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, **options,
         )
         try:
             async with asyncio.timeout(65):
-                await process.wait()
+                # Passwords travel only over the private child pipe, never in
+                # argv, environment, request.json or the durable job ledger.
+                secret_input = (json.dumps({"password": password}, ensure_ascii=False).encode()
+                                if password is not None else None)
+                if password is None:
+                    await process.wait()
+                else:
+                    await process.communicate(secret_input)
         except BaseException:
             if process.returncode is None:
                 if os.name == "nt":

@@ -52,9 +52,15 @@ ZIP/RAR/7z 混合内容目录和成员读取。图片只识别容器头并声明
 - DOCX 不提取页眉、脚注；PPTX 不解析图片、图表、备注。结果带明确提示。
 - XLSX 公式与缓存值分开返回，缓存可能缺失或过时；不计算公式。
 - 不执行宏、嵌入程序、源代码，不跟随 Office 外部关系。
-- 加密/分卷/自解压压缩包、ZIP64、非 Store/Deflate ZIP 暂不支持。
+- ZIP（ZipCrypto/AES）、RAR、7z 支持使用用户提供的密码读取，不猜测或破解密码。
+  `inspect_file`、`read_file`、`search_file`、`read_archive_member` 均接受单独的
+  `password=` 参数；密码不包含在返回的清单、分页选择器或异常消息中。
+  密码只在内存和受限解码进程的标准输入间传递，不写入临时文件、命令行或环境变量。
+  后续调用需再次传入密码。缺少密码返回 `archive_password_required`；密码错误或
+  加密数据损坏返回 `archive_password_invalid`，可更正密码后重试。
+- 分卷/自解压压缩包、ZIP64、非 Store/Deflate ZIP 暂不支持。加密 PDF/Office 不在本次支持范围内。
 - 解析依赖为 `pypdf`、`python-docx`、`openpyxl`、`python-pptx`；
-  RAR/7z 需要完整 `7zz`/`7z`。依赖缺失返回 `dependency_missing`。
+  RAR/7z/AES ZIP 需要完整 `7zz`/`7z`。依赖缺失返回 `dependency_missing`。
 
 ## 导出约定
 

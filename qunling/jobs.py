@@ -107,6 +107,8 @@ class JobService:
 
     def submit(self, scope: Scope, operation: str, args: dict, request_key: str) -> dict:
         validate_operation(operation, args)
+        if "password" in args:
+            raise AssetError("ephemeral_input_required", "带密码的压缩包操作应使用即时处理，不写入持久任务。")
         self.prune()
         if not isinstance(request_key, str) or not 1 <= len(request_key) <= 256:
             raise AssetError("invalid_request", "任务请求编号无效。")

@@ -1,4 +1,4 @@
-# Adapted unchanged from QQComicTranslator: apply OS limits before native decoding.
+# Apply OS limits before native decoding; pass transient credentials via stdin.
 import os
 import subprocess
 import sys
@@ -39,8 +39,8 @@ try:
             os._exit(125)
         if not kernel.AssignProcessToJobObject(job, kernel.GetCurrentProcess()):
             os._exit(125)
-        result = subprocess.run(command, shell=False, stdin=subprocess.DEVNULL,
-            stdout=sys.stdout.buffer, stderr=subprocess.DEVNULL,
+        result = subprocess.run(command, shell=False, stdin=sys.stdin.buffer,
+            stdout=sys.stdout.buffer, stderr=sys.stderr.buffer,
             creationflags=subprocess.CREATE_NO_WINDOW, close_fds=True)
         os._exit(result.returncode if 0 <= result.returncode <= 255 else 124)
     else:

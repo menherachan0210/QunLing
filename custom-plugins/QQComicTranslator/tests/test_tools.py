@@ -93,3 +93,44 @@ async def test_incomplete_download_never_starts(env):
     capture(File(name="fixture.zip", size=20, base64=base64.b64encode(b"x").decode()))
     result = json.loads(await tools.execute(tool, "start", {}, 1, None))
     assert result["status"] == "error" and not operations
+
+
+@pytest.mark.asyncio
+async def test_start_and_password_only_resume_forward_password_without_echo(env):
+    tool, capture, operations = env
+    secret = "synthetic-private-value"
+    raw = b"synthetic encrypted transport placeholder"
+    capture(File(name="fixture.zip", size=len(raw), base64=base64.b64encode(raw).decode()))
+
+    async def begin(session, attachment, received, model, *, password):
+        assert password == secret and received == raw
+        operations.append(("password-start", session.sender_id))
+        return {"status": "awaiting_password"}
+
+    async def resume(session, action, query_api, *, password):
+        assert password == secret and action == "resume"
+        operations.append(("password-resume", session.sender_id))
+        return {"status": "queued"}
+
+    tool.plugin.jobs.start = begin
+    tool.plugin.jobs.operate = resume
+    result = await tools.execute(tool, "start", {"password": secret}, 1, None)
+    assert json.loads(result)["status"] == "awaiting_password" and secret not in result
+    capture()  # The user's subsequent password-only request has no file attached.
+    result = await tools.execute(tool, "resume", {"password": secret}, 2, None)
+    assert json.loads(result)["status"] == "queued" and secret not in result
+    assert operations == [("password-start", "456"), ("password-resume", "456")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action, params", [
+    ("status", {"password": "unneeded"}),
+    ("start", {"password": True}),
+    ("resume", {"password": "x\ny"}),
+    ("resume", {"password": "value", "sender_id": "other"}),
+])
+async def test_bad_password_arguments_cannot_reach_task_manager(env, action, params):
+    tool, capture, operations = env
+    capture()
+    result = json.loads(await tools.execute(tool, action, params, 1, None))
+    assert result["status"] == "error" and not operations

@@ -11,6 +11,7 @@ from qunling.inbox import Inbox
 from qunling.integration import query_context
 from qunling.jobs import JobService
 from qunling.net_errors import NetworkError
+from qunling.processing import run_operation, validate_operation
 from qunling.scope import Scope
 from qunling.transfers import import_attachment, send_attachment
 
@@ -78,7 +79,7 @@ async def workspace(plugin, api, context, scope, store, params):
         store.require_visible(scope, args["asset_ref"], context)
         store.delete(scope, args["asset_ref"])
         return {"status": "deleted"}
-    jobs = JobService(data_root())
+    validate_operation(operation, args)
     if isinstance(args, dict):
         if "asset_ref" in args:
             store.require_visible(scope, args["asset_ref"], context)
@@ -89,6 +90,32 @@ async def workspace(plugin, api, context, scope, store, params):
                 for entry in entries:
                     if isinstance(entry, dict) and "asset_ref" in entry:
                         store.require_visible(scope, entry["asset_ref"], context)
+    if "password" in args:
+        # Encrypted inputs retain the same bounded parser and visibility rules,
+        # but credentials must not enter durable payloads or task snapshots.
+        try:
+            result = await run_operation(store, scope, operation, args)
+        except TimeoutError:
+            raise AssetError("processing_timeout", "密码解压操作超时并已停止，没有创建后台任务；可用同一文件和密码重试。") from None
+        for ref in result.get("result_refs", []):
+            store.grant(scope, context["request_key"], ref)
+        if deliver:
+            ref = result["result_refs"][0]
+            try:
+                # Leave time within call_tool's total budget to return the
+                # already-created artifact even if the QQ receipt is slow.
+                async with asyncio.timeout(20):
+                    delivery = await send_attachment(store, scope, context, api, ref)
+            except (AssetError, TimeoutError) as error:
+                uncertain = isinstance(error, TimeoutError) or error.code == "delivery_unconfirmed"
+                return {**result, "status": "partial", "delivery_status": "unconfirmed" if uncertain else "failed",
+                        "delivery": {"status": "unconfirmed" if uncertain else "failed",
+                                     "error_code": "delivery_unconfirmed" if uncertain else error.code},
+                        "next_step": ("文件已提取并保留，但 QQ 回执未确认。请先核对是否收到，不要自动重复发送。"
+                                      if uncertain else "文件已提取并保留，发送失败；说明交付错误并保留返回的 asset_ref。")}
+            result = {**result, "delivery_status": delivery["status"], "delivery": delivery}
+        return result
+    jobs = JobService(data_root())
     submitted = jobs.submit(scope, operation, args, context["request_key"])
     task_id = submitted.get("task_id", submitted.get("id"))
     if deliver:
@@ -157,6 +184,10 @@ async def call_tool(tool, name, params, query_id, query_uuid):
             }
         return _result(result)
     except TimeoutError:
+        if (name == "file_workspace" and isinstance(params, dict)
+                and isinstance(params.get("arguments"), dict) and "password" in params["arguments"]):
+            return _result({"status": "error", "error_code": "processing_timeout",
+                            "error": "密码操作等待超时，没有创建后台任务。请先核对附件是否已送达，再决定重试。"})
         return _result({"status": "error", "error_code": "timeout",
                         "error": "本次等待超时；已提交的任务可用 file_task 查询，请勿重复提交或发送。"})
     except Exception:

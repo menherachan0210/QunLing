@@ -130,7 +130,9 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("host-persisted-plugin-installations.patch", "host", False) in patcher.PATCHES
     assert ("sdk-tool-provenance.patch", "sdk", False) in patcher.PATCHES
     assert ("file-outbox-host.patch", "host", False) in patcher.PATCHES
-    assert len(names) == 16
+    assert ("sdk-qunling-worker-storage.patch", "sdk", False) in patcher.PATCHES
+    assert ("host-tool-password-redaction.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 18
 
 
 def test_all_bundled_patches_have_supported_runtime_blocks():

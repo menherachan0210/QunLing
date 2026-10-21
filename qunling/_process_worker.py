@@ -71,18 +71,25 @@ def main():
         raise ValueError
     request = json.loads(raw)
     operation, args = request["operation"], request["args"]
+    password = None
+    if request.get("password_supplied"):
+        secret_input = sys.stdin.buffer.read(8193)
+        if len(secret_input) > 8192:
+            raise FileError("invalid_parameters", "密码输入超过限制。")
+        password = json.loads(secret_input)["password"]
     if operation == "create":
         result = export_file(args["format"], args["payload"], root / "output")
     else:
         source = root / safe_name(request["input_name"])
         if operation == "inspect":
-            result = inspect_file(source)
+            result = inspect_file(source, password=password)
         elif operation == "read":
-            result = read_file(source, args.get("selector"))
+            result = read_file(source, args.get("selector"), password=password)
         elif operation == "search":
-            result = search_file(source, args["query"], args.get("selector"), limit=args.get("limit", 20))
+            result = search_file(source, args["query"], args.get("selector"),
+                                 limit=args.get("limit", 20), password=password)
         elif operation == "extract":
-            content = read_archive_member(source, args["member"])
+            content = read_archive_member(source, args["member"], password=password)
             (root / "output").write_bytes(content)
             result = {"size": len(content)}
         else:

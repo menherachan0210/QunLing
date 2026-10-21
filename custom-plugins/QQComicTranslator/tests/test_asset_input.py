@@ -336,5 +336,5 @@ def test_tool_schema_contains_no_model_supplied_paths_or_destinations():
     schema = yaml.safe_load(
         (Path(__file__).parents[1] / "components/tools/start_comic_from_assets.yaml").read_text("utf-8")
     )["spec"]["parameters"]
-    assert set(schema["properties"]) == {"asset_refs"}
+    assert set(schema["properties"]) == {"asset_refs", "password"}
     assert schema["additionalProperties"] is False and schema["required"] == ["asset_refs"]

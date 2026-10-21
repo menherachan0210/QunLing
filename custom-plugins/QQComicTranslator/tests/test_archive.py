@@ -124,7 +124,7 @@ def test_symbolic_link_and_encryption_rejected():
     central = raw.index(b"PK\x01\x02")
     flags = struct.unpack_from("<H", raw, central + 8)[0]
     struct.pack_into("<H", raw, central + 8, flags | 1)
-    with pytest.raises(archive.ArchiveError, match="加密"):
+    with pytest.raises(archive.ArchivePasswordError, match="密码"):
         archive.open_archive(bytes(raw))
 
 
@@ -552,6 +552,58 @@ def test_real_solid_7z_with_option_like_member_names(seven_zip, tmp_path):
             "page10.png",
         ]
         assert all(comic.prepare_page(i).width == 8 for i in range(5))
+
+
+@pytest.mark.parametrize("kind, switches", [
+    ("zip", ["-mem=ZipCrypto"]), ("zip", ["-mem=AES256"]),
+    ("7z", ["-mhe=on"]), ("7z", ["-mhe=off"]),
+])
+def test_real_encrypted_archive_passwords_and_private_stdin(seven_zip, tmp_path, monkeypatch, kind, switches):
+    # 7-Zip's ZIP writer only accepts ASCII passwords; 7z also covers UTF-8 stdin.
+    secret = "synthetic zip !@" if kind == "zip" else "synthetic 密码 !@"
+    (tmp_path / "page.png").write_bytes(picture())
+    target = tmp_path / ("encrypted." + kind)
+    archive._run_limited(
+        [seven_zip, "a", "-t" + kind, "-p" + secret, "-mmt=1", *switches, "--", str(target), "page.png"],
+        str(tmp_path), 16384,
+    )
+    raw = target.read_bytes()
+    with pytest.raises(archive.ArchivePasswordError) as missing:
+        archive.open_archive(raw, seven_zip)
+    assert missing.value.code == "archive_password_required"
+    with pytest.raises(archive.ArchivePasswordError) as invalid:
+        archive.open_archive(raw, seven_zip, password="wrong synthetic")
+    assert invalid.value.code == "archive_password_invalid"
+    original = archive._run_limited
+    calls = []
+
+    def inspect(command, cwd, limit, **kwargs):
+        assert all(secret not in arg for arg in command)
+        calls.append(kwargs.get("password"))
+        return original(command, cwd, limit, **kwargs)
+
+    monkeypatch.setattr(archive, "_run_limited", inspect)
+    with archive.open_archive(raw, seven_zip, password=secret) as comic:
+        assert comic.prepare_page(0).width == 8
+        if hasattr(comic, "_temporary"):
+            temp = Path(comic._temporary.name)
+            assert [path.name for path in temp.iterdir()] == ["archive.bin"]
+    assert comic._password is None
+    assert secret not in str(missing.value) and secret not in str(invalid.value)
+    if kind == "7z" or "-mem=AES256" in switches:
+        assert calls and all(value == secret for value in calls)
+
+
+@pytest.mark.parametrize("password", ["", "line\nbreak", "carriage\rreturn", "null\x00value", "x" * 1025, True, 123])
+def test_invalid_password_rejected_without_revealing_value(password):
+    with pytest.raises(archive.ArchiveError, match="密码"):
+        archive.open_archive(zip_bytes([("a.png", picture())]), password=password)
+
+
+def test_corrupt_native_input_is_not_misdiagnosed_as_missing_password(seven_zip):
+    with pytest.raises(archive.ArchiveError) as error:
+        archive.open_archive(b"7z\xbc\xaf\x27\x1c" + b"corrupt" * 20, seven_zip)
+    assert not isinstance(error.value, archive.ArchivePasswordError)
 
 
 # Synthetic 8x4 white PNGs, encoded offline as solid RAR4/RAR5.

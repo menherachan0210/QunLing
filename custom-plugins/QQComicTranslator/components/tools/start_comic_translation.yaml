@@ -11,11 +11,16 @@ metadata:
 spec:
   parameters:
     type: object
-    properties: {}
+    properties:
+      password:
+        type: string
+        minLength: 1
+        maxLength: 1024
+        description: Password explicitly provided by the user for this archive; never guess or echo it.
     additionalProperties: false
   llm_prompt: |
-    Start translation of a current, quoted, or recent ZIP, RAR or 7z comic archive (CBZ/CBR aliases supported) into Simplified Chinese LabelPlus TXT. Use only when the user explicitly requests translation of the archive images. This starts a bounded background job and returns promptly; it is NOT completion. No fixed trigger phrase. Do not use for generating/editing images or reading TXT. The tool resolves sender/conversation/files itself. Completed pages are checkpointed. A finished job will send a real TXT file automatically. Do not invent links, claim completion from queued/running, or repeatedly call start. A same-archive task is deduplicated; use resume only if the user asks to continue/retry. 40 MiB archive, 100 image pages maximum. Password-protected, multipart and self-extracting executables are unsupported.
-    Call with {} only; never pass URLs, paths, identities, recipients, or file IDs.
+    Start translation of a current, quoted, or recent ZIP, RAR or 7z comic archive (CBZ/CBR aliases supported) into Simplified Chinese LabelPlus TXT. Use only when the user explicitly requests translation of the archive images. This starts a bounded background job and returns promptly; it is NOT completion. No fixed trigger phrase. Do not use for generating/editing images or reading TXT. The tool resolves sender/conversation/files itself. Completed pages are checkpointed. A finished job will send a real TXT file automatically. Do not invent links, claim completion from queued/running, or repeatedly call start. A same-archive task is deduplicated. 40 MiB archive, 100 image pages maximum. Encrypted ZIP (ZipCrypto/AES), RAR and 7z are supported with the user's password. Multipart and self-extracting executables are unsupported.
+    Call with {} or {password: user-provided-password}; never pass URLs, paths, identities, recipients, or file IDs. When awaiting_password, the original encrypted bytes are retained. Ask for the password; once supplied use resume_comic_translation with password without asking for reupload or another confirmation. Never repeat the password in replies.
 execution:
   python:
     path: start_comic_translation.py

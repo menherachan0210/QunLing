@@ -98,10 +98,12 @@ def office_preflight(archive: ZipArchive, limits: FileLimits):
     return sorted(warnings)
 
 
-def detect(raw: bytes, name: str, limits: FileLimits):
+def detect(raw: bytes, name: str, limits: FileLimits, *, password: str | None = None):
     kind = archive_type(raw)
     if kind == "zip":
-        archive = ZipArchive(raw, limits)
+        archive = ZipArchive(raw, limits, password=password)
+        if archive.encrypted:
+            return "zip", [], archive
         names = {item["path"] for item in archive.entries}
         office = [fmt for fmt, marker in (
             ("docx", "word/document.xml"), ("xlsx", "xl/workbook.xml"),
@@ -175,7 +177,7 @@ def _cell_value(value):
     raise FileError("unsupported_cell", "工作表中存在无法转换为标准数据的单元格。")
 
 
-def parse(raw, fmt, limits: FileLimits, archive=None):
+def parse(raw, fmt, limits: FileLimits, archive=None, *, password: str | None = None):
     """Return sections and extra warnings. No links/macros/formulas execute."""
     warnings = []
     if fmt in {"txt", "md", "source", "json"}:
@@ -198,7 +200,7 @@ def parse(raw, fmt, limits: FileLimits, archive=None):
         return _checked([{"id": "table:1", "title": "数据表", "rows": rows,
                           "encoding": encoding}], limits), warnings
     if fmt in {"zip", "rar", "7z"}:
-        opened = archive or open_archive(raw, limits)
+        opened = archive or open_archive(raw, limits, password=password)
         return [{"id": "archive:1", "title": "压缩包目录", "entries": opened.entries}], warnings
     if fmt in {"png", "jpeg", "gif", "webp"}:
         return [{"id": "image:1", "title": "图片", "needs_vision": True}], warnings

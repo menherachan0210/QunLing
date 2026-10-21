@@ -4,16 +4,19 @@ from __future__ import annotations
 import asyncio
 import base64
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from langbot_plugin.api.entities.builtin.platform.message import File, MessageChain
 
 from qunling.assets import AssetError, AssetStore
 from qunling.capture import capture_message
+from qunling.delivery import HostDelivery
 from qunling.integration import CONTEXT_KEY, query_context
 from qunling.jobs import JobService
 from qunling.scope import Scope
@@ -87,6 +90,55 @@ async def test_upload_read_correct_export_and_send_real_bytes(env):
         assert base64.b64decode(sent[0].root[0].base64).decode() == "这份文档已完成校对。\n第二行。"
         assert (await send_attachment(env.store, env.scope, env.context, env.api, ref))["already_sent"]
         assert len(sent) == 1
+    finally:
+        stop.set()
+        await runner
+
+
+@pytest.mark.asyncio
+async def test_chinese_ranking_xlsx_is_generated_and_delivered_as_a_real_workbook(env):
+    """Cover tool -> isolated parser -> durable outbox, not just in-process export."""
+    library = pytest.importorskip("openpyxl")
+    source = SimpleNamespace(bot_uuid="bot", launcher_type="group", launcher_id="123456",
+                             sender_id="member", message_chain=MessageChain([]))
+    env.context = capture_message(env.plugin, source, "xlsx-query")
+    env.scope = Scope(**env.context["scope"])
+    rows = [["排名", "群友", "开工依据", "我的判断"],
+            [1, "示例甲", "提出“提取→处理→打包”流程", "有明确方案"],
+            [2, "示例乙", "核对卷数、更新情况\n并整理资料", "准备充分"],
+            [3, "=HYPERLINK(\"https://example.invalid\")", "这是名称文本", "保留原文"]]
+    jobs = JobService(env.root)
+    worker = jobs.worker()
+    stop = asyncio.Event()
+    runner = asyncio.create_task(worker.serve(stop))
+    try:
+        created = await env.module.workspace(env.plugin, env.api, env.context, env.scope, env.store, {
+            "operation": "create", "deliver": True,
+            "arguments": {"format": "xlsx", "filename": "群友排行榜.xlsx",
+                          "payload": {"sheets": [{"name": "排行榜", "rows": rows}]}},
+        })
+        assert created["status"] == "completed", created
+        assert created["delivery_status"] == "queued"
+        bot = SimpleNamespace(enable=True, adapter=SimpleNamespace(send_message=AsyncMock()))
+        ap = SimpleNamespace(workspace_service=SimpleNamespace(instance_uuid="instance"))
+        delivery = HostDelivery(ap, env.root, resolver=AsyncMock(return_value=bot))
+        assert await delivery.tick()
+        kind, chat, chain = bot.adapter.send_message.call_args.args
+        assert (kind, chat) == ("group", "123456")
+        attachment = chain.root[0]
+        assert attachment.name == "群友排行榜.xlsx"
+        raw = base64.b64decode(attachment.base64)
+        assert raw == env.store.read(env.scope, created["result_refs"][0])
+        workbook = library.load_workbook(io.BytesIO(raw), data_only=False)
+        try:
+            assert workbook.sheetnames == ["排行榜"]
+            assert list(workbook.active.values) == [tuple(row) for row in rows]
+            assert workbook.active["B4"].data_type == "s"
+        finally:
+            workbook.close()
+        assert jobs.snapshot(env.scope, created["task_id"])["delivery_status"] == "sent"
+        assert not await delivery.tick()
+        bot.adapter.send_message.assert_awaited_once()
     finally:
         stop.set()
         await runner

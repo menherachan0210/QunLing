@@ -25,6 +25,7 @@ SDK_PREFIX = ".venv/Lib/site-packages/"
 PATCHES = (
     ("host-managed-runtime-transport.patch", "host", False),
     ("host-persisted-plugin-installations.patch", "host", False),
+    ("host-tool-password-redaction.patch", "host", False),
     ("onebot-group-trigger.patch", "host", False),
     ("chroma-delete-count.patch", "host", False),
     ("onebot-image-vision.patch", "host", False),
@@ -39,6 +40,7 @@ PATCHES = (
     ("sdk-windows-dependency-temp.patch", "sdk", True),
     ("sdk-attachment-message-budget.patch", "sdk", False),
     ("sdk-tool-provenance.patch", "sdk", False),
+    ("sdk-qunling-worker-storage.patch", "sdk", False),
 )
 
 

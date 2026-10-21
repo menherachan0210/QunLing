@@ -1,6 +1,5 @@
 """Synthetic attachment and artifact tests; no QQ, network or model calls."""
 
-import io
 import json
 import os
 import shutil
@@ -266,7 +265,7 @@ def test_real_7z_mixed_archive_when_decoder_available(tmp_path):
     ("test_read_format_rar5_stored.rar", None),
     ("test_read_format_rar5_symlink.rar", "unsafe_member"),
     ("test_read_format_rar5_hardlink.rar", "unsafe_member"),
-    ("test_read_format_rar5_encrypted.rar", "encrypted_file"),
+    ("test_read_format_rar5_encrypted.rar", "archive_password_required"),
 ])
 def test_optional_native_rar_fixtures(filename, code):
     directory = os.environ.get("QUNLING_TEST_ARCHIVES")

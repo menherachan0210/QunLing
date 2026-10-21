@@ -13,25 +13,25 @@ _SELECTORS = {"section", "page", "sheet", "offset", "limit", "text_offset", "mem
               "column_offset", "column_limit", "cell"}
 
 
-def _document(path, limits, member=None):
+def _document(path, limits, member=None, *, password=None):
     raw = load_bytes(path, limits)
     name = Path(path).name
     if member is not None:
         if not isinstance(member, str):
             raise FileError("invalid_selector", "压缩包成员名称必须为字符串。")
-        raw = open_archive(raw, limits).read(member)
+        raw = open_archive(raw, limits, password=password).read(member)
         name = member
-    fmt, warnings, archive = detect(raw, name, limits)
-    sections, extra = parse(raw, fmt, limits, archive)
+    fmt, warnings, archive = detect(raw, name, limits, password=password)
+    sections, extra = parse(raw, fmt, limits, archive, password=password)
     return fmt, sorted(set(warnings + extra)), sections
 
 
-def inspect_file(path, *, limits: FileLimits = DEFAULT_LIMITS):
+def inspect_file(path, *, password: str | None = None, limits: FileLimits = DEFAULT_LIMITS):
     raw = load_bytes(path, limits)
-    fmt, warnings, archive = detect(raw, Path(path).name, limits)
+    fmt, warnings, archive = detect(raw, Path(path).name, limits, password=password)
     structure, capabilities = [], ["transfer"]
     if fmt != "unknown":
-        sections, extra = parse(raw, fmt, limits, archive)
+        sections, extra = parse(raw, fmt, limits, archive, password=password)
         warnings = sorted(set(warnings + extra))
         for section in sections:
             item = {k: section[k] for k in ("id", "title", "page", "sheet", "needs_ocr",
@@ -63,15 +63,17 @@ def inspect_file(path, *, limits: FileLimits = DEFAULT_LIMITS):
             "needs_ocr": any(item.get("needs_ocr", False) for item in structure)}
 
 
-def read_archive_member(path, member: str, *, limits: FileLimits = DEFAULT_LIMITS) -> bytes:
+def read_archive_member(path, member: str, *, password: str | None = None,
+                        limits: FileLimits = DEFAULT_LIMITS) -> bytes:
     """Read one exact validated member; caller registers the returned child asset."""
-    return open_archive(load_bytes(path, limits), limits).read(member)
+    return open_archive(load_bytes(path, limits), limits, password=password).read(member)
 
 
-def read_file(path, selector=None, *, limits: FileLimits = DEFAULT_LIMITS):
+def read_file(path, selector=None, *, password: str | None = None,
+              limits: FileLimits = DEFAULT_LIMITS):
     selector = {} if selector is None else selector
     strict_keys(selector, _SELECTORS)
-    fmt, warnings, sections = _document(path, limits, selector.get("member"))
+    fmt, warnings, sections = _document(path, limits, selector.get("member"), password=password)
     offset = integer(selector.get("offset", 0))
     limit = integer(selector.get("limit", limits.max_page_items), 1, limits.max_page_items)
     text_offset = integer(selector.get("text_offset", 0), 0, limits.max_text_chars)
@@ -171,13 +173,13 @@ def read_file(path, selector=None, *, limits: FileLimits = DEFAULT_LIMITS):
 
 
 def search_file(path, query: str, selector=None, *, limit: int = 20,
-                limits: FileLimits = DEFAULT_LIMITS):
+                password: str | None = None, limits: FileLimits = DEFAULT_LIMITS):
     if not isinstance(query, str) or not query.strip() or len(query) > 256:
         raise FileError("invalid_query", "检索词必须为 1–256 个字符的非空文本。")
     integer(limit, 1, 100)
     selector = {} if selector is None else selector
     strict_keys(selector, {"section", "page", "sheet", "member"})
-    fmt, warnings, sections = _document(path, limits, selector.get("member"))
+    fmt, warnings, sections = _document(path, limits, selector.get("member"), password=password)
     hits, needle = [], query.casefold()
     more = False
     for section in sections:

@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   author: local
   name: QQComicTranslator
-  version: 0.3.0
+  version: 0.4.0
   label:
     en_US: Comic Images and Archives to LabelPlus
     zh_Hans: 漫画图片与压缩包翻译、LabelPlus 导出

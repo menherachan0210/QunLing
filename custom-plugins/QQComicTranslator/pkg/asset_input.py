@@ -30,8 +30,8 @@ class AssetInput:
 
 
 def asset_parameters(params) -> list[str]:
-    if not isinstance(params, dict) or set(params) != {"asset_refs"}:
-        raise ArchiveError("只接受 asset_refs，不接受路径、URL、文件ID或收件人。")
+    if not isinstance(params, dict) or "asset_refs" not in params or set(params) - {"asset_refs", "password"}:
+        raise ArchiveError("只接受 asset_refs 和可选 password，不接受路径、URL、文件ID或收件人。")
     refs = params["asset_refs"]
     if (
         not isinstance(refs, list) or not 1 <= len(refs) <= MAX_PAGES

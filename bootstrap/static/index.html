@@ -1,50 +1,111 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>QunLing 群灵 · 管理</title><link rel="stylesheet" href="/style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>QunLing 群灵 · 工作台</title>
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<main>
-  <header><span class="badge">QUNLING · 群灵</span><h1>接上 AI，登录 QQ。</h1><p>聊天、记忆、看图、改图、文件和联网工具，已为你准备好。</p></header>
-  <div id="status" role="status">正在连接设置服务…</div>
-  <section id="unlock" hidden><h2>打开专属设置链接</h2><p>重新运行启动命令，使用显示的专属链接访问此页。</p><label>设置令牌<input id="token" type="password" autocomplete="off"></label><button id="unlock-button">连接</button></section>
-  <div class="columns">
-  <section><h2><span>1</span> 填写 AI 服务</h2>
-    <form id="settings">
-      <label>API 地址<input name="base_url" type="url" placeholder="https://api.example.com/v1" required></label>
-      <label>API Key<input name="api_key" type="password" placeholder="只保存在自己的部署中" autocomplete="off"></label>
-      <label>聊天模型<input name="chat_model" placeholder="填写服务提供的准确模型名" required></label>
-      <label>图片生成 / 编辑模型<input name="image_model" placeholder="填写图片模型名" required></label>
-      <details><summary>历史图片、漫画和联网使用不同模型</summary>
-        <label>视觉模型<input name="vision_model" placeholder="留空使用聊天模型"></label>
-        <label>联网模型<input name="search_model" placeholder="留空使用聊天模型"></label>
-      </details>
-      <details open><summary>近期群聊范围</summary>
-        <label>最近多少小时<input name="group_context_hours" type="number" min="1" max="168" step="1" value="24" required></label>
-        <label>最多读取多少条消息<input name="group_context_max_messages" type="number" min="100" max="1000" step="1" value="1000" required></label>
-        <p class="note">默认回看最近 24 小时、最多 1000 条消息，文字和历史图片使用同一范围。仅用于近期群聊理解，不会建立永久聊天档案。</p>
-      </details>
-      <p class="note">聊天模型需支持工具调用和识图；生图/改图需 Images 接口，联网搜索需 Responses 的 web_search。各功能共用这里的地址和密钥。保存不会产生模型调用费用。</p>
-      <button id="save" disabled>保存并启用全部功能</button><p id="form-message" role="alert"></p>
-    </form>
-  </section>
-  <section><h2><span>2</span> 用 QQ 扫码登录</h2>
-    <div class="qr-frame"><img id="qr" alt="QQ 登录二维码" hidden><p id="qq-status">正在等待 QQ 登录服务…</p></div>
-    <button id="refresh" class="secondary">刷新二维码</button>
-    <p class="note">登录后自动连接，无需填写 WebSocket、Token 或群号。QQ 可能要求你在手机上确认新设备。</p>
-    <div id="ready" hidden><h3>可以开始聊了</h3><p>群聊中 <code>@机器人</code> 或以 <code>/ai</code> 开头；私聊直接发送。发图、发文件，再用自然语言说明想做什么。</p></div>
-    <details><summary>高级管理</summary><p><a href="http://127.0.0.1:5300/" target="_blank" rel="noreferrer">打开 LangBot 管理页</a></p><button id="admin" class="secondary">查看本地管理账号</button><pre id="admin-info"></pre></details>
-  </section>
+<svg class="icon-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z"/><path d="m20 2 .7 1.3L22 4l-1.3.7L20 6l-.7-1.3L18 4l1.3-.7L20 2Z"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H5l-3 2V11.5A8.5 8.5 0 0 1 10.5 3h2a8.5 8.5 0 0 1 8.5 8.5Z"/><path d="M7 10h9M7 14h6"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 6.1A8 8 0 0 1 19.5 9M4.5 15a8 8 0 0 0 13.4 2.9"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h5m4 0h7M4 17h9m4 0h3"/><circle cx="11" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6m0-6-9 9M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 4.5-8 9-8 9s-8-4.5-8-9V6l8-3Z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="m12 3 9 5v9l-9 5-9-5V8l9-5Zm0 10 9-5M12 13 3 8m9 5v9M7.5 5.5l9 5"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="8" r="5"/><path d="m11.5 11.5 9 9M17 17l3-3m-6 0 3-3"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/></symbol>
+</svg>
+<a class="skip-link" href="#overview">跳到工作台</a>
+<aside class="sidebar" aria-label="主导航">
+  <a class="brand" href="#overview" aria-label="QunLing 群灵工作台">
+    <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M23.8 21.4A10.2 10.2 0 1 0 16 26h10l-2.2-4.6Z"/><path d="m11 16 3 3 7-7"/></svg></span>
+    <span class="brand-name">QunLing<span>群灵 · 管理控制台</span></span>
+  </a>
+  <div class="nav-caption">管理空间</div>
+  <nav class="nav-links">
+    <a class="nav-link is-active" href="#overview"><svg class="icon"><use href="#i-grid"/></svg><span>工作台</span></a>
+    <a class="nav-link" href="#models"><svg class="icon"><use href="#i-spark"/></svg><span>AI 服务</span></a>
+    <a class="nav-link" href="#connection"><svg class="icon"><use href="#i-chat"/></svg><span>QQ 连接</span></a>
+    <a class="nav-link" href="#maintenance"><svg class="icon"><use href="#i-refresh"/></svg><span>版本维护</span></a>
+    <a class="nav-link" href="#advanced"><svg class="icon"><use href="#i-sliders"/></svg><span>高级管理</span></a>
+  </nav>
+  <div class="sidebar-bottom">
+    <div class="private-note"><svg class="icon"><use href="#i-shield"/></svg><div>你的 AI，你的空间<span>配置与数据保存在自己的部署中</span></div></div>
+    <div class="sidebar-state" data-tone="neutral"><span class="status-dot"></span><span id="sidebar-status">等待连接</span><span class="self-hosted">SELF HOSTED</span></div>
   </div>
-  <section class="updates" aria-labelledby="update-heading">
-    <div class="update-heading"><div><h2 id="update-heading">版本更新</h2><p class="note" id="update-source">正在读取部署版本…</p></div><span id="update-phase" class="phase">连接中</span></div>
-    <dl class="versions"><div><dt>当前版本</dt><dd><code id="current-revision">—</code></dd></div><div><dt>最新版本</dt><dd><code id="latest-revision">—</code></dd></div></dl>
-    <p id="update-message" role="status" aria-live="polite">正在连接更新服务…</p>
-    <p id="update-error" role="alert" hidden></p>
-    <div class="update-actions"><button id="check-update" class="secondary" disabled>检查更新</button><button id="apply-update" disabled>更新到此版本</button></div>
-    <p class="note">切换版本会短暂停机并中断正在进行的任务，建议空闲时更新。更新前自动备份配置和数据，验证失败时尝试回滚。</p>
+</aside>
+<main class="workspace">
+  <div class="connection-banner" id="status" role="status" aria-live="polite" data-tone="neutral">正在连接管理服务…</div>
+  <section class="unlock-card" id="unlock" hidden aria-labelledby="unlock-heading">
+    <div class="unlock-mark"><svg class="icon"><use href="#i-key"/></svg></div>
+    <p class="eyebrow">欢迎回到群灵</p><h1 id="unlock-heading">连接你的管理空间</h1>
+    <p class="unlock-description">使用启动命令显示的专属设置链接打开此页，或在下方输入设置令牌。</p>
+    <label class="field-label" for="token">设置令牌</label>
+    <input id="token" type="password" autocomplete="off" placeholder="输入专属链接中的设置令牌">
+    <button id="unlock-button" type="button">连接管理服务<svg class="icon"><use href="#i-arrow"/></svg></button>
+    <p class="note unlock-help">找不到链接？在项目目录运行 <code>bash bot.sh url</code>；Windows 双击 <code>Open-Bot.cmd</code>。</p>
   </section>
-  <footer>基于 LangBot 与 NapCat · 配置、记忆和 QQ 登录数据保存在自己的数据卷中。</footer>
-</main><script src="/app.js"></script>
-</body></html>
+  <div id="console-content" hidden>
+    <header class="page-header" id="overview">
+      <div><p class="eyebrow">QUNLING CONSOLE</p><h1>工作台<span class="heading-dot">.</span></h1><p class="page-description">连接你的 AI，让群聊多一点灵气。</p></div>
+      <div class="header-actions"><div class="sync-info"><span class="live-pill" data-tone="neutral"><span class="status-dot"></span><span id="global-state">正在连接</span></span><span id="last-sync">尚未同步</span></div><button class="icon-button refresh-state" id="refresh-state" type="button" title="刷新服务状态" aria-label="刷新服务状态"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
+    </header>
+    <section class="summary-grid" aria-label="服务概览">
+      <a class="summary-card" href="#connection" data-tone="neutral"><div class="summary-top"><span>QQ 连接</span><svg class="icon"><use href="#i-chat"/></svg></div><strong id="summary-qq">正在读取</strong><p id="summary-qq-detail">等待登录服务状态</p><svg class="summary-arrow icon"><use href="#i-arrow"/></svg></a>
+      <a class="summary-card" href="#models" data-tone="neutral"><div class="summary-top"><span>AI 服务</span><svg class="icon"><use href="#i-spark"/></svg></div><strong id="summary-ai">正在读取</strong><p id="summary-ai-detail">等待模型配置状态</p><svg class="summary-arrow icon"><use href="#i-arrow"/></svg></a>
+      <a class="summary-card" href="#models" data-tone="neutral"><div class="summary-top"><span>功能组件</span><svg class="icon"><use href="#i-box"/></svg></div><strong id="summary-plugins">正在读取</strong><p id="summary-plugins-detail">等待插件加载状态</p><svg class="summary-arrow icon"><use href="#i-arrow"/></svg></a>
+      <a class="summary-card" href="#maintenance" data-tone="neutral"><div class="summary-top"><span>版本维护</span><svg class="icon"><use href="#i-refresh"/></svg></div><strong id="summary-update">正在读取</strong><p id="summary-update-detail">等待部署版本状态</p><svg class="summary-arrow icon"><use href="#i-arrow"/></svg></a>
+    </section>
+    <div class="dashboard-grid">
+      <section class="card model-card" id="models" aria-labelledby="model-heading">
+        <div class="card-heading"><div class="heading-icon"><svg class="icon"><use href="#i-spark"/></svg></div><div><h2 id="model-heading">AI 服务</h2><p>一份配置，连接群灵的全部能力。</p></div><span class="section-label">模型配置</span></div>
+        <form id="settings" autocomplete="off">
+          <div class="field"><label for="base-url">API 地址<span>兼容 OpenAI 的服务地址</span></label><input id="base-url" name="base_url" type="url" placeholder="https://api.example.com/v1" spellcheck="false" required></div>
+          <div class="field"><label for="api-key">API Key<span>仅保存在自己的部署中</span></label><div class="input-with-action"><input id="api-key" name="api_key" type="password" placeholder="填写服务提供方的 API Key" autocomplete="off" spellcheck="false"><button class="input-action" id="show-key" type="button" aria-label="显示 API Key" aria-pressed="false" title="显示 API Key"><svg class="icon"><use href="#i-eye"/></svg></button></div></div>
+          <div class="form-row"><div class="field"><label for="chat-model">聊天模型</label><input id="chat-model" name="chat_model" placeholder="填写准确模型名" spellcheck="false" required></div><div class="field"><label for="image-model">图片生成 / 编辑模型</label><input id="image-model" name="image_model" placeholder="填写图片模型名" spellcheck="false" required></div></div>
+          <details class="config-details"><summary><svg class="icon"><use href="#i-sliders"/></svg><span>独立视觉与联网模型<small>可选</small></span><svg class="chevron icon"><use href="#i-chevron"/></svg></summary><div class="details-body"><div class="form-row"><div class="field"><label for="vision-model">视觉模型</label><input id="vision-model" name="vision_model" placeholder="留空使用聊天模型" spellcheck="false"></div><div class="field"><label for="search-model">联网模型</label><input id="search-model" name="search_model" placeholder="留空使用聊天模型" spellcheck="false"></div></div><p class="note">历史图片与漫画翻译使用视觉模型，联网检索使用联网模型。</p></div></details>
+          <details class="config-details" open><summary><svg class="icon"><use href="#i-clock"/></svg><span>近期群聊范围</span><svg class="chevron icon"><use href="#i-chevron"/></svg></summary><div class="details-body"><div class="form-row"><div class="field"><label for="context-hours">回看时长</label><div class="input-with-unit"><input id="context-hours" name="group_context_hours" type="number" min="1" max="168" step="1" value="24" required><span>小时</span></div></div><div class="field"><label for="context-messages">消息上限</label><div class="input-with-unit"><input id="context-messages" name="group_context_max_messages" type="number" min="100" max="1000" step="1" value="1000" required><span>条</span></div></div></div><p class="note">文字与历史图片共用此范围，仅用于近期群聊理解，不会建立永久聊天档案。</p></div></details>
+          <div class="model-hint"><svg class="icon"><use href="#i-shield"/></svg><p>聊天模型需支持工具调用与识图；生图需 Images 接口，联网需 Responses 的 web_search。保存配置不会产生模型调用费用。</p></div>
+          <div class="form-actions"><button id="save" type="submit" disabled><svg class="icon"><use href="#i-check"/></svg><span id="save-label">保存并启用全部功能</span></button><span class="save-note">密钥留空保留原配置</span></div>
+          <p id="form-message" class="form-feedback" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+      <div class="right-column">
+        <section class="card connection-card" id="connection" aria-labelledby="qq-heading">
+          <div class="card-heading"><div class="heading-icon blue"><svg class="icon"><use href="#i-chat"/></svg></div><div><h2 id="qq-heading">QQ 连接</h2><p>扫码登录，自动完成连接。</p></div></div>
+          <div class="qr-frame" id="connection-card">
+            <div class="connection-art" id="connection-art" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="connection-symbol"><svg class="icon"><use href="#i-chat"/></svg></span><span class="connection-check"><svg class="icon"><use href="#i-check"/></svg></span></div>
+            <img id="qr" alt="使用手机 QQ 扫描此二维码登录机器人" hidden>
+            <p id="qq-status">正在等待 QQ 登录服务…</p>
+          </div>
+          <button id="refresh" type="button" class="secondary qr-refresh"><svg class="icon"><use href="#i-refresh"/></svg><span>刷新二维码</span></button>
+          <p class="note connection-note">请使用机器人账号的手机 QQ 扫码，并确认新设备登录。登录后自动连接，无需填写 WebSocket 或 Token。</p>
+          <div id="ready" hidden><div class="ready-title"><span class="status-dot"></span><h3>已就绪，开始聊聊吧</h3></div><p>群聊中 <code>@机器人</code> 或以 <code>/ai</code> 开头；私聊直接发送。图片、文件和需求，都可以直接告诉它。</p></div>
+        </section>
+        <section class="card advanced-card" id="advanced" aria-labelledby="advanced-heading"><div class="card-heading"><div class="heading-icon muted"><svg class="icon"><use href="#i-sliders"/></svg></div><div><h2 id="advanced-heading">高级管理</h2><p>更细致地调整你的机器人。</p></div></div><a class="management-link" href="http://127.0.0.1:5300/" target="_blank" rel="noreferrer"><div><strong>LangBot 管理页</strong><span>插件、流水线与更多配置</span></div><svg class="icon"><use href="#i-external"/></svg></a><details class="admin-details" id="admin-open"><summary>本地管理账号<svg class="chevron icon"><use href="#i-chevron"/></svg></summary><p class="note">仅在需要登录 LangBot 管理页时查看。</p><button id="admin" type="button" class="secondary small">查看管理账号</button><pre id="admin-info" aria-live="polite" hidden></pre></details></section>
+      </div>
+      <section class="card updates" id="maintenance" aria-labelledby="update-heading">
+        <div class="update-heading"><div class="card-heading"><div class="heading-icon"><svg class="icon"><use href="#i-refresh"/></svg></div><div><h2 id="update-heading">版本维护</h2><p id="update-source">正在读取部署版本…</p></div></div><span id="update-phase" class="phase" data-tone="neutral">连接中</span></div>
+        <div class="update-body"><dl class="versions"><div><dt>当前版本</dt><dd><code id="current-revision">—</code></dd></div><div class="version-divider" aria-hidden="true"><dt class="visually-hidden">更新至</dt><dd><svg class="icon"><use href="#i-arrow"/></svg></dd></div><div><dt>最新版本</dt><dd><code id="latest-revision">—</code></dd></div></dl><div class="update-actions"><button id="check-update" type="button" class="secondary" disabled><svg class="icon"><use href="#i-refresh"/></svg><span>检查更新</span></button><button id="apply-update" type="button" disabled><svg class="icon"><use href="#i-download"/></svg><span>更新到此版本</span></button></div></div>
+        <ol class="update-steps" id="update-progress" aria-label="更新流程" hidden><li data-update-step="prepare"><span>1</span>准备版本</li><li data-update-step="backup"><span>2</span>备份数据</li><li data-update-step="restart"><span>3</span>切换服务</li><li data-update-step="verify"><span>4</span>完成验证</li></ol>
+        <p id="update-message" role="status" aria-live="polite">正在连接更新服务…</p><p id="update-error" role="alert" hidden></p>
+        <div class="cleanup-panel"><div class="cleanup-title"><svg class="icon"><use href="#i-box"/></svg><span>自动整理</span><span class="cleanup-state" id="cleanup-status">暂无清理记录</span></div><p id="cleanup-detail">更新器空闲时整理历史版本，保留必要的回滚资料。</p><span id="cleanup-time"></span></div>
+        <div class="maintenance-note"><svg class="icon"><use href="#i-shield"/></svg><p>更新前自动备份，验证失败时尝试回滚。切换版本会短暂停机并中断当前任务，建议在空闲时更新。</p></div>
+      </section>
+    </div>
+    <footer><span>QunLing 群灵<span class="footer-separator">/</span>基于 LangBot 与 NapCat</span><span><svg class="icon"><use href="#i-shield"/></svg>配置、记忆与 QQ 登录数据保存在自己的数据卷中</span></footer>
+  </div>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

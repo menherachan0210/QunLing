@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import re
 from urllib.parse import urlsplit
 
@@ -10,6 +11,54 @@ import requests
 from bootstrap.api import SetupError
 
 REVISION = re.compile(r"[0-9a-fA-F]{40}\Z")
+CLEANUP_TIME = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})\Z"
+)
+CLEANUP_STATUSES = {"completed", "partial", "failed", "skipped"}
+CLEANUP_WARNINGS = frozenset({
+    "invalid_retention_setting_cleanup_disabled",
+    "unmanaged_or_unresolved_history_preserved",
+    "worker_removal_failed",
+    "backup_removal_failed",
+    "image_cleanup_skipped_incomplete_history",
+    "image_removal_failed",
+    "cleanup_inventory_failed",
+})
+
+
+def _cleanup_summary(value):
+    """Expose a bounded maintenance summary, never private inventory or logs."""
+    if not isinstance(value, dict):
+        return None
+    checked_at, status = value.get("checked_at"), value.get("status")
+    if (not isinstance(checked_at, str) or not CLEANUP_TIME.fullmatch(checked_at)
+            or not isinstance(status, str) or status not in CLEANUP_STATUSES):
+        return None
+    try:
+        datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    result = {"checked_at": checked_at, "status": status}
+    limits = {
+        "keep_backups": (1, 10),
+        # The browser must be able to display byte counts without rounding.
+        "reclaimed_backup_bytes": (0, 2**53 - 1),
+        "removed_jobs": (0, 1_000_000),
+        "removed_images": (0, 1_000_000),
+        "removed_workers": (0, 1_000_000),
+    }
+    for key, (minimum, maximum) in limits.items():
+        number = value.get(key)
+        if type(number) is int and minimum <= number <= maximum:
+            result[key] = number
+    warnings = value.get("warnings")
+    if isinstance(warnings, list):
+        # Do not scan an arbitrarily large list or echo unknown error text.
+        result["warnings"] = list(dict.fromkeys(
+            warning for warning in warnings[:100]
+            if isinstance(warning, str) and warning in CLEANUP_WARNINGS
+        ))
+    return result
 
 
 class UpdateError(SetupError):
@@ -80,6 +129,9 @@ class UpdateClient:
             result[key] = text[:1000 if key == "message" else 300]
         if isinstance(value.get("error"), str):
             result["error"] = value["error"][:1000]
+        cleanup = _cleanup_summary(value.get("cleanup"))
+        if cleanup is not None:
+            result["cleanup"] = cleanup
         return result
 
     def _request(self, method, path, body=None):

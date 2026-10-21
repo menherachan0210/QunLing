@@ -11,11 +11,16 @@ metadata:
 spec:
   parameters:
     type: object
-    properties: {}
+    properties:
+      password:
+        type: string
+        minLength: 1
+        maxLength: 1024
+        description: Password explicitly provided by this user for the pending archive, including a corrected password.
     additionalProperties: false
   llm_prompt: |
-    Resume only missing/failed pages of this sender's latest comic job, keeping completed pages. Only when the user explicitly asks to continue or retry; may incur new model usage for unfinished pages. Never resume merely because a status check shows failure or a service restart occurred.
-    Call with {} only; never pass URLs, paths, identities, recipients, or file IDs.
+    Resume only missing/failed pages of this sender's latest comic job, keeping completed pages. Use when the user asks to continue/retry OR supplies/corrects the password for their awaiting_password job, even if the message only says "密码是...". Providing the requested password authorizes continuation; no extra confirmation or reupload is needed. May incur new model usage for unfinished pages. Never resume merely because a status check shows failure or a service restart occurred. Never apply a password to another sender's task or an unrelated archive.
+    Call with {} or {password: user-provided-password}; never pass URLs, paths, identities, recipients, or file IDs. Passwords are kept only in running-task memory, so after restart or interruption an encrypted task may need its password again. Never echo passwords.
 execution:
   python:
     path: resume_comic_translation.py

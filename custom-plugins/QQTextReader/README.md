@@ -1,9 +1,16 @@
 # QQTextReader
 
-本地 LangBot 插件 `local/QQTextReader`，版本 `0.1.0`。提供自然语言工具
-`read_text_attachment({})`，读取用户上传的单个 `.txt`，无需 Box、Docker 或模型 API 密钥。
+本地 LangBot 插件 `local/QQTextReader`，版本 `0.2.1`。提供共享文件工作区和旧 TXT 快捷读取入口。
 
-## 使用
+## 共享文件工作区
+
+通过 `file_workspace` 导入附件、分页读取、搜索、提取压缩包成员或生成 TXT、CSV、DOCX、XLSX、PPTX、ZIP 等文件；`file_task` 查询后台任务，`send_attachment` 交付真实文件。使用标准部署时自动安装解析依赖并启动后台任务，无需另配服务。
+
+ZIP／RAR／7z 可以传入用户提供的 `arguments.password`，供 inspect/read/search/extract 使用。密码不进入持久任务文件，受密码保护的操作在当前调用中完成；缺少或错误密码返回明确提示，补正后可重试。普通任务仍可后台执行并通过 outbox 自动发送。
+
+完整能力与限制见 [功能说明](../../docs/FEATURES.md)。以下说明针对兼容保留的 `read_text_attachment({})` 快捷入口。
+
+## TXT 快捷入口使用
 
 在绑定了本插件的流水线中上传 TXT，再请求机器人阅读、校对、翻译或总结。
 QQ群继续使用现有 `@机器人` 或 `/ai` 入口；上传附件本身不会触发本插件回复。

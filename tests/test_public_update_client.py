@@ -94,6 +94,88 @@ def test_client_whitelists_status_and_pins_mutation(client):
     ]
 
 
+def cleanup(**changes):
+    return {
+        "checked_at": "2026-10-21T01:02:03.123456+00:00", "status": "completed",
+        "keep_backups": 2, "reclaimed_backup_bytes": 123456789,
+        "removed_jobs": 3, "removed_images": 4, "removed_workers": 5,
+        "warnings": [], **changes,
+    }
+
+
+def test_client_forwards_only_public_cleanup_summary(client):
+    expected = cleanup(warnings=["unmanaged_or_unresolved_history_preserved"])
+    client.http.value = status(cleanup={
+        **expected, "private_log": "/private/maintenance.log",
+        "image_ids": ["sha256:private"], "backups": {"path": "/private/backups"},
+    })
+    result = client.status()
+    assert result["cleanup"] == expected
+    assert "private" not in repr(result)
+    assert client.http.calls[0][0] == ("GET", "http://updater:5320/status")
+
+
+def test_client_supports_older_updater_without_cleanup(client):
+    assert client.status() == status()
+    client.http.value = status(cleanup={})
+    assert client.status() == status()
+
+
+@pytest.mark.parametrize("value", [
+    None, False, [], "private-log", {"private_log": "secret"},
+    cleanup(status="/private/path"), cleanup(status={"completed": True}),
+    cleanup(checked_at="/private/path"), cleanup(checked_at="2026-02-30T01:02:03Z"),
+    cleanup(checked_at="2026-10-21T01:02:03"), cleanup(checked_at=True),
+    cleanup(checked_at="2026-10-21T01:02:03+00:00\nprivate-log"),
+])
+def test_invalid_optional_cleanup_never_disables_updates(client, value):
+    client.http.value = status(cleanup=value)
+    assert client.status() == status()
+
+
+@pytest.mark.parametrize("key,invalid", [
+    ("keep_backups", 0), ("keep_backups", 11), ("keep_backups", True),
+    ("reclaimed_backup_bytes", -1), ("reclaimed_backup_bytes", 2**53),
+    ("reclaimed_backup_bytes", "100"), ("reclaimed_backup_bytes", False),
+    ("removed_jobs", []), ("removed_images", ["sha256:private"]),
+    ("removed_workers", {"private_path": "/private"}),
+    ("removed_jobs", 1_000_001), ("removed_images", -1), ("removed_workers", 2.5),
+    ("removed_jobs", True), ("removed_images", False), ("removed_workers", True),
+])
+def test_invalid_cleanup_counts_are_omitted_without_exposing_inventory(client, key, invalid):
+    client.http.value = status(cleanup=cleanup(**{key: invalid}))
+    result = client.status()
+    expected = cleanup()
+    expected.pop(key)
+    assert result["cleanup"] == expected
+    assert result["available"] and result["update_available"]
+
+
+def test_cleanup_warning_codes_are_allowlisted_deduplicated_and_bounded(client):
+    client.http.value = status(cleanup=cleanup(warnings=[
+        "backup_removal_failed", "private-error /home/ubuntu/private",
+        {"token": "secret"}, ["cleanup_inventory_failed"], None, True,
+        "backup_removal_failed", "image_removal_failed",
+        *["unknown"] * 100, "cleanup_inventory_failed",
+    ]))
+    result = client.status()
+    assert result["cleanup"]["warnings"] == ["backup_removal_failed", "image_removal_failed"]
+    assert "private" not in repr(result) and "secret" not in repr(result)
+    client.http.value = status(cleanup=cleanup(warnings={"private": "error"}))
+    assert "warnings" not in client.status()["cleanup"]
+
+
+@pytest.mark.parametrize("phase", ["completed", "partial", "failed", "skipped"])
+def test_cleanup_supports_real_engine_statuses_and_exact_safe_integer_boundaries(client, phase):
+    expected = cleanup(
+        status=phase, checked_at="2026-10-21T09:02:03+08:00", keep_backups=10,
+        reclaimed_backup_bytes=2**53 - 1, removed_jobs=0,
+        removed_images=1_000_000, removed_workers=0,
+    )
+    client.http.value = status(cleanup=expected)
+    assert client.status()["cleanup"] == expected
+
+
 @pytest.mark.parametrize("revision", ["main", "a" * 39, "a" * 41, "a" * 40 + "\n", None, 1])
 def test_client_rejects_unpinned_revision_without_request(client, revision):
     with pytest.raises(UpdateError):
@@ -303,8 +385,7 @@ def test_check_update_only_accepts_empty_object(manager):
     assert manager.updater.http.calls == []
 
 
-def test_browser_waits_for_recovered_target_and_never_calls_disconnect_success():
-    """Run the real browser script through disconnect, stale status and recovery."""
+def _run_browser_regression(scenario):
     from pathlib import Path
     import shutil
     import subprocess
@@ -320,11 +401,20 @@ const nodes = new Map();
 function element(id) {
   if (!nodes.has(id)) nodes.set(id, {
     id, disabled: false, hidden: false, textContent: "", value: "", elements: {},
-    addEventListener(name, fn) { this[name] = fn; }
+    dataset: {}, attributes: {}, classes: new Set(),
+    classList: {
+      add() {}, remove() {}, toggle() {}
+    },
+    addEventListener(name, fn) { this[name] = fn; },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    getAttribute(name) { return this.attributes[name] ?? null; },
+    removeAttribute(name) { delete this.attributes[name]; if (name === "src") this.src = ""; },
+    closest() { return element(this.id + "-card"); }
   });
   return nodes.get(id);
 }
-element("settings").elements.api_key = {value:"", placeholder:""};
+element("settings").elements.api_key = {value:"", placeholder:"", type:"password"};
+element("admin-info").hidden = true;
 const stored = new Map([["qqbot-setup", "fixture"]]);
 const old = "a".repeat(40), target = "b".repeat(40);
 let remote = {
@@ -332,10 +422,16 @@ let remote = {
   current_revision: old, latest_revision: target, phase: "available",
   message: "发现更新", repository: "owner/repo", branch: "main"
 };
-let offline = false, disconnectAfterApply = false;
+let offline = false, disconnectAfterApply = false, unauthorized = false;
+let setup = {
+  plugins_ready: true, stage:"ready", configured:true, qq_connected:true,
+  qq_logged_in:true, settings:{}, message:"已连接"
+};
+let configureCount = 0, setupCount = 0, releaseConfigure = null;
+let holdConfigure = false, holdSetup = false, releaseSetup = null;
 const context = vm.createContext({
-  document: {getElementById: element},
-  location: {hash: "", pathname: "/"},
+  document: {getElementById: element, querySelectorAll() { return []; }},
+  location: {hash: "", pathname: "/", search: ""},
   history: {replaceState() {}},
   sessionStorage: {
     getItem(key) { return stored.get(key); },
@@ -344,13 +440,23 @@ const context = vm.createContext({
   },
   window: {confirm() { return true; }},
   URLSearchParams, AbortController, setTimeout, clearTimeout,
-  setInterval() {}, FormData: class {},
+  setInterval() {}, FormData: class { *[Symbol.iterator]() {} },
   fetch: async(path, opts) => {
     if (offline) throw new Error("offline");
-    if (path === "/api/status") return {ok:true, json:async()=>({
-      plugins_ready: true, stage:"ready", configured:true, qq_connected:true,
-      qq_logged_in:true, settings:{}, message:"已连接"
-    })};
+    if (path === "/api/status") setupCount += 1;
+    if (path === "/api/status" && holdSetup) {
+      const captured = {...setup};
+      await new Promise(resolve => { releaseSetup = resolve; });
+      return {ok:true, json:async()=>captured};
+    }
+    if (unauthorized) return {ok:false, status:401, json:async()=>({error:"设置令牌无效"})};
+    if (path === "/api/status") return {ok:true, json:async()=>({...setup})};
+    if (path === "/api/admin") return {ok:true, json:async()=>({user:"fixture-user", password:"fixture-private"})};
+    if (path === "/api/configure") {
+      configureCount += 1;
+      if (holdConfigure) await new Promise(resolve => { releaseConfigure = resolve; });
+      return {ok:true, json:async()=>({})};
+    }
     if (path === "/api/update/apply") {
       assert.deepEqual(JSON.parse(opts.body), {revision:target});
       if (disconnectAfterApply) {
@@ -368,6 +474,19 @@ async function settle() { for(let i=0;i<8;i++) await new Promise(resolve=>setImm
 (async()=>{
   vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), context);
   await settle();
+""" + scenario + r"""
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+    source = Path(__file__).resolve().parents[1] / "bootstrap/static/app.js"
+    result = subprocess.run(
+        [node, "-e", script, str(source)], text=True, capture_output=True, timeout=15
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_browser_waits_for_recovered_target_and_never_calls_disconnect_success():
+    """Run the real browser script through disconnect, stale status and recovery."""
+    _run_browser_regression(r"""
   assert.equal(element("apply-update").disabled, false);
   disconnectAfterApply = true;
   await element("apply-update").click();
@@ -389,10 +508,137 @@ async function settle() { for(let i=0;i<8;i++) await new Promise(resolve=>setImm
   assert.equal(element("update-phase").textContent, "更新完成");
   assert.equal(element("save").disabled, false);
   assert.equal(stored.has("qunling-update-pending"), false);
-})().catch(error=>{console.error(error);process.exitCode=1;});
-"""
-    source = Path(__file__).resolve().parents[1] / "bootstrap/static/app.js"
-    result = subprocess.run(
-        [node, "-e", script, str(source)], text=True, capture_output=True, timeout=15
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
+""")
+
+
+def test_browser_clears_sensitive_content_after_auth_failure_and_ignores_stale_success():
+    _run_browser_regression(r"""
+  assert.equal(element("console-content").hidden, false);
+  await element("admin").click();
+  assert.match(element("admin-info").textContent, /fixture-private/);
+  setup = {...setup, qq_logged_in:false, qq_connected:false, qr_image:"data:image/png;base64,fixture"};
+  await vm.runInContext("poll()", context);
+  assert.equal(element("qr").hidden, false);
+  unauthorized = true;
+  holdSetup = true;
+  const poll = vm.runInContext("poll()", context);
+  await settle();
+  assert.equal(element("console-content").hidden, true);
+  assert.equal(element("unlock").hidden, false);
+  assert.equal(element("admin-info").hidden, true);
+  assert.equal(element("admin-info").textContent, "");
+  assert.equal(element("qr").hidden, true);
+  assert.equal(element("qr").src, "");
+  assert.equal(element("save").disabled, true);
+  releaseSetup();
+  await poll;
+  assert.equal(element("console-content").hidden, true, "stale parallel success must not unlock");
+  assert.equal(element("unlock").hidden, false);
+  assert.equal(element("apply-update").disabled, true);
+  holdSetup = false;
+  unauthorized = false;
+  await vm.runInContext("poll()", context);
+  assert.equal(element("console-content").hidden, false);
+  assert.equal(element("admin-info").textContent, "", "old credentials stay cleared after reconnect");
+""")
+
+
+def test_browser_configuration_submit_remains_locked_during_background_poll():
+    _run_browser_regression(r"""
+  assert.equal(element("save").disabled, false);
+  holdConfigure = true;
+  const event = {preventDefault() {}, currentTarget:element("settings")};
+  const submit = element("settings").submit(event);
+  await settle();
+  assert.equal(element("save").disabled, true);
+  await vm.runInContext("poll()", context);
+  assert.equal(element("save").disabled, true, "normal status poll cannot unlock pending POST");
+  assert.equal(element("apply-update").disabled, true);
+  await element("settings").submit(event);
+  assert.equal(configureCount, 1, "repeated submit must not issue another POST");
+  releaseConfigure();
+  await submit;
+  assert.equal(element("save").disabled, false);
+  assert.equal(element("settings").elements.api_key.value, "");
+""")
+
+
+def test_browser_configuration_completion_waits_for_a_fresh_nonoverlapping_poll():
+    _run_browser_regression(r"""
+  holdConfigure = true;
+  const submit = element("settings").submit({preventDefault() {}, currentTarget:element("settings")});
+  await settle();
+  holdSetup = true;
+  const olderPoll = vm.runInContext("poll()", context);
+  await settle();
+  const before = setupCount;
+  releaseConfigure();
+  await settle();
+  const disabledWhileWaiting = element("save").disabled;
+  const noOverlappingRequest = setupCount === before;
+  holdSetup = false;
+  setup = {...setup, stage:"configuring"};
+  releaseSetup();
+  await Promise.all([olderPoll, submit]);
+  assert.equal(disabledWhileWaiting, true, "POST completion cannot unlock while an old poll is pending");
+  assert.equal(noOverlappingRequest, true, "fresh status must wait for the existing poll to finish");
+  assert.equal(setupCount, before + 1, "POST completion must start one fresh status request");
+  assert.equal(element("save").disabled, true, "fresh configuring status keeps saving locked");
+  assert.equal(element("apply-update").disabled, true);
+  assert.equal(element("ready").hidden, true);
+  setup = {...setup, stage:"ready"};
+  await vm.runInContext("poll()", context);
+  assert.equal(element("save").disabled, false);
+""")
+
+
+@pytest.mark.parametrize("stage,label", [("configuring", "配置中"), ("error", "需要处理")])
+def test_browser_never_calls_configuring_or_failed_setup_ready(stage, label):
+    import json
+
+    _run_browser_regression("setup = {...setup, stage:" + json.dumps(stage) + "};\n" + r"""
+  await vm.runInContext("poll()", context);
+  assert.equal(element("ready").hidden, true, "old connection flags do not prove configuration readiness");
+""" + "assert.equal(element('global-state').textContent, " + json.dumps(label) + ");")
+
+
+def test_browser_disconnection_clears_stale_qr_and_ready_state():
+    _run_browser_regression(r"""
+  assert.equal(element("ready").hidden, false);
+  offline = true;
+  await vm.runInContext("poll()", context);
+  assert.equal(element("ready").hidden, true);
+  assert.equal(element("save").disabled, true);
+  offline = false;
+  setup = {...setup, qq_logged_in:false, qq_connected:false, qr_image:"data:image/png;base64,fixture"};
+  await vm.runInContext("poll()", context);
+  assert.equal(element("qr").hidden, false);
+  assert.match(element("qr").src, /^data:image/);
+  offline = true;
+  await vm.runInContext("poll()", context);
+  assert.equal(element("qr").hidden, true);
+  assert.equal(element("qr").src, "");
+  assert.equal(element("refresh").disabled, true);
+  assert.equal(element("summary-qq").textContent, "状态未知");
+""")
+
+
+def test_browser_maintenance_summary_distinguishes_unknown_completed_and_failed():
+    _run_browser_regression(r"""
+  assert.equal(element("cleanup-status").textContent, "暂无清理记录");
+  remote = {...remote, cleanup:{
+    checked_at:"2026-10-21T01:02:03Z", status:"completed", keep_backups:2,
+    removed_jobs:0, removed_images:0, warnings:[]
+  }};
+  await vm.runInContext("poll()", context);
+  assert.equal(element("cleanup-status").textContent, "自动维护正常");
+  assert.match(element("cleanup-detail").textContent, /保留最近 2 次/);
+  assert.match(element("cleanup-detail").textContent, /清理 0 份历史备份、0 个镜像/);
+  remote = {...remote, cleanup:{
+    checked_at:"2026-10-21T01:02:03Z", status:"failed", warnings:["cleanup_inventory_failed"]
+  }};
+  await vm.runInContext("poll()", context);
+  assert.equal(element("cleanup-status").textContent, "清理需要检查");
+  assert.match(element("cleanup-detail").textContent, /暂未清理/);
+  assert.doesNotMatch(element("cleanup-detail").textContent, /undefined|NaN|0 份/);
+""")

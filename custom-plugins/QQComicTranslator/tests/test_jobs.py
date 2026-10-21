@@ -10,6 +10,7 @@ from PIL import Image
 
 from pkg import jobs
 from pkg.jobs import JobError, JobManager, scope_key
+from pkg.archive import ArchivePasswordError
 from pkg.labelplus import TranslationError
 
 
@@ -76,6 +77,72 @@ async def start(manager, session, count=2):
     return await manager.start(
         session, SimpleNamespace(name="合成.zip"), archive_bytes(count), "vision-model"
     )
+
+
+@pytest.mark.asyncio
+async def test_missing_and_wrong_password_are_retained_and_resume_without_reupload(env, monkeypatch):
+    plugin, manager, session, calls = env
+    original = jobs.open_archive
+    secret = "synthetic-only 密码"
+    attempts = []
+
+    def encrypted(raw, decoder, *, password=None):
+        attempts.append(password)
+        if password != secret:
+            raise ArchivePasswordError(password is not None)
+        return original(raw, decoder)
+
+    monkeypatch.setattr(jobs, "open_archive", encrypted)
+    pending = await start(manager, session)
+    assert pending["status"] == "awaiting_password"
+    assert pending["error_code"] == "archive_password_required"
+    assert not calls and not manager.tasks
+    assert (await manager.operate(session, "status"))["status"] == "awaiting_password"
+    assert (await manager.operate(session, "resume"))["status"] == "awaiting_password"
+    wrong = await manager.operate(session, "resume", password="wrong-synthetic")
+    assert wrong["error_code"] == "archive_password_invalid"
+    assert not calls and not manager.tasks
+    # A password-only reply from another actor cannot resume this actor's job.
+    other = SimpleNamespace(**{**vars(session), "sender_id": "someone-else"})
+    assert (await manager.operate(other, "resume", password=secret))["status"] == "missing"
+    saved_id = manager.jobs[scope_key(session)]["id"]
+    # Process restart does not retain a credential, but it keeps encrypted bytes.
+    fresh = JobManager(plugin)
+    result = await fresh.operate(session, "resume", password=secret)
+    assert result["status"] == "queued"
+    assert fresh.jobs[scope_key(session)]["id"] == saved_id
+    await fresh.tasks[scope_key(session)]
+    assert calls == [0, 1]
+    assert (await fresh.operate(session, "status"))["status"] == "completed"
+    for value in plugin.storage.values():
+        assert secret.encode() not in value and b"wrong-synthetic" not in value
+    assert secret not in str(plugin.sends) and secret not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_same_archive_password_retry_reuses_pending_job_and_can_cancel(env, monkeypatch):
+    plugin, manager, session, calls = env
+    original = jobs.open_archive
+
+    def encrypted(raw, decoder, *, password=None):
+        if password != "correct":
+            raise ArchivePasswordError(password is not None)
+        return original(raw, decoder)
+
+    monkeypatch.setattr(jobs, "open_archive", encrypted)
+    await start(manager, session)
+    saved_id = manager.jobs[scope_key(session)]["id"]
+    assert (await manager.operate(session, "cancel"))["status"] == "cancelled"
+    assert not calls and not manager.tasks
+    # Explicit resume can reopen a cancelled pending task, without erasing input.
+    assert (await manager.operate(session, "resume"))["status"] == "awaiting_password"
+    result = await manager.start(
+        session, SimpleNamespace(name="合成.zip"), archive_bytes(), "vision-model", password="correct"
+    )
+    assert result["status"] == "queued"
+    assert manager.jobs[scope_key(session)]["id"] == saved_id
+    await manager.tasks[scope_key(session)]
+    assert calls == [0, 1]
 
 
 @pytest.mark.asyncio

@@ -18,11 +18,13 @@
 | 插件源码、各自许可和修改告知 | `/opt/qq-ai-bot/custom-plugins/` |
 | 7-Zip 程序及其随附许可 | `/opt/qq-ai-bot/.local/tools/7zip/linux-x64/` |
 
-SDK/Runtime 上游基线是 `v0.7.11` 对应提交 `e10d8385b2843a25e30219f9153f3227c8a0009f`，构建时重新下载完整源码并校验固定摘要。Linux 构建应用的 Runtime 修改位于 `sdk-image-tool-timeout.patch`、`sdk-dedicated-background.patch` 和 `sdk-attachment-message-budget.patch`。Windows 专用补丁在 Linux 上跳过。
+SDK/Runtime 上游基线是 `v0.7.11` 对应提交 `e10d8385b2843a25e30219f9153f3227c8a0009f`，构建时重新下载完整源码并校验固定摘要。Linux 构建应用的 Runtime 修改位于 `sdk-image-tool-timeout.patch`、`sdk-dedicated-background.patch`、`sdk-attachment-message-budget.patch`、`sdk-tool-provenance.patch` 和 `sdk-qunling-worker-storage.patch`。最后一项确保直接启动的插件进程与宿主、后台任务使用同一个附件数据目录，只传递已配置的绝对 `QUNLING_DATA_DIR` 和查找原生解压器所需的 `PATH`，不继承其他密钥或开放共享沙箱的宿主目录。Windows 专用补丁在 Linux 上跳过。
 
 `host-managed-runtime-transport.patch` 修改 LangBot 4.11.0 的 `src/langbot/pkg/plugin/connector.py`，允许显式使用同容器 stdio Runtime，并保留外部 Runtime 参数优先级与默认行为；该 Host 修改沿用 LangBot 的 Apache-2.0 许可，与 SDK/Runtime 目录的修改分开。
 
-`host-persisted-plugin-installations.patch` 为 LangBot 增加 `GET /api/v1/plugins/_/installations`。此接口要求当前工作区的资源读取权限，仅返回六个持久化安装元数据字段，不依赖 Runtime 或暴露插件配置。向导据此区分“尚未安装”和“正在恢复”，避免重启时重复安装相同包。该 Host 修改沿用 Apache-2.0 许可；安装器目前包含 14 个补丁，其中 Linux 应用 13 个。
+`host-persisted-plugin-installations.patch` 为 LangBot 增加 `GET /api/v1/plugins/_/installations`。此接口要求当前工作区的资源读取权限，仅返回六个持久化安装元数据字段，不依赖 Runtime 或暴露插件配置。向导据此区分“尚未安装”和“正在恢复”，避免重启时重复安装相同包。该 Host 修改沿用 Apache-2.0 许可。
+
+`host-tool-password-redaction.patch` 修改工具监控参数的序列化，递归遮蔽 `password` 字段，并处理以 JSON 字符串提供的嵌套参数。只处理写入 `monitoring_tool_calls` 的副本，不改变实际工具调用参数或用户聊天文本；这不代表群消息、模型上下文或聊天历史中的密码会被删除。该 Host 修改沿用 Apache-2.0 许可。安装器目前包含 18 个补丁，其中 Linux 应用 17 个。
 
 该固定上游源码中的 `CLAUDE.md` 原为指向 `AGENTS.md` 的文档链接。为兼容安全解包和不同文件系统，镜像将这个已知链接物化为目标内容的普通文件，内容及来源归属仍为上游；不创建文件系统符号链接，也不允许其他未列出的链接。
 

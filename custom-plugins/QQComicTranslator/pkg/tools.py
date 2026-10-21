@@ -9,6 +9,7 @@ from langbot_plugin.api.proxies.query_based_api import QueryBasedAPIProxy
 from pkg.attachment_context import select_attachment, select_session
 from pkg.download import decode_inline, download
 from pkg.jobs import JobError
+from pkg.archive import validate_password
 
 
 async def execute_assets(tool, params, query_id, query_uuid):
@@ -23,6 +24,7 @@ async def execute_assets(tool, params, query_id, query_uuid):
 
     try:
         refs = asset_parameters(params)
+        password = validate_password(params.get("password"))
         api = QueryBasedAPIProxy(
             query_id=query_id, query_uuid=query_uuid,
             plugin_runtime_handler=tool.plugin.plugin_runtime_handler,
@@ -44,7 +46,7 @@ async def execute_assets(tool, params, query_id, query_uuid):
         )
         result = await tool.plugin.jobs.start(
             session, SimpleNamespace(name=prepared.name), prepared.raw, model,
-            page_names=prepared.page_names,
+            page_names=prepared.page_names, password=password,
         )
         return json.dumps(result, ensure_ascii=False)
     except (AssetError, ArchiveError, JobError, TranslationError) as exc:
@@ -57,15 +59,17 @@ async def execute_assets(tool, params, query_id, query_uuid):
 
 
 async def execute(tool, action, params, query_id, query_uuid):
-    if not isinstance(params, dict) or params:
+    allowed = {"password"} if action in {"start", "resume"} else set()
+    if not isinstance(params, dict) or set(params) - allowed:
         return json.dumps(
             {
                 "status": "error",
-                "error": "本工具仅接受空对象，不接受文件地址、路径、收件人或会话参数。",
+                "error": "开始或续做仅可提供 password；其他操作使用空对象，不接受地址、路径、收件人或会话参数。",
             },
             ensure_ascii=False,
         )
     try:
+        password = validate_password(params.get("password"))
         api = QueryBasedAPIProxy(
             query_id=query_id,
             query_uuid=query_uuid,
@@ -109,9 +113,11 @@ async def execute(tool, action, params, query_id, query_uuid):
                     raw = await download(url)
             if attachment.size and len(raw) != attachment.size:
                 raise JobError("压缩包下载大小与附件信息不一致，请重新上传。")
-            result = await tool.plugin.jobs.start(session, attachment, raw, model)
+            options = {"password": password} if password is not None else {}
+            result = await tool.plugin.jobs.start(session, attachment, raw, model, **options)
         else:
-            result = await tool.plugin.jobs.operate(session, action, api)
+            options = {"password": password} if password is not None else {}
+            result = await tool.plugin.jobs.operate(session, action, api, **options)
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:
         # Known safety modules expose fixed diagnostic strings. Arbitrary Host,

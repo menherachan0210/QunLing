@@ -39,6 +39,10 @@ spec:
       search: {asset_ref, query, selector?:{section?,page?,sheet?,member?}, limit?:20}.
       extract: {asset_ref, member, filename?}. Exact member path returned by reading
         an archive; imports one child as an asset. Never implicitly unpack all files.
+      inspect/read/search/extract also accept password?:string in arguments for
+        encrypted ZIP/RAR/7z. Use only a password supplied by the user for this file;
+        preserve spaces and case. Do not guess, echo it or put it in a filename,
+        generated document or any other parameter. Pass it again for each operation.
       create: {format, filename, payload}. Filename must have the same extension.
         txt/md payload={text:string}
         json payload={data:JSON_value}
@@ -57,6 +61,13 @@ spec:
     delivery_status=unconfirmed, ask to check receipt instead of retrying.
     inspect/read/search/extract/create are durable jobs. Pending/running results
     include task_id: continue with file_task status without asking permission again.
+    Password-bearing archive operations run immediately using the same bounded
+    parser, without persisting the password or creating a durable task. If the
+    service restarts, retry with the user-supplied password; don't invent a task_id.
+    archive_password_required means ask for the archive's password; if the user
+    already supplied it, retry with password. archive_password_invalid means ask
+    for the corrected password. Neither means encrypted archives are unsupported.
+    When deliver=true, check delivery.status before declaring the file sent.
     Read results mark next, truncated, needs_ocr and needs_vision. Never claim the
     whole document was read when only excerpts or text layers were returned.
     Unknown formats can be transferred but not necessarily parsed. This tool does

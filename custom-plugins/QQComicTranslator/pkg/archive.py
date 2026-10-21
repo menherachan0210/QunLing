@@ -76,8 +76,8 @@ try:
             os._exit(125)
         if not kernel.AssignProcessToJobObject(job, kernel.GetCurrentProcess()):
             os._exit(125)
-        result = subprocess.run(command, shell=False, stdin=subprocess.DEVNULL,
-            stdout=sys.stdout.buffer, stderr=subprocess.DEVNULL,
+        result = subprocess.run(command, shell=False, stdin=sys.stdin.buffer,
+            stdout=sys.stdout.buffer, stderr=sys.stderr.buffer,
             creationflags=subprocess.CREATE_NO_WINDOW, close_fds=True)
         os._exit(result.returncode if 0 <= result.returncode <= 255 else 124)
     else:
@@ -98,6 +98,26 @@ except BaseException:
 
 class ArchiveError(Exception):
     """A fixed error safe to return without revealing archive contents or metadata."""
+
+
+class ArchivePasswordError(ArchiveError):
+    def __init__(self, supplied=False):
+        self.code = "archive_password_invalid" if supplied else "archive_password_required"
+        super().__init__(
+            "压缩包密码不正确，或加密内容损坏；请核对密码后重试。"
+            if supplied else "压缩包需要密码；请提供密码后继续，无需重新上传或自行解压。"
+        )
+
+
+def validate_password(password):
+    if password is None:
+        return None
+    if (
+        not isinstance(password, str) or not 1 <= len(password) <= 1024
+        or any(char in password for char in ("\x00", "\r", "\n"))
+    ):
+        raise ArchiveError("压缩包密码必须是 1 至 1024 个字符，不能含换行或空字符。")
+    return password
 
 
 @dataclass(frozen=True)
@@ -223,7 +243,7 @@ def _terminate_decoder(process):
             pass
 
 
-def _run_limited(command: list[str], cwd: str, output_limit: int) -> bytes:
+def _run_limited(command: list[str], cwd: str, output_limit: int, *, password=None) -> bytes:
     """Run trusted decoder arguments with OS memory, time and pipe output limits."""
     environment = {
         "PATH": os.defpath,
@@ -256,14 +276,14 @@ def _run_limited(command: list[str], cwd: str, output_limit: int) -> bytes:
         ],
         cwd=cwd,
         shell=False,
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.PIPE if password is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         env=environment,
         close_fds=True,
         **flags,
     )
-    body = bytearray()
+    body, diagnostic = bytearray(), bytearray()
     overflow, failed = threading.Event(), threading.Event()
 
     def drain():
@@ -282,6 +302,22 @@ def _run_limited(command: list[str], cwd: str, output_limit: int) -> bytes:
 
     reader = threading.Thread(target=drain, daemon=True)
     reader.start()
+    def drain_errors():
+        try:
+            while chunk := process.stderr.read(4096):
+                if len(diagnostic) < 16384:
+                    diagnostic.extend(chunk[:16384 - len(diagnostic)])
+        except Exception:
+            failed.set()
+
+    error_reader = threading.Thread(target=drain_errors, daemon=True)
+    error_reader.start()
+    if password is not None:
+        try:
+            process.stdin.write((password + "\n").encode("utf-8"))
+            process.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
     timed_out = False
     try:
         process.wait(timeout=DECODER_TIMEOUT_SECONDS)
@@ -291,13 +327,20 @@ def _run_limited(command: list[str], cwd: str, output_limit: int) -> bytes:
         _terminate_decoder(process)
         process.wait(timeout=5)
         reader.join(timeout=5)
+        error_reader.join(timeout=5)
         if not reader.is_alive():
             process.stdout.close()
+        if not error_reader.is_alive():
+            process.stderr.close()
     if timed_out:
         raise ArchiveError("压缩包解码超过 120 秒，请拆分或重新打包。")
     if overflow.is_set():
         raise ArchiveError("压缩包目录或图片实际输出超过安全限制。")
-    if process.returncode != 0 or failed.is_set() or reader.is_alive():
+    if process.returncode != 0 or failed.is_set() or reader.is_alive() or error_reader.is_alive():
+        # Native diagnostics are private; return only a fixed classification.
+        lowered = diagnostic.lower()
+        if any(marker in lowered for marker in (b"wrong password", b"password is incorrect", b"encrypted archive", b"password required")):
+            raise ArchivePasswordError(password is not None)
         raise ArchiveError("压缩包解析失败，可能损坏、加密、分卷或超过解码内存限制。")
     return bytes(body)
 
@@ -320,7 +363,7 @@ def _record(lines: list[str]) -> dict[str, str]:
     return record
 
 
-def _listing(raw: bytes, archive_type: str, archive_size: int):
+def _listing(raw: bytes, archive_type: str, archive_size: int, password=None):
     try:
         text = raw.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
@@ -337,15 +380,16 @@ def _listing(raw: bytes, archive_type: str, archive_size: int):
         archive_size
     ):
         raise ArchiveError("压缩包类型、长度或完整性不匹配。")
+    if header.get("Encrypted") == "+" and password is None:
+        raise ArchivePasswordError()
     if (
-        header.get("Encrypted") == "+"
-        or "Volume Index" in header
+        "Volume Index" in header
         or header.get("Volumes", "1") != "1"
         or "Volume" in header.get("Characteristics", "")
         or header.get("Multivolume", "-") != "-"
         or any(key in header for key in ("Offset", "Tail Size", "ERROR", "WARNING"))
     ):
-        raise ArchiveError("不支持加密、分卷或附加异常数据的压缩包。")
+        raise ArchiveError("不支持分卷或附加异常数据的压缩包。")
     records, pending = [], []
     for line in lines[end + 1 :] + [""]:
         if line:
@@ -361,10 +405,12 @@ def _listing(raw: bytes, archive_type: str, archive_size: int):
     return records
 
 
-def _entry_metadata(record: dict[str, str]):
+def _entry_metadata(record: dict[str, str], password=None):
     path, basename = _validated_path(record.get("Path", ""))
-    if record.get("Encrypted") != "-":
-        raise ArchiveError("不支持加密或加密状态不明确的压缩包。")
+    if record.get("Encrypted") == "+" and password is None:
+        raise ArchivePasswordError()
+    if record.get("Encrypted") not in {"-", "+"}:
+        raise ArchiveError("压缩包加密状态不明确，无法安全读取。")
     for key in (
         "Symbolic Link",
         "Hard Link",
@@ -407,7 +453,8 @@ def _entry_metadata(record: dict[str, str]):
 class ComicArchive:
     """Own only compressed ZIP bytes; prepare_page never caches decoded images."""
 
-    def __init__(self, raw: bytes):
+    def __init__(self, raw: bytes, password=None):
+        self._password = validate_password(password)
         if not isinstance(raw, bytes) or not raw or len(raw) > MAX_ARCHIVE_BYTES:
             raise ArchiveError("漫画 ZIP 必须非空且不超过 40 MiB。")
         if not raw.startswith((b"PK\x03\x04", b"PK\x05\x06")):
@@ -428,8 +475,10 @@ class ComicArchive:
             seen = set()
             candidates = []
             for info in infos:
-                if info.flag_bits & (1 | 0x40 | 0x2000):
-                    raise ArchiveError("不支持加密 ZIP，请移除密码后发送。")
+                if info.flag_bits & (0x40 | 0x2000):
+                    raise ArchiveError("ZIP 使用不支持的强加密目录扩展，请改为标准 AES ZIP。")
+                if info.flag_bits & 1 and self._password is None:
+                    raise ArchivePasswordError()
                 # LZMA can request a huge dictionary before output limits apply.
                 # Standard stored/deflated ZIPs keep decompressor memory bounded.
                 if info.compress_type not in SUPPORTED_COMPRESSION:
@@ -470,6 +519,11 @@ class ComicArchive:
                 PageInfo(index, path, basename, info.file_size)
                 for index, (path, basename, info) in enumerate(candidates)
             )
+            # Validate the supplied password before a job can incur model usage.
+            for index, info in enumerate(self._infos):
+                if info.flag_bits & 1:
+                    self._read_member(index)
+                    break
         except ArchiveError:
             self.close()
             raise
@@ -490,15 +544,24 @@ class ComicArchive:
             self._zip.close()
         self._buffer.close()
         self._closed = True
+        self._password = None
 
     def _read_member(self, index: int) -> bytes:
         page = self.pages[index]
         body = bytearray()
-        with self._zip.open(self._infos[index], "r") as stream:
-            while chunk := stream.read(65536):
-                body.extend(chunk)
-                if len(body) > MAX_IMAGE_BYTES or len(body) > page.file_size:
-                    raise ArchiveError("图片实际解压大小超过限制或与声明不符。")
+        try:
+            with self._zip.open(
+                self._infos[index], "r",
+                pwd=self._password.encode("utf-8") if self._password is not None else None,
+            ) as stream:
+                while chunk := stream.read(65536):
+                    body.extend(chunk)
+                    if len(body) > MAX_IMAGE_BYTES or len(body) > page.file_size:
+                        raise ArchiveError("图片实际解压大小超过限制或与声明不符。")
+        except (RuntimeError, zipfile.BadZipFile):
+            if self._infos[index].flag_bits & 1:
+                raise ArchivePasswordError(self._password is not None) from None
+            raise ArchiveError("ZIP 图片校验失败，请重新打包。") from None
         return bytes(body)
 
     def prepare_page(self, index: int) -> PreparedPage:
@@ -566,7 +629,8 @@ class ComicArchive:
 class ExternalComicArchive(ComicArchive):
     """Keep only the original RAR/7z on disk; member bytes go through a pipe."""
 
-    def __init__(self, raw: bytes, archive_type: str, seven_zip_path: str | None):
+    def __init__(self, raw: bytes, archive_type: str, seven_zip_path: str | None, password=None):
+        self._password = validate_password(password)
         self._closed = False
         self._temporary = None
         self.pages = ()
@@ -577,14 +641,14 @@ class ExternalComicArchive(ComicArchive):
             self._temporary = tempfile.TemporaryDirectory(prefix="qqcomic-")
             self._archive_path = Path(self._temporary.name) / "archive.bin"
             self._archive_path.write_bytes(raw)
-            listing = _run_limited(
+            listing = self._decode(
                 self._command("l", "-slt"), self._temporary.name, MAX_LIST_BYTES
             )
-            entries = _listing(listing, archive_type, len(raw))
+            entries = _listing(listing, archive_type, len(raw), self._password)
             candidates, full_paths, basenames = [], set(), set()
             total = 0
             for record in entries:
-                logical_path, basename, size, is_dir = _entry_metadata(record)
+                logical_path, basename, size, is_dir = _entry_metadata(record, self._password)
                 # CLI normalizes CR/LF in names to underscores. Any resulting
                 # collision is rejected; extraction must match the exact name.
                 identity = unicodedata.normalize(
@@ -609,7 +673,7 @@ class ExternalComicArchive(ComicArchive):
                         "压缩包中有同名图片（含大小写或不同目录），无法唯一匹配 LabelPlus。"
                     )
                 basenames.add(identity)
-                candidates.append((logical_path, basename, size, record["Path"]))
+                candidates.append((logical_path, basename, size, record["Path"], record.get("Encrypted") == "+"))
                 if len(candidates) > MAX_PAGES:
                     raise ArchiveError("压缩包中图片超过 100 张，请拆分。")
             if not candidates:
@@ -617,9 +681,14 @@ class ExternalComicArchive(ComicArchive):
             candidates.sort(key=lambda item: _natural_key(item[0]))
             self.pages = tuple(
                 PageInfo(index, path, name, size)
-                for index, (path, name, size, _) in enumerate(candidates)
+                for index, (path, name, size, _, _) in enumerate(candidates)
             )
             self._members = tuple(item[3] for item in candidates)
+            self._encrypted = tuple(item[4] for item in candidates)
+            for index, encrypted in enumerate(self._encrypted):
+                if encrypted:
+                    self._read_member(index)
+                    break
         except ArchiveError:
             self.close()
             raise
@@ -634,11 +703,11 @@ class ExternalComicArchive(ComicArchive):
             operation,
             "-sccUTF-8",
             "-bd",
-            "-bse0",
+            "-bse2",
             "-bsp0",
             "-smemx512m",
             "-mmt=1",
-            "-p",
+            *(["-p"] if self._password is None else []),
             "-t" + self._type,
             *switches,
             "--",
@@ -648,33 +717,55 @@ class ExternalComicArchive(ComicArchive):
             command.append(member)
         return command
 
+    def _decode(self, command, cwd, output_limit):
+        # The password is fed to the decoder prompt, never to argv, logs or disk.
+        options = {"password": self._password} if self._password is not None else {}
+        return _run_limited(command, cwd, output_limit, **options)
+
     def _read_member(self, index):
         page = self.pages[index]
-        return _run_limited(
-            self._command(
-                "x", "-so", "-spd", "-ssc", "-r-", member=self._members[index]
-            ),
-            self._temporary.name,
-            min(MAX_IMAGE_BYTES, page.file_size),
-        )
+        try:
+            return self._decode(
+                self._command(
+                    "x", "-so", "-spd", "-ssc", "-r-", member=self._members[index]
+                ),
+                self._temporary.name,
+                min(MAX_IMAGE_BYTES, page.file_size),
+            )
+        except ArchiveError as exc:
+            if self._encrypted[index] and "压缩包解析失败" in str(exc):
+                raise ArchivePasswordError(self._password is not None) from None
+            raise
 
     def close(self):
         if self._temporary is not None:
             self._temporary.cleanup()
             self._temporary = None
         self._closed = True
+        self._password = None
 
 
-def open_archive(raw: bytes, seven_zip_path: str | None = None) -> ComicArchive:
+def open_archive(raw: bytes, seven_zip_path: str | None = None, *, password=None) -> ComicArchive:
+    password = validate_password(password)
     if not isinstance(raw, bytes) or not raw or len(raw) > MAX_ARCHIVE_BYTES:
         raise ArchiveError("漫画压缩包必须非空且不超过 40 MiB。")
     if raw.startswith((b"PK\x03\x04", b"PK\x05\x06")):
-        return ComicArchive(raw)
+        _preflight_directory(raw)
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as source:
+                aes = any(info.compress_type == 99 for info in source.infolist())
+        except Exception:
+            raise ArchiveError("ZIP 结构无效或不受支持，请重新打包。") from None
+        if aes:
+            if password is None:
+                raise ArchivePasswordError()
+            return ExternalComicArchive(raw, "zip", seven_zip_path, password)
+        return ComicArchive(raw, password)
     for signature, archive_type in (
         (b"7z\xbc\xaf\x27\x1c", "7z"),
         (b"Rar!\x1a\x07\x00", "Rar"),
         (b"Rar!\x1a\x07\x01\x00", "Rar5"),
     ):
         if raw.startswith(signature):
-            return ExternalComicArchive(raw, archive_type, seven_zip_path)
+            return ExternalComicArchive(raw, archive_type, seven_zip_path, password)
     raise ArchiveError("附件不是 ZIP、RAR 或 7z 压缩包；不支持自解压程序。")

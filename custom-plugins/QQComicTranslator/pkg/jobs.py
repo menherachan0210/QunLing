@@ -15,7 +15,7 @@ from langbot_plugin.api.entities.builtin.platform.message import (
     Plain,
 )
 
-from pkg.archive import ArchiveError, open_archive
+from pkg.archive import ArchiveError, ArchivePasswordError, open_archive, validate_password
 from pkg.labelplus import TranslationError, output_name, render_labelplus
 from pkg.translator import translate_page
 
@@ -130,18 +130,21 @@ class JobManager:
             "pending_pages": len(job["pages"]) - completed - failed,
             "format": "LabelPlus",
             "delivery": job.get("delivery", "pending"),
+            "error_code": job.get("error_code", ""),
             "error": "\n".join(
                 filter(None, [job.get("error", ""), job.get("delivery_error", "")])
             ),
-            "message": "任务在后台运行，完成后会回传 TXT。可随时询问翻译进度或取消。"
+            "message": "请在本会话提供压缩包密码，随后使用 resume_comic_translation 的 password 参数继续；无需重新上传。"
+            if job["status"] == "awaiting_password" else
+            "任务在后台运行，完成后会回传 TXT。可随时询问翻译进度或取消。"
             if job["status"] in {"queued", "running"}
             else "",
         }
 
-    def launch(self, job):
+    def launch(self, job, password=None):
         # The local SDK supplies a fresh, revocable installation-level lifetime.
         # Never use a finished QueryBasedAPIProxy in this task.
-        task = self.plugin.spawn_background(lambda: self.run(job), timeout=7200)
+        task = self.plugin.spawn_background(lambda: self.run(job, password), timeout=7200)
         self.tasks[job["scope"]] = task
         task.add_done_callback(
             lambda done: self.tasks.pop(job["scope"], None)
@@ -149,7 +152,8 @@ class JobManager:
             else None
         )
 
-    async def start(self, session, attachment, raw, model_uuid, *, page_names=None):
+    async def start(self, session, attachment, raw, model_uuid, *, page_names=None, password=None):
+        password = validate_password(password)
         scope = scope_key(session)
         digest = hashlib.sha256(raw).hexdigest()
         async with self.lock:
@@ -157,6 +161,8 @@ class JobManager:
             if scope in self.tasks:
                 return self.snapshot(existing)
             if existing and existing.get("digest") == digest:
+                if existing["status"] == "awaiting_password" and password is not None:
+                    return await self._resume(existing, password)
                 result = self.snapshot(existing)
                 result["message"] = (
                     "此压缩包已有任务，不重复计费；可查询结果，或明确要求继续未完成页。"
@@ -172,24 +178,14 @@ class JobManager:
             )
             if stored + len(raw) > MAX_ARCHIVE_STORAGE:
                 raise JobError("漫画任务压缩包缓存已满，请删除不再需要的任务后重试。")
-            with await asyncio.to_thread(
-                open_archive, raw, self.plugin.get_config().get("seven_zip_path")
-            ) as archive:
-                if page_names is not None and (
-                    not isinstance(page_names, (list, tuple))
-                    or len(page_names) != len(archive.pages)
-                ):
-                    raise JobError("漫画图片与原文件名的对应关系无效，未开始翻译。")
-                pages = [
-                    {
-                        "index": page.index,
-                        "name": page_names[page.index] if page_names is not None else page.basename,
-                        "result": None,
-                        "error": "",
-                    }
-                    for page in archive.pages
-                ]
-            render_labelplus(pages)  # Reject incompatible names before model usage.
+            password_error = None
+            try:
+                pages = await self._pages(raw, password, page_names)
+            except ArchivePasswordError as exc:
+                # Keep the original encrypted bytes so a later password-only
+                # message can resume this actor's task without reuploading.
+                password_error = exc
+                pages = []
             if existing:
                 await self.delete(existing)
             target = {
@@ -203,14 +199,15 @@ class JobManager:
                 "name": attachment.name,
                 "digest": digest,
                 "created": time.time(),
-                "status": "queued",
+                "status": "awaiting_password" if password_error else "queued",
                 "pages": pages,
                 "model_uuid": model_uuid,
                 "chunks": (len(raw) + CHUNK_SIZE - 1) // CHUNK_SIZE,
                 "archive_bytes": len(raw),
                 "delivery": "pending",
                 "delivery_error": "",
-                "error": "",
+                "error": str(password_error) if password_error else "",
+                "error_code": password_error.code if password_error else "",
             }
             try:
                 # Record the full intended chunk set first so even an interrupted
@@ -222,11 +219,49 @@ class JobManager:
                         raw[offset : offset + CHUNK_SIZE],
                     )
                 self.jobs[scope] = job
-                self.launch(job)
+                if not password_error:
+                    self.launch(job, password)
             except Exception:
                 await self.delete(job)
                 raise JobError("翻译任务创建失败，未开始翻译。") from None
             return self.snapshot(job)
+
+    async def _pages(self, raw, password=None, page_names=None):
+        with await asyncio.to_thread(
+            open_archive, raw, self.plugin.get_config().get("seven_zip_path"), password=password
+        ) as archive:
+            if page_names is not None and (
+                not isinstance(page_names, (list, tuple)) or len(page_names) != len(archive.pages)
+            ):
+                raise JobError("漫画图片与原文件名的对应关系无效，未开始翻译。")
+            pages = [
+                {"index": page.index,
+                 "name": page_names[page.index] if page_names is not None else page.basename,
+                 "result": None, "error": ""}
+                for page in archive.pages
+            ]
+        render_labelplus(pages)
+        return pages
+
+    async def _resume(self, job, password=None):
+        if sum(not task.done() for task in self.tasks.values()) >= MAX_ACTIVE:
+            raise JobError("已有两个漫画翻译任务运行，请稍后再试。")
+        raw = await self.raw_archive(job)
+        try:
+            pages = await self._pages(raw, password)
+        except ArchivePasswordError as exc:
+            job.update(status="awaiting_password", error=str(exc), error_code=exc.code)
+            await self.save(job)
+            return self.snapshot(job)
+        if not job["pages"]:
+            job["pages"] = pages
+        job.update(status="queued", error="", error_code="", delivery="pending", delivery_error="")
+        for page in job["pages"]:
+            if page.get("result") is None:
+                page["error"] = ""
+        await self.save(job)
+        self.launch(job, password)
+        return self.snapshot(job)
 
     async def raw_archive(self, job):
         if not job.get("chunks"):
@@ -243,7 +278,7 @@ class JobManager:
             raise JobError("压缩包缓存不完整，请重新上传。")
         return raw
 
-    async def run(self, job):
+    async def run(self, job, password=None):
         try:
             job["status"] = "running"
             await self.save(job)
@@ -251,7 +286,7 @@ class JobManager:
             consecutive_failures = 0
             previous = ""
             with await asyncio.to_thread(
-                open_archive, raw, self.plugin.get_config().get("seven_zip_path")
+                open_archive, raw, self.plugin.get_config().get("seven_zip_path"), password=password
             ) as archive:
                 for page in job["pages"]:
                     if page.get("result") is not None:
@@ -271,6 +306,8 @@ class JobManager:
                             item["text"] for item in page["result"]["labels"]
                         )[-2000:]
                         consecutive_failures = 0
+                    except ArchivePasswordError:
+                        raise
                     except (ArchiveError, TranslationError) as exc:
                         page["error"] = str(exc)
                         consecutive_failures += 1
@@ -296,6 +333,13 @@ class JobManager:
                         "翻译已完成；临时压缩包清理稍后重试，可正常取回结果。"
                     )
             await self.deliver(job)
+        except ArchivePasswordError as exc:
+            job.update(status="awaiting_password", error=str(exc), error_code=exc.code)
+            await self.save(job)
+            try:
+                await self.send_notice(job, "漫画压缩包需要有效密码；已保留任务，请提供密码后继续。")
+            except Exception:
+                pass
         except asyncio.CancelledError:
             job["status"] = "interrupted"
             job["error"] = "任务已停止，完成页已保留；继续处理需要明确请求。"
@@ -374,7 +418,8 @@ class JobManager:
             except Exception:
                 pass
 
-    async def operate(self, session, action, query_api=None):
+    async def operate(self, session, action, query_api=None, *, password=None):
+        password = validate_password(password)
         scope = scope_key(session)
         async with self.lock:
             job = await self.load(scope)
@@ -389,6 +434,9 @@ class JobManager:
                         await task
                     except asyncio.CancelledError:
                         pass
+                elif job["status"] == "awaiting_password":
+                    job.update(status="cancelled", error="", error_code="")
+                    await self.save(job)
                 return self.snapshot(job)
             if action == "delete":
                 if task and not task.done():
@@ -403,18 +451,7 @@ class JobManager:
                     return self.snapshot(job)
                 if job["status"] == "completed":
                     return self.snapshot(job)
-                if sum(not task.done() for task in self.tasks.values()) >= MAX_ACTIVE:
-                    raise JobError("已有两个漫画翻译任务运行，请稍后再试。")
-                if not job.get("chunks"):
-                    raise JobError("压缩包缓存已清理，请重新上传。")
-                job.update(
-                    status="queued", error="", delivery="pending", delivery_error=""
-                )
-                for page in job["pages"]:
-                    if page.get("result") is None:
-                        page["error"] = ""
-                await self.save(job)
-                self.launch(job)
+                return await self._resume(job, password)
             if action == "result":
                 await self.deliver(job, query_api=query_api, explicit=True)
             return self.snapshot(job)
