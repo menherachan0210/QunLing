@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -27,6 +28,8 @@ from store.serialization import serialized_write
 logger = logging.getLogger(__name__)
 
 EMBEDDING_BATCH_SIZE = 32
+PROFILE_READ_TIMEOUT_SECONDS = 0.35
+GROUP_EPISODE_TIMEOUT_SECONDS = 1.5
 
 
 class LongTermMemoryEngine(KnowledgeEngine):
@@ -162,6 +165,29 @@ class LongTermMemoryEngine(KnowledgeEngine):
     # ================================================================
 
     async def retrieve(self, context: RetrievalContext) -> RetrievalResponse:
+        if context.retrieval_settings.get("include_profiles") is not True:
+            return await self._retrieve_episodes(context)
+
+        # Group chat has a short overall deadline. Read cheap, existing L1 data
+        # first and retain it when the embedding model is cold or unavailable.
+        profiles = await self._read_group_profiles(context)
+        request = context.model_copy(deep=True)
+        try:
+            limit = max(1, min(3, int(request.retrieval_settings.get("top_k", 3))))
+        except (TypeError, ValueError):
+            limit = 3
+        request.retrieval_settings["top_k"] = limit
+        episodes = []
+        try:
+            async with asyncio.timeout(GROUP_EPISODE_TIMEOUT_SECONDS):
+                response = await self._retrieve_episodes(request)
+                episodes = response.results
+        except Exception as exc:
+            logger.info("[LongTermMemory] group episode recall unavailable (%s)", type(exc).__name__)
+        entries = [*profiles, *episodes][:limit]
+        return RetrievalResponse(results=entries, total_found=len(entries))
+
+    async def _retrieve_episodes(self, context: RetrievalContext) -> RetrievalResponse:
         query = context.query
         collection_id = context.get_collection_id()
         settings = context.creation_settings
@@ -356,6 +382,50 @@ class LongTermMemoryEngine(KnowledgeEngine):
             )
 
         return RetrievalResponse(results=entries, total_found=len(entries))
+
+    async def _read_group_profiles(self, context: RetrievalContext) -> list[RetrievalResultEntry]:
+        """Read the current group's and current speaker's L1 data, never write."""
+        settings = context.retrieval_settings
+        if context.creation_settings.get("isolation", "session") != "session":
+            return []
+        bot_uuid = settings.get("bot_uuid")
+        session_name = settings.get("session_name")
+        sender_id = settings.get("sender_id")
+        if not isinstance(bot_uuid, str) or not bot_uuid.strip() or not isinstance(session_name, str):
+            return []
+        group_id = session_name.removeprefix("group_")
+        if (not session_name.startswith("group_") or not group_id.isascii()
+                or not group_id.isdigit() or len(group_id) > 32 or int(group_id) <= 0):
+            return []
+        if (not isinstance(sender_id, str) or not sender_id.isascii() or not sender_id.isdigit()
+                or len(sender_id) > 32 or int(sender_id) <= 0):
+            sender_id = ""
+        store = self.plugin.memory_store
+        scope_key = store.get_session_key(bot_uuid, "group", group_id)
+        records = []
+        for kind, speaker in (("speaker_profile", sender_id), ("group_profile", "")):
+            if kind == "speaker_profile" and not speaker:
+                continue
+            try:
+                async with asyncio.timeout(PROFILE_READ_TIMEOUT_SECONDS):
+                    profile = (await store.load_speaker_profile(scope_key, speaker) if speaker
+                               else await store.load_session_profile(scope_key))
+                content = store.format_profile_prompt(profile, "## Current Speaker Profile" if speaker else "## Group Profile")[:900]
+                if not content.strip():
+                    continue
+                metadata = {
+                    "user_key": scope_key, "bot_uuid": bot_uuid, "sender_id": speaker,
+                    "sender_name": str(profile.get("name", "") or "")[:80] if speaker else "",
+                    "content": content, "timestamp": str(profile.get("updated_at", "") or "")[:40],
+                    "status": "active", "memory_kind": kind,
+                }
+                records.append(RetrievalResultEntry(
+                    id=f"{kind}:{scope_key}:{speaker}",
+                    content=[{"type": "text", "text": content}], metadata=metadata, score=1.0, distance=0.0,
+                ))
+            except Exception as exc:
+                logger.info("[LongTermMemory] group profile recall unavailable (%s)", type(exc).__name__)
+        return records
 
     # ================================================================
     # ingest - import memories from JSON file

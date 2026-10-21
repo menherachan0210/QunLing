@@ -1,0 +1,234 @@
+diff --git a/src/langbot/pkg/pipeline/aggregator.py b/src/langbot/pkg/pipeline/aggregator.py
+--- a/src/langbot/pkg/pipeline/aggregator.py
++++ b/src/langbot/pkg/pipeline/aggregator.py
+@@ -152,6 +152,10 @@
+         variables: dict[str, typing.Any] | None = None,
+     ) -> None:
+         """Buffer or directly enqueue a message in its trusted Workspace."""
++        from qunling.qq_dispatch import forward_ingress
++
++        if await forward_ingress(self.ap, dict(locals())):
++            return
+ 
+         execution_context = await self.ap.query_pool.resolve_execution_context(
+             execution_context,
+diff --git a/src/langbot/pkg/pipeline/pool.py b/src/langbot/pkg/pipeline/pool.py
+--- a/src/langbot/pkg/pipeline/pool.py
++++ b/src/langbot/pkg/pipeline/pool.py
+@@ -156,6 +156,10 @@
+         """Discard the oldest queued query from one scope and all indexes."""
+ 
+         for index, query in enumerate(self.queries):
++            from qunling.qq_dispatch import protected
++
++            if protected(query):
++                continue
+             execution_context = get_query_execution_context(query)
+             if workspace_uuid is not None and execution_context.workspace_uuid != workspace_uuid:
+                 continue
+@@ -263,6 +267,12 @@
+         execution_context: ExecutionContext | None = None,
+     ) -> pipeline_query.Query:
+         """Create a query and cache it under an opaque, Workspace-scoped key."""
++
++        from qunling.qq_dispatch import intercept_add
++
++        handled, result = await intercept_add(self, dict(locals()))
++        if handled:
++            return result
+ 
+         query_uuid = str(uuid.uuid4())
+         execution_context = await self.resolve_execution_context(
+diff --git a/src/langbot/pkg/pipeline/controller.py b/src/langbot/pkg/pipeline/controller.py
+--- a/src/langbot/pkg/pipeline/controller.py
++++ b/src/langbot/pkg/pipeline/controller.py
+@@ -77,19 +77,26 @@
+         """Run one selected query and always release its scheduling slot."""
+ 
+         try:
++            from qunling.qq_dispatch import begin_processing, preflight
++
++            begin_processing(selected_query)
+             queued_context = get_query_execution_context(selected_query)
+ 
+             async def run_scoped_query() -> None:
+-                execution_context = await self._assert_query_execution_active(selected_query)
++                execution_context = await preflight(
++                    selected_query, self._assert_query_execution_active(selected_query)
++                )
+                 pipeline_uuid = selected_query.pipeline_uuid
+ 
+                 if pipeline_uuid:
+-                    pipeline = await self.ap.pipeline_mgr.get_pipeline_by_uuid(
+-                        execution_context,
+-                        pipeline_uuid,
++                    pipeline = await preflight(
++                        selected_query,
++                        self.ap.pipeline_mgr.get_pipeline_by_uuid(execution_context, pipeline_uuid),
+                     )
+                     if pipeline:
+-                        await pipeline.run(selected_query)
++                        from qunling.qq_dispatch import run_pipeline
++
++                        await run_pipeline(self.ap, selected_query, pipeline)
+                     else:
+                         self.ap.logger.warning(
+                             f'Pipeline {pipeline_uuid} not found for query {selected_query.query_id}, query dropped'
+@@ -113,6 +120,9 @@
+         finally:
+             try:
+                 try:
++                    from qunling.qq_dispatch import fail_cleanup
++
++                    await fail_cleanup(self.ap, selected_query)
+                     await self.ap.query_pool.remove_query(selected_query)
+                 finally:
+                     async with self.ap.query_pool:
+@@ -123,12 +133,17 @@
+                             self.ap.query_pool.condition.notify_all()
+             finally:
+                 if global_slot_reserved:
+-                    self.semaphore.release()
++                    from qunling.qq_dispatch import release_slot
++
++                    release_slot(self, selected_query)
+ 
+     async def _drop_selected_query(self, selected_query, selected_session) -> None:
+         """Undo scheduler ownership when work cannot be handed to a task."""
+ 
+         try:
++            from qunling.qq_dispatch import fail_cleanup
++
++            await fail_cleanup(self.ap, selected_query)
+             await self.ap.query_pool.remove_query(selected_query)
+         finally:
+             async with self.ap.query_pool:
+@@ -143,45 +158,22 @@
+                 selected_session = None
+                 claimed_steering_query: pipeline_query.Query = None
+ 
+-                # 取请求
+-                async with self.ap.query_pool:
+-                    queries: list[pipeline_query.Query] = self.ap.query_pool.queries
+-
+-                    for query in queries:
+-                        session = await self.ap.sess_mgr.get_session(query)
+-                        # Debug logging removed from tight loop to prevent excessive log generation
+-                        # that can cause memory overflow in high-traffic scenarios
+-
+-                        if session._semaphore.locked():
+-                            if await self._try_claim_steering_before_session_slot(query):
+-                                claimed_steering_query = query
+-                                break
+-                            continue
+-
+-                        if not session._semaphore.locked():
+-                            selected_query = query
+-                            selected_session = session
+-                            await session._semaphore.acquire()
+-                            self.ap.query_pool.mark_query_running_locked(query)
+-                            # Only log when actually selecting a query
+-                            self.ap.logger.debug(f'Selected query {query.query_id} for processing')
+-
+-                            break
+-
+-                    if claimed_steering_query is not None:
+-                        self.ap.query_pool.remove_query_locked(claimed_steering_query)
+-                        self.ap.query_pool.condition.notify_all()
+-                        continue
+-                    if selected_query is None:  # 没找到 说明：没有请求 或者 所有query对应的session都已达到并发上限
+-                        await self.ap.query_pool.condition.wait()
+-                        continue
++                from qunling.qq_dispatch import next_query
++
++                selected_query, selected_session = await next_query(self)
++                if selected_query is None:
++                    continue
+ 
+                 if selected_query:
+                     try:
+                         # Reserve global capacity before creating the task.
+                         # At most one selected query is held by this consumer
+                         # while all pipeline slots are busy.
+-                        await self.semaphore.acquire()
++                        from qunling.qq_dispatch import acquire_slot
++
++                        if not await acquire_slot(self, selected_query):
++                            await self._drop_selected_query(selected_query, selected_session)
++                            continue
+                     except asyncio.CancelledError:
+                         await self._drop_selected_query(selected_query, selected_session)
+                         raise
+@@ -207,7 +199,9 @@
+                         )
+                     except Exception:
+                         process_coro.close()
+-                        self.semaphore.release()
++                        from qunling.qq_dispatch import release_slot
++
++                        release_slot(self, selected_query)
+                         await self._drop_selected_query(selected_query, selected_session)
+                         raise
+ 
+diff --git a/src/langbot/pkg/pipeline/resprule/resprule.py b/src/langbot/pkg/pipeline/resprule/resprule.py
+--- a/src/langbot/pkg/pipeline/resprule/resprule.py
++++ b/src/langbot/pkg/pipeline/resprule/resprule.py
+@@ -41,6 +41,13 @@
+         if query.variables and query.variables.get('_routed_by_rule', False):
+             return entities.StageProcessResult(result_type=entities.ResultType.CONTINUE, new_query=query)
+ 
++        # Admission already evaluated the trusted host policy once. Random
++        # rules and trigger stripping must not run a second time.
++        replacement = getattr(query, '_qq_trigger_replacement', None)
++        if replacement is not None:
++            query.message_chain = replacement
++            return entities.StageProcessResult(result_type=entities.ResultType.CONTINUE, new_query=query)
++
+         rules = query.pipeline_config['trigger']['group-respond-rules']
+ 
+         use_rule = rules
+diff --git a/src/langbot/pkg/provider/tools/toolmgr.py b/src/langbot/pkg/provider/tools/toolmgr.py
+--- a/src/langbot/pkg/provider/tools/toolmgr.py
++++ b/src/langbot/pkg/provider/tools/toolmgr.py
+@@ -448,7 +448,9 @@
+     ) -> typing.Any:
+         start_time = time.perf_counter()
+         try:
+-            result = await invoke()
++            from qunling.qq_dispatch import invoke_tool
++
++            result = await invoke_tool(self.ap, query, invoke, name)
+         except asyncio.CancelledError:
+             duration_ms = int((time.perf_counter() - start_time) * 1000)
+             await self._record_tool_call(
+diff --git a/src/langbot/pkg/pipeline/pipelinemgr.py b/src/langbot/pkg/pipeline/pipelinemgr.py
+--- a/src/langbot/pkg/pipeline/pipelinemgr.py
++++ b/src/langbot/pkg/pipeline/pipelinemgr.py
+@@ -604,6 +604,7 @@
+             # chain is uploaded even though the error never became a StageProcessResult.
+             self._record_lane_failure(query, str(e) or type(e).__name__)
+ 
++            query.variables['_monitoring_has_error'] = True
+             # Record query error
+             try:
+                 from . import monitoring_helper
+diff --git a/src/langbot/pkg/pipeline/respback/respback.py b/src/langbot/pkg/pipeline/respback/respback.py
+--- a/src/langbot/pkg/pipeline/respback/respback.py
++++ b/src/langbot/pkg/pipeline/respback/respback.py
+@@ -44,6 +44,8 @@
+         message_chain = query.resp_message_chain[-1]
+ 
+         is_streaming_response = False
++        object.__setattr__(query, '_qq_delivery_attempted', True)
++        object.__setattr__(query, '_qq_delivery_confirmed', False)
+         is_final = False
+         try:
+             is_streaming_response = await query.adapter.is_stream_output_supported() and has_chunks
+@@ -90,6 +92,7 @@
+                         )
+                 return entities.StageProcessResult(result_type=entities.ResultType.CONTINUE, new_query=query)
+             raise
++        object.__setattr__(query, '_qq_delivery_confirmed', True)
+         plugin_diagnostics.clear_response_source(query, response_index)
+ 
+         return entities.StageProcessResult(result_type=entities.ResultType.CONTINUE, new_query=query)

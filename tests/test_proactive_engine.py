@@ -116,10 +116,10 @@ def test_text_window_is_bounded_and_old_text_expires():
             h.engine.on_message(h.message(str(index), text="字" * 3000))
         await h.engine.drain()
         context = h.checked[0]
-        assert len(context.messages) <= 40
-        assert sum(len(item.text) for item in context.messages) <= 6000
+        assert len(context.messages) <= 120
+        assert sum(len(item.text) for item in context.messages) <= 12000
         assert all(len(item.text) <= 2000 for item in context.messages)
-        h.now += 241
+        h.now += 1201
         h.engine.on_message(h.message("fresh"))
         await h.engine.drain()
         assert [m.message_id for m in h.checked[-1].messages] == ["fresh"]
@@ -639,8 +639,8 @@ def test_bot_reply_expires_with_short_context_without_resetting_budgets():
         assert state.last_proactive_at == sent_at
         assert list(state.sends) == [sent_at]
         assert list(state.judgments) == [sent_at]
-        # A new topic can be judged later, but it cannot receive the expired joke.
-        h.now += 360
+        # Followup timing expires before the bounded shared evidence window.
+        h.now += 960
         h.action = "silence"
         h.engine.on_message(h.message("new-topic"))
         await h.engine.drain()

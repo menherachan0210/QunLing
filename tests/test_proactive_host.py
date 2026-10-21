@@ -165,6 +165,74 @@ async def test_generate_reuses_shared_style_target_author_and_dynamic_character_
 
 
 @pytest.mark.asyncio
+async def test_group_topic_can_answer_another_participant_and_recall_their_group_memory(bridge, monkeypatch):
+    from qunling import group_memory
+    from qunling.proactive.engine import ConversationContext, Decision, Message
+
+    messages = (
+        Message("bot", "30000", "a", "alice", "周末一起去看电影吧", time.time()),
+        Message("bot", "30000", "b", "bob", "那预算多少合适", time.time()),
+    )
+    context = ConversationContext("bot", "30000", "active", "", messages, (), "", None, None,
+                                  participant_id="alice", reply_candidate_ids=("a", "b"),
+                                  focus_message_ids=("a", "b"))
+    memory = {"group_id": "30000", "participant_id": "bob", "records": [
+        {"speaker_id": "bob", "text": "我喜欢看动画电影", "timestamp": 1},
+    ]}
+    recall = AsyncMock(return_value=memory)
+    monkeypatch.setattr(group_memory, "recall_group_memory", recall)
+    bridge._complete = AsyncMock(return_value="你们可以先选场次，再看票价。")
+
+    assert await bridge.generate(context, Decision("reply", "b")) == "你们可以先选场次，再看票价。"
+    recall.assert_awaited_once_with(bridge.bot, "30000", "bob", "那预算多少合适")
+    _, payload = bridge._complete.await_args.args
+    assert payload["shared_memory"] == memory
+    assert payload["target_author"]["sender_id"] == "bob"
+    assert payload["runtime"]["tools_available"] is False
+
+
+@pytest.mark.asyncio
+async def test_public_topic_reply_is_plain_but_direct_reply_keeps_quote(bridge):
+    bridge.observe(event("大家周末去看电影怎么样", message_id="open-discussion"))
+    await bridge.send("30000", "可以先看看周末的场次。", "open-discussion")
+    chain = bridge.bot.adapter.send_message.await_args.args[2]
+    assert [item.type for item in chain] == ["Plain"]
+
+    directed = event("群灵，你也喜欢电影吗", message_id="direct-call")
+    bridge.observe(directed)
+    await bridge.send("30000", "聊电影我能接上。", "direct-call")
+    chain = bridge.bot.adapter.send_message.await_args.args[2]
+    assert [item.type for item in chain] == ["Quote", "Plain"]
+    assert str(chain[0].id) == "direct-call"
+    await bridge.engine.close()
+
+
+@pytest.mark.asyncio
+async def test_free_and_explicit_share_confirmed_public_replies_beyond_old_four_minute_window(bridge):
+    now = time.time()
+    bridge.engine._clock = lambda: now
+    older = event("周末看电影的预算就按每人八十", sender="20001", message_id="plan")
+    older.timestamp = now
+    bridge.observe(older)
+    now += 600
+    bridge.engine.on_bot_message("30000", "按每人八十来安排。", message_id="free-answer",
+                                 recipient_id="20001", reply_to="plan")
+    request = event("那包括晚饭吗", explicit=True, message_id="mention")
+    request.timestamp = now
+    bridge.observe(request)
+    query = query_for(bridge, request)
+    host.prepare_prompt(query)
+    history = query.prompt.messages[-1].content
+    assert "每人八十" in history and "free-answer" in history and '"sender_id": "20001"' in history
+    host.sent(bridge.bot.adapter, "30000", MessageChain([Plain(text="晚饭另算。")]),
+              receipt={"message_id": "explicit-answer"}, recipient_id="20000", reply_to="mention")
+    current = bridge.engine.snapshot("30000", before_timestamp=now + 1)
+    assert any(item.message_id == "explicit-answer" and item.text == "晚饭另算。" for item in current)
+    host.completed(bridge.bot.adapter, request)
+    await bridge.engine.close()
+
+
+@pytest.mark.asyncio
 async def test_send_supports_complete_directed_text_with_hard_limit(bridge):
     await bridge.send("30000", "字" * 1600)
     with pytest.raises(host.ProactiveUnavailable):
@@ -500,7 +568,7 @@ async def test_patched_onebot_send_and_reply_record_actual_success_only(bridge, 
 
 @pytest.mark.asyncio
 async def test_directed_send_quotes_only_a_live_target_from_the_authorized_group(bridge):
-    incoming = event("小灵出来聊天", message_id="123")
+    incoming = event("群灵出来聊天", message_id="123")
     host.observe(bridge.bot, incoming, bridge.bot.adapter)
     await bridge.send("30000", "[CQ:at,qq=all] 只是普通文字", "123")
     kind, group, chain = bridge.bot.adapter.send_message.await_args.args
@@ -521,7 +589,7 @@ async def test_directed_send_quotes_only_a_live_target_from_the_authorized_group
 
 
 @pytest.mark.asyncio
-async def test_generate_preserves_focus_and_refuses_a_different_participants_target(bridge):
+async def test_generate_preserves_shared_focus_and_refuses_another_members_explicit_task(bridge):
     from qunling.proactive.engine import ConversationContext, Decision, Message
 
     first = Message("bot", "30000", "translation", "20001", "翻译这页", time.time(), explicit_request=True, has_media=True)
@@ -535,7 +603,7 @@ async def test_generate_preserves_focus_and_refuses_a_different_participants_tar
     assert value["context"]["participant_id"] == "20002"
     assert value["context"]["focus_message_ids"] == ("chat",)
     assert value["target_author"]["sender_id"] == "20002"
-    assert "其他 messages 只作群聊背景" in prompt
+    assert "不将成员身份当成话题边界" in prompt
     assert "同一称呼和交流习惯" in prompt
     with pytest.raises(host.ProactiveUnavailable, match="目标已失效"):
         await bridge.generate(context, Decision("reply", "translation"))
@@ -557,7 +625,8 @@ async def test_explicit_prompt_marks_own_history_and_actual_quoted_evidence(brid
     host.prepare_prompt(query)
     status = json.loads(query.prompt.messages[1].content.rsplit("\n", 1)[-1])
     assert status["participant_id"] == "20000"
-    assert set(status["focus_message_ids"]) == {"own-question", "own-answer"}
+    assert set(status["focus_message_ids"]) == {"other-task", "own-question", "own-answer"}
+    assert set(status["topic_message_ids"]) == {"own-question", "own-answer"}
     assert "另一人的翻译任务" in query.prompt.messages[2].content  # Background stays attributed, not silently reassigned.
     assert "同一称呼和交流习惯" in query.prompt.messages[1].content
     message = next(item for item in bridge.engine.snapshot("30000", before_message_id="followup") if item.message_id == "own-answer")
@@ -578,7 +647,7 @@ async def test_explicit_prompt_freezes_known_recipient_answers_without_inventing
     query = query_for(bridge, request)
     host.prepare_prompt(query)
     status = json.loads(query.prompt.messages[1].content.rsplit("\n", 1)[-1])
-    assert status["focus_message_ids"] == ["answer-a"]
+    assert status["focus_message_ids"] == ["answer-a", "answer-b"]
     history = json.loads(query.prompt.messages[2].content.rsplit("\n", 1)[-1])["messages"]
     assert {item["message_id"] for item in history} == {"answer-a", "answer-b"}
     assert all(item["reply_to"] is None for item in history)

@@ -42,6 +42,7 @@ jobs:
           tests/test_proactive_config.py tests/test_proactive_engine.py
           tests/test_proactive_setup.py tests/test_proactive_frontend.py
           tests/test_proactive_batches.py tests/test_proactive_conversations.py
+          tests/test_proactive_topics.py
           tests/test_conversation_frontend.py tests/test_qq_status*.py
           tests/test_task*.py tests/test_file*.py
           --ignore=tests/test_file_pipeline.py
@@ -94,7 +95,7 @@ jobs:
               uv pip install --python "$VIRTUAL_ENV/bin/python" --no-index --find-links=/wheels pytest pytest-asyncio
               cd /workspace
               python -m pytest tests/test_task*.py tests/test_file*.py tests/test_attachment_transport_budget.py -q -p no:cacheprovider
-              python -m pytest tests/test_proactive_config.py tests/test_proactive_engine.py tests/test_proactive_setup.py tests/test_proactive_host.py tests/test_proactive_batches.py tests/test_proactive_conversations.py tests/test_proactive_mode_prompt.py tests/test_qq_sessions.py tests/test_qq_status.py tests/test_qq_status_setup.py -q -p no:cacheprovider
+              python -m pytest tests/test_proactive_config.py tests/test_proactive_engine.py tests/test_proactive_setup.py tests/test_proactive_host.py tests/test_proactive_batches.py tests/test_proactive_conversations.py tests/test_proactive_topics.py tests/test_proactive_mode_prompt.py tests/test_group_memory.py tests/test_group_dialogue_integration.py tests/test_qq_dispatch*.py tests/test_qq_sessions.py tests/test_qq_status.py tests/test_qq_status_setup.py -q -p no:cacheprovider
               python -m qunling.daemon --once
               for plugin in QQTextReader QQGroupContext QQWebSearch QQComicTranslator AIImagePlugin LongTermMemory; do
                 cd "/workspace/custom-plugins/$plugin"

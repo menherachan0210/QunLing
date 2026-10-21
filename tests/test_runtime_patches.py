@@ -136,7 +136,8 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("host-proactive-context.patch", "host", False) in patcher.PATCHES
     assert ("host-qq-status.patch", "host", False) in patcher.PATCHES
     assert ("host-qq-member-sessions.patch", "host", False) in patcher.PATCHES
-    assert len(names) == 22
+    assert ("host-qq-dispatch.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 23
 
 
 def test_all_bundled_patches_have_supported_runtime_blocks():

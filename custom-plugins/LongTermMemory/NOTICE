@@ -5,9 +5,13 @@ https://github.com/langbot-app/langbot-plugins/tree/main/KnowledgeEngine/LongTer
 License: Apache License 2.0 (see LICENSE).
 
 This is a modified distribution, not an official upstream release.
-Local changes through 2026-10-20 remove obsolete pipeline suppression and
-correct scoped memory deletion/compatibility behavior. The local version is
-0.2.7+local.2. The exact upstream commit was not recorded with the original
+Local changes through 2026-10-21 remove obsolete pipeline suppression,
+correct scoped memory deletion/compatibility behavior, and add opt-in read-only
+group/speaker profile recall for QunLing group conversation. Profile retrieval
+is bounded and survives embedding failures; default explicit-request recall,
+memory writes, plugin identity and persisted configuration remain unchanged.
+The local version is 0.2.7+local.3. The exact upstream commit was not recorded with the original
 local copy; no commit identity is asserted here.
 Original upstream attribution and author/name installation identity are retained.
-See the local repair documentation and the repository's compatibility patches.
+See the local repair documentation. The repository's compatibility patch records
+the earlier local.2 changes; current packages are built from this source tree.

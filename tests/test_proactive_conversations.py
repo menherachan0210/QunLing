@@ -36,7 +36,7 @@ def test_two_participants_in_one_group_are_judged_independently_without_consumin
         assert [item[2] for item in h.sent] == ["bob-call", "alice-call"]
         assert [item.reply_candidate_ids for item in h.checked] == [("alice-call",), ("bob-call",)]
         assert len({item.conversation_id for item in h.checked}) == 2
-        assert "alice-call" not in h.checked[1].focus_message_ids
+        assert "alice-call" in h.checked[1].focus_message_ids
         assert any(m.message_id == "alice-call" for m in h.checked[1].messages)
     asyncio.run(scenario())
 
@@ -120,7 +120,7 @@ def test_bot_anchors_are_per_participant_and_exact_quote_overrides_latest_reply(
         assert contexts["alice"].last_bot_message_id == "answer-a"
         assert contexts["alice"].last_bot_text == "给A的回答"
         assert contexts["alice"].followup_candidate_ids == ("a-follow",)
-        assert "answer-b" not in contexts["alice"].focus_message_ids
+        assert "answer-b" in contexts["alice"].focus_message_ids
         assert contexts["bob"].last_bot_message_id == "answer-a"
         assert contexts["bob"].followup_candidate_ids == ("b-quote",)
         assert contexts["bob"].reply_candidate_ids == ("b-quote",)
@@ -177,7 +177,7 @@ def test_conversation_and_running_limits_are_bounded_and_close_cancels_all():
 
         h.engine._judge = judge
         for index in range(16):
-            h.engine.on_message(h.message(str(index), sender_id=f"sender-{index}"))
+            h.engine.on_message(h.message(str(index), sender_id=f"sender-{index}", text=f"群灵，单独聊第{index}件事"))
         await eventually(lambda: len(entered) == 2)
         state = h.engine._groups["100"]
         assert len(state.lanes) == 16 and len(h.engine._tasks) == 16
@@ -271,8 +271,8 @@ def test_two_generated_normal_answers_can_send_after_group_spacing():
             return result
 
         h.engine._generate, h.engine._send = generate, send
-        h.engine.on_message(h.message("a", sender_id="alice"))
-        h.engine.on_message(h.message("b", sender_id="bob"))
+        h.engine.on_message(h.message("a", sender_id="alice", text="预算下降影响采购计划"))
+        h.engine.on_message(h.message("b", sender_id="bob", text="今天下雨要带伞"))
         await asyncio.wait_for(a_sent.wait(), 1)
         await eventually(lambda: h.engine._groups["100"].last_event["code"] == "cooldown")
         h.now += 45
