@@ -1,0 +1,60 @@
+{
+  "apiVersion": "v1",
+  "kind": "Tool",
+  "metadata": {
+    "name": "query_group_members",
+    "label": {
+      "en_US": "query_group_members",
+      "zh_Hans": "查询本群成员资料"
+    },
+    "description": {
+      "en_US": "Read current-group member nickname, card and role on demand",
+      "zh_Hans": "查询本群成员资料"
+    }
+  },
+  "spec": {
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "list",
+            "get"
+          ],
+          "default": "list"
+        },
+        "search_text": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "list: search current group nicknames/cards/QQ IDs, exact matches should be preferred; do not pick arbitrarily among duplicate names."
+        },
+        "member_id": {
+          "type": "string",
+          "description": "get: self means the current requester, or a QQ ID known from the current conversation; only this group's members can be returned."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9999,
+          "default": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 20
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "llm_prompt": "Read current-group member nickname, card and role on demand. Do not assume avatar appearance from names. For a member avatar, use the actual returned member_ref with read_qq_avatar. No private profile data or arbitrary group IDs."
+  },
+  "execution": {
+    "python": {
+      "path": "query_group_members.py",
+      "attr": "QueryGroupMembers"
+    }
+  }
+}

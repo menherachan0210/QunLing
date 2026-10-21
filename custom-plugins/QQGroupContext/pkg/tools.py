@@ -468,15 +468,30 @@ async def execute(tool, action, params, query_id, query_uuid):
         context = tool.plugin.contexts.get(tool.plugin, variables, query_id, query_uuid)
         if str(await api.get_bot_uuid()) != context.bot:
             raise VisionError("机器人与当前群上下文不匹配。")
-        if action == "import_images":
+        if action in {"members", "avatar", "group_files", "forwarded"}:
+            from pkg.group_members import group_members, read_avatar
+            from pkg.group_files import group_files
+            from pkg.forward_tools import forward_tools
+            handlers = {"members": group_members, "avatar": read_avatar,
+                        "group_files": group_files, "forwarded": forward_tools}
+            tool.plugin.contexts.claim_group_data(context)
+            try:
+                result = await handlers[action](tool.plugin, context, params, api)
+                from pkg.group_evidence import publish_result
+                await publish_result(tool.plugin, context, action, result)
+            finally:
+                context.group_data_inflight -= 1
+        elif action == "import_images":
             from pkg.asset_bridge import import_images
             result = await import_images(tool.plugin, context, params, api)
-        else:
+        elif action in {"context", "images"}:
             result = await (
                 read_context(tool.plugin, context, params)
                 if action == "context"
                 else read_images(tool.plugin, context, params)
             )
+        else:
+            raise VisionError("不支持的群资料操作。")
     except ImageReadError as exc:
         result = exc.result()
     except VisionError as exc:

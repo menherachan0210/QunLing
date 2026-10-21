@@ -1,0 +1,17 @@
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/message_converter.py
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/message_converter.py
+@@ -218,3 +218,8 @@
+             elif segment.type == 'json':
+                 try:
++                    from qunling.qq_forward import is_forward_card
++
++                    if is_forward_card({'type': 'json', 'data': dict(segment.data)}):
++                        components.append(platform_message.Plain(text='[合并转发聊天记录，可用 read_forwarded_messages 展开]'))
++                        continue
+                     raw = segment.data.get('data', {})
+@@ -254,3 +259,5 @@
++            elif segment.type == 'forward':
++                components.append(platform_message.Plain(text='[合并转发聊天记录，可用 read_forwarded_messages 展开]'))
+             else:
+                 components.append(platform_message.Unknown(text=f'{segment.type}:{segment.data}'))
+ 

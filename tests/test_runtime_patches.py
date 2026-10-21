@@ -137,7 +137,9 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("host-qq-status.patch", "host", False) in patcher.PATCHES
     assert ("host-qq-member-sessions.patch", "host", False) in patcher.PATCHES
     assert ("host-qq-dispatch.patch", "host", False) in patcher.PATCHES
-    assert len(names) == 23
+    assert ("onebot-group-information.patch", "host", False) in patcher.PATCHES
+    assert ("onebot-forward-placeholder.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 25
 
 
 def test_all_bundled_patches_have_supported_runtime_blocks():

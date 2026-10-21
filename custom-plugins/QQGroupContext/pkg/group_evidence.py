@@ -1,0 +1,45 @@
+"""Share only bounded public query conclusions, never resource capabilities."""
+from __future__ import annotations
+
+import asyncio
+
+from qunling.integration import workspace_key
+from qunling.group_knowledge import publish
+
+
+def _name(member):
+    return str(member.get("card") or member.get("nickname") or member.get("user_id") or "本群成员")[:100]
+
+
+async def publish_result(plugin, context, action, result):
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        return
+    source, subject, text = "", "", ""
+    if action == "members":
+        members = result.get("members", [result["member"]] if isinstance(result.get("member"), dict) else [])
+        if isinstance(members, list):
+            rows = [row for row in members[:8] if isinstance(row, dict)]
+            subject = "、".join(_name(row) for row in rows)[:200]
+            text = "；".join(f"{_name(row)}：昵称{str(row.get('nickname', ''))[:100]}，"
+                            f"群身份{row.get('role', '未知')}" for row in rows)
+            source = "member_info"
+    elif action == "avatar":
+        targets = result.get("targets") or [result.get("target", {})]
+        subject = "、".join("本群头像" if row.get("kind") == "group" else _name(row)
+                           for row in targets[:4] if isinstance(row, dict))[:200]
+        text = str(result.get("analysis", ""))[:1100]
+        source = "avatar_analysis"
+    elif action == "group_files" and isinstance(result.get("entries"), list):
+        rows = [row for row in result["entries"][:12] if isinstance(row, dict)]
+        subject = "群文件目录"
+        text = "本次查看的部分目录条目：" + "；".join(str(row.get("name", ""))[:100] for row in rows)
+        source = "group_file_list"
+    if source and text:
+        try:
+            await asyncio.to_thread(publish, workspace_id=workspace_key(plugin), bot_id=context.bot,
+                                    group_id=context.group, question=context.current_question,
+                                    source=source, subject=subject, text=text)
+        except Exception:
+            # Optional short-term recall must not turn a successful read into a
+            # failed tool or cause the model to repeat paid vision work.
+            pass

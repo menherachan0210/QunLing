@@ -3,13 +3,13 @@ kind: Plugin
 metadata:
   author: local
   name: QQGroupContext
-  version: 0.1.6
+  version: 0.2.0
   label:
     en_US: QQ Group Conversation Context
-    zh_Hans: QQ 群聊前文与多图理解
+    zh_Hans: QQ 群聊资料与图片理解
   description:
     en_US: On-demand recent group discussion and image understanding across participants.
-    zh_Hans: 按需理解同群不同成员的近期讨论和图片，自然接续话题。
+    zh_Hans: 按需查询群成员、识别头像、浏览群文件，理解群聊前文与图片。
   icon: assets/icon.svg
 spec:
   config:

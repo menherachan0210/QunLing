@@ -173,7 +173,6 @@ async def test_status_cancel_bypass_busy_member_and_never_cancel_other_member(ma
 async def test_queue_timeout_not_silent_and_never_executes_later(managed):
     app = managed
     app.dispatch.queue_timeout = .04
-    app.dispatch.feedback_after = .01
     query = await put(app, "a", "pending")
     await until(lambda: query._qq_task.done.is_set())
     await until(lambda: "terminal" in query._qq_task.notices)
@@ -186,7 +185,6 @@ async def test_queue_timeout_not_silent_and_never_executes_later(managed):
 async def test_execution_timeout_releases_slot_and_reports_once(managed):
     app = managed
     app.dispatch.active_timeout = .04
-    app.dispatch.feedback_after = .01
     app.pipeline.run = AsyncMock(side_effect=lambda query: None)
     async def run(query):
         await asyncio.Event().wait()
@@ -200,7 +198,7 @@ async def test_execution_timeout_releases_slot_and_reports_once(managed):
         await asyncio.gather(*app.workers)
         assert controller.semaphore._value == 2
         assert query._qq_task.terminal == "execution_timeout"
-        assert app.adapter.reply_message.await_count == 2  # one wait + one terminal
+        assert app.adapter.reply_message.await_count == 1  # terminal only; no automatic wait notice
     finally:
         consumer.cancel()
         with suppress(asyncio.CancelledError):

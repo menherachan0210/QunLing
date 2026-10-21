@@ -36,6 +36,8 @@ PATCHES = (
     ("image-tool-host-timeout.patch", "host", False),
     ("onebot-text-attachment.patch", "host", False),
     ("onebot-group-context.patch", "host", False),
+    ("onebot-group-information.patch", "host", False),
+    ("onebot-forward-placeholder.patch", "host", False),
     ("group-message-isolation.patch", "host", False),
     ("group-history-speakers.patch", "host", False),
     ("file-outbox-host.patch", "host", False),

@@ -131,7 +131,6 @@ class Dispatch:
     queue_timeout = 90.0
     run_timeout = 600.0
     active_timeout = 120.0
-    feedback_after = 15.0
     observation_timeout = 5.0
     observation_barrier_timeout = 15.0
     observation_limit = 32
@@ -263,7 +262,7 @@ class Dispatch:
         try:
             while not task.done.is_set():
                 try:
-                    await asyncio.wait_for(task.done.wait(), min(self.feedback_after, 1.0))
+                    await asyncio.wait_for(task.done.wait(), 1.0)
                     break
                 except TimeoutError:
                     pass
@@ -274,11 +273,6 @@ class Dispatch:
                 if task.phase in {"running", "resuming"} and now - task.changed >= self.active_timeout:
                     await self.stop(task, "execution_timeout")
                     break
-                if now - task.created >= self.feedback_after:
-                    message = ("请求已收到，正在排队；可 @ 我发送“任务状态”或“取消任务”。"
-                               if task.phase == "queued" else
-                               "请求仍在处理，尚未完成；可 @ 我发送“任务状态”或“取消任务”。")
-                    await self.once(task, "waiting", message)
         except asyncio.CancelledError:
             pass
 

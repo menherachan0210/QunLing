@@ -1,0 +1,10 @@
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py
+@@ -146,3 +146,7 @@
+     async def call_platform_api(self, action: str, params: dict = {}) -> dict:
++        from qunling.qq_group_api import READ_ACTIONS, read_group_api
++
++        if action in READ_ACTIONS:
++            return await read_group_api(self.bot, action, params)
+         handler = PLATFORM_API_MAP.get(action)
+         if handler is None:

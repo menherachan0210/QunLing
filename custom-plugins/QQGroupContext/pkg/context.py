@@ -72,6 +72,9 @@ class QueryContext:
     imported_assets: dict[str, dict] = field(default_factory=dict)
     active: bool = False
     history_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    group_data: dict = field(default_factory=dict, repr=False)
+    group_data_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    group_data_inflight: int = 0
 
 
 class ContextStore:
@@ -83,6 +86,21 @@ class ContextStore:
     def clear(self):
         self.entries.clear()
         self.owner = uuid.uuid4().hex
+
+    def claim_group_data(self, item):
+        self.prune()
+        if not item.group_data:
+            cached = [(key, other) for key, other in self.entries.items()
+                      if other is not item and other.group_data]
+            while len(cached) >= 16:
+                victim = next(((key, other) for key, other in cached
+                               if not other.group_data_inflight and not other.vision_inflight), None)
+                if victim is None:
+                    raise VisionError("当前群资料查询较多，请稍后重试。")
+                self.entries.pop(victim[0], None)
+                cached.remove(victim)
+            item.group_data["claimed"] = True
+        item.group_data_inflight += 1
 
     def prune(self):
         for key, value in list(self.entries.items()):
