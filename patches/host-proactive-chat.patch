@@ -152,7 +152,7 @@ diff --git a/src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py b/src/langb
 +        if getattr(native, 'message_type', None) == 'group' and os.environ.get('QUNLING_DATA_DIR'):
 +            from qunling.proactive.host import sent as proactive_sent
 +
-+            proactive_sent(self, native.group_id, message, raw, str(native.user_id))
++            proactive_sent(self, native.group_id, message, raw, str(native.user_id), reply_to=str(native.message_id) if getattr(native, 'message_id', None) is not None else None)
          return platform_events.MessageResult(message_id=(raw or {}).get('message_id'), raw=raw or {})
  
      async def delete_message(

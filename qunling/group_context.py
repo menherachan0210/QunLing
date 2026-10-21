@@ -6,6 +6,7 @@ returned identifier comes from the caller's frozen, already-authorized snapshot.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 
 WINDOW_SECONDS = 20 * 60
@@ -15,6 +16,16 @@ FOCUS_SECONDS = 120
 FOCUS_MESSAGES = 24
 
 _CONTINUATION = re.compile(r"^(那|所以|这样|这个|这点|这么|确实|对[，。！! ]|嗯|我也|不过|可是|而且|还有|也就是说|then\b|so\b|but\b|also\b)", re.I)
+_CORRECTION = re.compile(
+    r"^(?:那[，, ]*)?(?:不对|不太对|不是这样|不(?:太|怎么|完全)?像|完全不像|"
+    r"一点(?:也|都)?不像|根本不像|搞错了|弄错了|看错了|错了|不一样|"
+    r"你(?:这|是不是)?(?:搞错|弄错|看错)|你确定|确定吗|wrong\b|not really\b)", re.I)
+_IMAGE_CORRECTION = re.compile(
+    r"^(?:你把|怎么把|把)?(?:"
+    r"女(?:性|生|孩)?(?:角色)?(?:变(?:成)?|画成|改成)了?男(?:性|生|孩)?|"
+    r"男(?:性|生|孩)?(?:角色)?(?:变(?:成)?|画成|改成)了?女(?:性|生|孩)?|"
+    r"短发(?:变(?:成)?|画成|改成)了?长发|长发(?:变(?:成)?|画成|改成)了?短发|"
+    r"(?:发色|瞳色|头发颜色|眼睛颜色|猫耳|帽子|发型|衣服)(?:画错了?|不对|错了|不一样|没了|不见了))")
 _GENERIC = {"大家", "怎么", "什么", "这个", "那个", "一下", "觉得", "可以", "我们", "你们", "the", "and", "that", "this", "what"}
 
 
@@ -27,6 +38,18 @@ def _terms(text, ignored):
     for run in re.findall(r"[\u3400-\u9fff]+", text):
         terms.update(run[index:index + 2] for index in range(len(run) - 1))
     return terms - _GENERIC
+
+
+def _recent_predecessor(earlier, later):
+    elapsed = later.timestamp - earlier.timestamp
+    if 0 <= elapsed <= FOCUS_SECONDS:
+        return True
+    # The caller only supplies an already-observed predecessor. Host receipts
+    # retain fractions, while incoming QQ timestamps may be rounded down. This
+    # one-second case must not make a delivered image disappear from its reply.
+    return (elapsed < 0 and earlier.is_bot and math.isfinite(earlier.timestamp)
+            and math.isfinite(later.timestamp) and later.timestamp == math.floor(later.timestamp)
+            and math.floor(earlier.timestamp) == later.timestamp)
 
 
 def topic_roots(messages, *, ignored_terms=()):
@@ -42,14 +65,40 @@ def topic_roots(messages, *, ignored_terms=()):
         root = roots.get(message.reply_to)
         current = _terms(message.text, ignored_terms)
         if root is None and not message.explicit_request and not message.is_bot:
+            image_correction = len(message.text) <= 80 and bool(_IMAGE_CORRECTION.match(message.text.strip()))
+            correction = image_correction or (len(message.text) <= 80 and bool(_CORRECTION.match(message.text.strip())))
+            # A terse correction can continue a real bot answer, including a
+            # peer's correction of that answer. Never jump over a separate
+            # human topic merely because a bot spoke recently in this group.
+            if correction:
+                recent = [older for older in previous[-FOCUS_MESSAGES:]
+                          if _recent_predecessor(older, message)
+                          and older.text.strip()]
+                if recent:
+                    nearest = recent[-1]
+                    previous_root = roots[nearest.message_id]
+                    image_roots = {roots[older.message_id] for older in recent
+                                   if older.is_bot and getattr(older, "has_media", False)}
+                    quoted_lineage = any(not older.is_bot and older.reply_to in roots
+                                         and roots[older.message_id] == previous_root for older in recent)
+                    if not nearest.explicit_request and any(
+                            older.is_bot and roots[older.message_id] == previous_root for older in recent
+                    ) and (len(image_roots) <= 1 or quoted_lineage) and (
+                            not image_correction or previous_root in image_roots):
+                        root = previous_root
             for older in reversed(previous[-FOCUS_MESSAGES:]):
-                if not 0 <= message.timestamp - older.timestamp <= FOCUS_SECONDS:
+                # Feature-change complaints need a real delivered image in
+                # this lineage; lexical overlap must not bypass ambiguity.
+                if root is not None or image_correction:
+                    break
+                if not _recent_predecessor(older, message):
                     continue
                 if older.explicit_request or not older.text.strip():
                     continue
                 overlap = current & terms[older.message_id]
                 similar = len(overlap) >= 2 and len(overlap) / max(1, min(len(current), len(terms[older.message_id]))) >= .35
-                continuation = len(message.text) <= 120 and _CONTINUATION.match(message.text.strip())
+                continuation = (not correction and len(message.text) <= 120
+                                and _CONTINUATION.match(message.text.strip()))
                 if similar or continuation:
                     root = roots[older.message_id]
                     break
@@ -78,8 +127,8 @@ def metadata(bot_id, group_id, messages, *, participant_id="", reply_to=None, ig
             break
         topic.update(following)
         frontier = list(following)
-    latest = scoped[-1].timestamp
-    public = [message for message in scoped if not message.explicit_request and 0 <= latest - message.timestamp <= FOCUS_SECONDS]
+    latest = scoped[-1]
+    public = [message for message in scoped if not message.explicit_request and _recent_predecessor(message, latest)]
     # Shared discussion remains first-class evidence regardless of speaker.
     focus = topic | {message.message_id for message in public[-FOCUS_MESSAGES:]}
     topic_id = hashlib.sha256((bot_id + "\0" + group_id + "\0" + root).encode()).hexdigest()[:24]

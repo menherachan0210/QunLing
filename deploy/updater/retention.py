@@ -6,12 +6,15 @@ unresolved updates and snapshots required for rollback are outside its scope.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from copy import deepcopy
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import stat
+import tempfile
 
 
 JOB_ID = re.compile(r"[0-9a-f]{24}\Z")
@@ -21,6 +24,9 @@ HASH = re.compile(r"[0-9a-f]{64}\Z")
 DATA_VOLUMES = ("langbot-data", "setup-state", "napcat-qq", "napcat-config", "napcat-plugins")
 SERVICES = {"init", "app", "napcat", "wizard", "updater"}
 IDLE_PHASES = {"idle", "available", "completed", "rolled_back", "failed"}
+MAINTENANCE_VOLUMES = ("langbot-data", "setup-state")
+MAINTENANCE_JOURNALS = {"proactive-job.json", "password-files-job.json",
+                        "file-workspace-job.json", "recent-history-job.json"}
 
 
 class UnsafeInventory(Exception):
@@ -121,7 +127,154 @@ def _complete_job(directory, project, update_volume):
         raise UnsafeInventory()
     size = _tree_size(directory, directory.parent)
     return {"id": directory.name, "path": directory, "time": completed,
-            "refs": refs, "owned_refs": owned_refs, "size": size}
+            "refs": refs, "owned_refs": owned_refs, "size": size,
+            "coverage": tuple(sorted(DATA_VOLUMES)), "maintenance": False}
+
+
+def _maintenance_snapshot(directory, project, update_volume, journal_name):
+    """Authenticate a known two-volume rollout without trusting its filename."""
+    from deploy.updater.volume import verify
+
+    directory = Path(directory).absolute()
+    if (directory.parent.name != "jobs" or not JOB_ID.fullmatch(directory.name)
+            or not isinstance(journal_name, str) or journal_name not in MAINTENANCE_JOURNALS):
+        raise UnsafeInventory()
+    _tree_size(directory, directory.parent)  # Reject links before reading metadata.
+    metadata = {journal_name, "old-compose.json", "new-compose.json", "captured.json",
+                "previous-status.json", "retention-pin.json", "adopted/old-compose.json",
+                *(name + ".tar.json" for name in MAINTENANCE_VOLUMES)}
+    archives = {name + ".tar" for name in MAINTENANCE_VOLUMES}
+    allowed_files = metadata | archives | {"maintenance.json"}
+    files = set()
+    for path in directory.rglob("*"):
+        name = path.relative_to(directory).as_posix()
+        if path.is_dir():
+            if name != "adopted":
+                raise UnsafeInventory()
+        elif path.is_file() and name in allowed_files:
+            files.add(name)
+        else:
+            raise UnsafeInventory()
+    job = _json(directory / journal_name)
+    if (job.get("id") != directory.name or job.get("phase") != "completed"
+            or job.get("terminal_phase") != "completed"
+            or any(job.get(flag) is not True for flag in
+                   ("backup_complete", "mutation_started", "services_stopped"))):
+        raise UnsafeInventory()
+    old, new = (_json(directory / name) for name in ("old-compose.json", "new-compose.json"))
+    refs = set()
+    for name in ("old-compose.json", "new-compose.json"):
+        refs.update(_compose(directory / name, project, update_volume)[0])
+    if any(not IMAGE_ID.fullmatch(ref) for ref in refs):
+        raise UnsafeInventory()
+    candidate, helper = job.get("candidate_image"), job.get("helper_image")
+    if (not isinstance(candidate, str) or not IMAGE_ID.fullmatch(candidate)
+            or helper != old["services"]["updater"]["image"]
+            or candidate == old["services"]["napcat"]["image"]):
+        raise UnsafeInventory()
+    expected = deepcopy(old)
+    for service in ("app", "wizard"):
+        expected["services"][service]["image"] = candidate
+    if new != expected:
+        raise UnsafeInventory()
+    volumes = job.get("volumes")
+    if (not isinstance(volumes, dict) or set(volumes) != {*DATA_VOLUMES, "update-data"}
+            or volumes.get("update-data") != update_volume
+            or any(not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", v)
+                   for v in volumes.values()) or len(set(volumes.values())) != len(volumes)):
+        raise UnsafeInventory()
+    for document in (old, new):
+        if set(document.get("volumes", {})) != set(volumes):
+            raise UnsafeInventory()
+        if any(document["volumes"][name].get("name") != actual for name, actual in volumes.items()):
+            raise UnsafeInventory()
+    before = job.get("before")
+    if (not isinstance(before, dict) or set(before) != SERVICES
+            or any(not isinstance(before[name], dict)
+                   or before[name].get("image") != old["services"][name]["image"] for name in SERVICES)):
+        raise UnsafeInventory()
+    captured = _json(directory / "captured.json")
+    if captured != {"volumes": volumes, "services": before}:
+        raise UnsafeInventory()
+    # A successful rollout captures the actual running deployment before it
+    # marks the journal complete; do not certify a mere intended Compose edit.
+    if _json(directory / "adopted/old-compose.json") != new:
+        raise UnsafeInventory()
+    if "retention-pin.json" in files:
+        pin = _json(directory / "retention-pin.json")
+        if (pin.get("version") != 1 or pin.get("project") != project
+                or not isinstance(pin.get("images"), list)
+                or any(not isinstance(ref, str) for ref in pin["images"])
+                or set(pin["images"]) != refs):
+            raise UnsafeInventory()
+    archive_records = {}
+    for name in MAINTENANCE_VOLUMES:
+        archive = directory / (name + ".tar")
+        manifest = _json(directory / (name + ".tar.json"))
+        if (type(manifest.get("size")) is not int or manifest["size"] < 0
+                or not isinstance(manifest.get("sha256"), str)
+                or not HASH.fullmatch(manifest["sha256"])):
+            raise UnsafeInventory()
+        verify(archive)
+        archive_records[name] = {"size": manifest["size"], "sha256": manifest["sha256"]}
+    metadata_hashes = {}
+    for name in sorted(files & metadata):
+        _json(directory / name)
+        metadata_hashes[name] = hashlib.sha256((directory / name).read_bytes()).hexdigest()
+    return {"metadata_sha256": metadata_hashes, "archives": archive_records,
+            "images": sorted(refs), "owned_images": [candidate]}
+
+
+def register_completed_maintenance(directory, project, update_volume, completed_at,
+                                   journal_name="proactive-job.json"):
+    """Explicit operator opt-in; call under worker.lock with updates idle.
+
+    Legacy journal mtime may be supplied as an aware ISO completion timestamp,
+    but only the completed journal, actual deployment snapshot and verified
+    backups authorize registration. No Docker image or live data is modified.
+    """
+    directory = Path(directory).absolute()
+    _timestamp(completed_at)
+    snapshot = _maintenance_snapshot(directory, project, update_volume, journal_name)
+    record = {"version": 1, "kind": "qunling-maintenance", "project": project,
+              "id": directory.name, "update_volume": update_volume,
+              "completed_at": completed_at, "completed_at_source": "operator_supplied",
+              "journal": journal_name, "backup_volumes": list(MAINTENANCE_VOLUMES), **snapshot}
+    destination = directory / "maintenance.json"
+    if destination.exists() or destination.is_symlink():
+        if _json(destination) != record:
+            raise UnsafeInventory()
+        return record
+    descriptor, temporary = tempfile.mkstemp(prefix=".maintenance-", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            os.chmod(temporary, 0o600)
+            json.dump(record, stream, ensure_ascii=False, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return record
+
+
+def _complete_maintenance(directory, project, update_volume):
+    record = _json(directory / "maintenance.json")
+    if (record.get("version") != 1 or record.get("kind") != "qunling-maintenance"
+            or record.get("project") != project or record.get("id") != directory.name
+            or record.get("update_volume") != update_volume
+            or record.get("completed_at_source") != "operator_supplied"
+            or record.get("backup_volumes") != list(MAINTENANCE_VOLUMES)):
+        raise UnsafeInventory()
+    completed = _timestamp(record.get("completed_at"))
+    snapshot = _maintenance_snapshot(directory, project, update_volume, record.get("journal"))
+    if any(record.get(name) != value for name, value in snapshot.items()):
+        raise UnsafeInventory()
+    return {"id": directory.name, "path": directory, "time": completed,
+            "refs": set(snapshot["images"]), "owned_refs": set(snapshot["owned_images"]),
+            "size": _tree_size(directory, directory.parent),
+            "coverage": tuple(sorted(MAINTENANCE_VOLUMES)), "maintenance": True}
 
 
 def _docker_list(engine, command, inspect):
@@ -182,7 +335,8 @@ def cleanup(engine, keep_backups=2):
                 if not isinstance(ref, str) or (ref in refs_to_ids and refs_to_ids[ref] != identity):
                     raise UnsafeInventory()
                 refs_to_ids[ref] = identity
-        protected_jobs = {status.get("job_id")}
+        protected_jobs = {status.get("job_id"), *(value for key, value in status.items()
+                          if key.endswith("_owner") and isinstance(value, str))}
         for container in containers:
             identity, image = container.get("Id"), container.get("Image")
             if not identity or not isinstance(image, str) or not IMAGE_ID.fullmatch(image):
@@ -191,16 +345,26 @@ def cleanup(engine, keep_backups=2):
             state = container.get("State", {})
             if labels.get("io.qunling.update-project") == engine.project and state.get("Status") not in {"exited", "dead"}:
                 protected_jobs.add(labels.get("io.qunling.update-job"))
+            helper_job = labels.get("io.qunling.proactive-helper")
+            if (isinstance(helper_job, str) and JOB_ID.fullmatch(helper_job)
+                    and state.get("Status") not in {"exited", "dead"}):
+                protected_jobs.add(helper_job)
         jobs_root = root / "jobs"
         if jobs_root.is_symlink() or (jobs_root.exists() and (not jobs_root.is_dir() or jobs_root.resolve() != jobs_root)):
             raise UnsafeInventory()
         valid, image_inventory_safe = [], True
-        all_owned_refs = set()
+        all_owned_refs, maintenance_owned_ids = set(), set()
         for directory in sorted(jobs_root.iterdir()) if jobs_root.exists() else []:
             try:
-                candidate = _complete_job(directory, engine.project, update_volume)
+                # A registered maintenance record has its own narrow protocol.
+                # Never infer permission from a private journal or a pin alone.
+                candidate = (_complete_maintenance(directory, engine.project, update_volume)
+                             if (directory / "maintenance.json").exists()
+                             else _complete_job(directory, engine.project, update_volume))
                 valid.append(candidate)
                 all_owned_refs.update(candidate["owned_refs"])
+                if candidate["maintenance"]:
+                    maintenance_owned_ids.update(candidate["owned_refs"])
             except Exception:
                 # Incomplete/private/manual/malformed jobs are never deleted.
                 # Their snapshots still protect images when their provenance is readable.
@@ -236,7 +400,13 @@ def cleanup(engine, keep_backups=2):
                     except Exception:
                         image_inventory_safe = False
         ordered = sorted(valid, key=lambda job: (job["time"], job["id"]), reverse=True)
-        keep = {job["id"] for job in ordered[:keep_backups]} | protected_jobs
+        # A recent app-only snapshot cannot replace the last complete QQ backup.
+        keep, coverage_counts = set(protected_jobs), {}
+        for job in ordered:
+            coverage = job["coverage"]
+            coverage_counts[coverage] = coverage_counts.get(coverage, 0) + 1
+            if coverage_counts[coverage] <= keep_backups:
+                keep.add(job["id"])
         for job in valid:
             if job["id"] in keep:
                 protected_refs.update(job["refs"])
@@ -291,6 +461,8 @@ def cleanup(engine, keep_backups=2):
                     protected_ids.update(refs_to_ids[ref] for ref in job["refs"] if ref in refs_to_ids)
                     warn("backup_removal_failed")
         own_tag = re.compile(re.escape(engine.project) + r"-(?:app|updater):[0-9a-f]{40}\Z")
+        maintenance_tag = re.compile(re.escape(engine.project)
+                                     + r"-[a-z0-9]+(?:-[a-z0-9]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
         recorded_ids = {refs_to_ids[ref] for ref in all_owned_refs if ref in refs_to_ids}
         if not image_inventory_safe:
             warn("image_cleanup_skipped_incomplete_history")
@@ -300,7 +472,9 @@ def cleanup(engine, keep_backups=2):
                 labels = image.get("Config", {}).get("Labels") or {}
                 owner = labels.get("io.qunling.update-project")
                 owned = ((tags and all(own_tag.fullmatch(tag) for tag in tags) and owner in {None, engine.project})
-                         or (not tags and owner == engine.project and identity in recorded_ids))
+                         or (not tags and owner == engine.project and identity in recorded_ids)
+                         or (identity in maintenance_owned_ids and owner in {None, engine.project}
+                             and all(maintenance_tag.fullmatch(tag) for tag in tags)))
                 if identity in protected_ids or not owned or image.get("RepoDigests"):
                     continue
                 try:

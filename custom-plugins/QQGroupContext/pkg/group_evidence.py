@@ -11,6 +11,19 @@ def _name(member):
     return str(member.get("card") or member.get("nickname") or member.get("user_id") or "本群成员")[:100]
 
 
+def _avatar_subject(target):
+    if target.get("kind") == "group":
+        return "本群头像"
+    user_id = target.get("user_id")
+    if type(user_id) in (str, int):
+        user_id = str(user_id)
+        if user_id.isascii() and user_id.isdigit() and 1 <= len(user_id) <= 20 and int(user_id) > 0:
+            # Names are not identities. Keep all four verified targets within
+            # the shared cache's 160-character subject budget, including IDs.
+            return f"{_name(target)[:8]}（QQ{int(user_id)}）的头像"
+    return _name(target)[:30] + "的头像"
+
+
 async def publish_result(plugin, context, action, result):
     if not isinstance(result, dict) or result.get("status") != "ok":
         return
@@ -25,7 +38,7 @@ async def publish_result(plugin, context, action, result):
             source = "member_info"
     elif action == "avatar":
         targets = result.get("targets") or [result.get("target", {})]
-        subject = "、".join("本群头像" if row.get("kind") == "group" else _name(row)
+        subject = "、".join(_avatar_subject(row)
                            for row in targets[:4] if isinstance(row, dict))[:200]
         text = str(result.get("analysis", ""))[:1100]
         source = "avatar_analysis"
@@ -38,7 +51,8 @@ async def publish_result(plugin, context, action, result):
         try:
             await asyncio.to_thread(publish, workspace_id=workspace_key(plugin), bot_id=context.bot,
                                     group_id=context.group, question=context.current_question,
-                                    source=source, subject=subject, text=text)
+                                    source=source, subject=subject, text=text,
+                                    message_ids=[context.anchor], actor_id=context.sender)
         except Exception:
             # Optional short-term recall must not turn a successful read into a
             # failed tool or cause the model to repeat paid vision work.

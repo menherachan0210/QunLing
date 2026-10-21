@@ -151,15 +151,30 @@ class UpdateEngine:
 
     def cleanup_history(self, force=False):
         """Best-effort maintenance never changes the update transaction state."""
+        from deploy.updater.locking import worker_lock
         from deploy.updater.retention import cleanup
 
         if not self.lock.acquire(blocking=False):
             return None
         try:
+            # Maintenance runs outside this API process. Re-read transaction
+            # state only after taking the lock shared with those workers.
+            with worker_lock(self.root) as acquired:
+                if not acquired:
+                    return None
+                return self._cleanup_locked(cleanup, force)
+        except Exception:
+            return None
+        finally:
+            self.lock.release()
+
+    def _cleanup_locked(self, cleanup, force):
+        try:
             state = read(self.state_path, {})
             if state.get("phase", "idle") not in TERMINAL:
                 return None
-            generation = (state.get("job_id"), state.get("phase"))
+            generation = (state.get("job_id"), state.get("phase"),
+                          state.get("proactive_completed"), state.get("maintenance_completed"))
             current = time.monotonic()
             if (not force and self._cleanup_checked and current - self._cleanup_checked < 3600
                     and generation == self._cleanup_generation):
@@ -178,8 +193,8 @@ class UpdateEngine:
                 # Disk/Docker failures during maintenance must never trigger a
                 # rollback of an otherwise successful update.
                 return None
-        finally:
-            self.lock.release()
+        except Exception:
+            return None
 
     def publish(self, **values):
         state = read(self.state_path, {})

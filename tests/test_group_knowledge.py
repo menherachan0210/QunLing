@@ -80,14 +80,95 @@ def test_expiry_and_frozen_request_cutoff(cache):
     assert not recall(before=float("inf"))
 
 
-def test_refresh_replaces_old_same_subject_result(cache):
+def test_refresh_returns_latest_but_preserves_version_for_frozen_request(cache):
     clock, path = cache
     assert publish()
     clock.now += 1
     assert publish(text="头像现在是一只黑猫。")
     assert len(recall()) == 1 and "黑猫" in recall()[0]["text"]
+    assert "白猫" in recall(before=clock.now - .5)[0]["text"]
     with sqlite3.connect(path / "group-knowledge.sqlite3") as db:
-        assert db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize("question", ["不对", "完全不像", "搞错了", "我头像呢", "你确定？"])
+def test_short_correction_uses_trusted_message_lineage_not_latest_group_lookup(cache, question):
+    assert publish(message_ids=["question-a"], actor_id="20001")
+    assert publish(subject="小红的头像", text="头像是一只红狐狸。", message_ids=["question-b"], actor_id="20002")
+    assert recall(question=question) == []
+    assert recall(question=question, nearby_text="刚才小明的头像", related_message_ids=["unrelated"]) == []
+    rows = recall(question=question, related_message_ids=["question-a"])
+    assert len(rows) == 1 and rows[0]["subject"] == "小明的头像"
+    assert rows[0]["actor_id"] == "20001"
+    assert "message_ids" not in rows[0] and "question-a" not in json.dumps(rows)
+
+
+@pytest.mark.parametrize("scope", [
+    {"workspace_id": knowledge.workspace_id("other-instance", "workspace")},
+    {"workspace_id": knowledge.workspace_id("instance", "other-workspace")},
+    {"bot_id": "other-bot"}, {"group_id": "90000"},
+])
+def test_same_message_ids_never_cross_instance_workspace_bot_or_group(cache, scope):
+    assert publish(message_ids=["same-message"])
+    assert recall(question="不对", related_message_ids=["same-message"], **scope) == []
+
+
+def test_related_version_is_retained_and_same_second_uses_exact_host_receipt_cutoff(cache):
+    clock, _ = cache
+    clock.now = int(clock.now) + .2
+    assert publish(message_ids=["first"], text="先前实际看到的是白猫。")
+    receipt = clock.now + .1
+    clock.now += .4
+    assert publish(message_ids=["second"], text="后来重新读取的是黑猫。")
+    assert "白猫" in recall(before=receipt)[0]["text"]
+    assert "黑猫" in recall()[0]["text"]
+    assert "白猫" in recall(question="不对", related_message_ids=["first"])[0]["text"]
+    assert recall(question="不对", related_message_ids=["second"], before=receipt) == []
+
+
+def test_versions_and_message_lineage_are_bounded(cache):
+    clock, path = cache
+    for index in range(10):
+        clock.now += .1
+        assert publish(message_ids=[str(n) for n in range(20)], actor_id="20001", text=f"头像观察版本{index}")
+    with sqlite3.connect(path / "group-knowledge.sqlite3") as db:
+        rows = db.execute("SELECT message_ids FROM evidence").fetchall()
+    assert len(rows) == knowledge.MAX_VERSIONS
+    assert all(len(json.loads(row[0])) == knowledge.MAX_MESSAGE_IDS for row in rows)
+    assert len(recall()) == 1
+
+
+def test_avatar_observation_and_confirmed_delivery_are_distinct_and_last_thirty_minutes(cache):
+    clock, _ = cache
+    assert publish(message_ids=["request"])
+    assert publish(source="image_delivery", subject="小明的头像图片发送", question="",
+                   text="已向本群发送一张图片；此记录不表示检查过成图细节。",
+                   message_ids=["request", "sent-image"], actor_id="20001")
+    clock.now += 15 * 60
+    rows = recall(question="不像", related_message_ids=["request"])
+    assert {row["source"] for row in rows} == {"avatar_analysis", "image_delivery"}
+    clock.now += 15 * 60
+    assert recall(question="不像", related_message_ids=["request"]) == []
+
+
+def test_legacy_table_is_readable_then_migrated_without_dropping_evidence(cache):
+    clock, path = cache
+    with sqlite3.connect(path / "group-knowledge.sqlite3") as db:
+        db.execute("""CREATE TABLE evidence (id INTEGER PRIMARY KEY,workspace TEXT,bot TEXT,group_id TEXT,
+                      question TEXT,source TEXT,subject TEXT,text TEXT,created REAL)""")
+        db.execute("INSERT INTO evidence VALUES(1,?,?,?,?,?,?,?,?)",
+                   (WORKSPACE, "bot", "30000", "小明的头像", "avatar_analysis", "小明的头像", "白猫", clock.now))
+    assert recall()[0]["text"] == "白猫"
+    clock.now += 1
+    assert publish(text="黑猫", message_ids=["new"], actor_id="20001")
+    assert recall(question="不对", related_message_ids=["new"])[0]["text"] == "黑猫"
+    assert recall(before=clock.now - .5)[0]["text"] == "白猫"
+
+
+def test_untrusted_resource_strings_cannot_become_message_lineage(cache):
+    assert publish(message_ids=["https://example.test/private", {"message": "bad"}], actor_id="bad\nactor")
+    assert recall(question="不对", related_message_ids=["https://example.test/private"]) == []
+    assert "actor_id" not in recall()[0]
 
 
 def test_unsupported_private_or_file_content_source_is_rejected(cache):

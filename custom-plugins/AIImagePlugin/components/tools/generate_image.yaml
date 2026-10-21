@@ -35,6 +35,15 @@ spec:
     an unconfirmed result, or delivery failure: another generation could be billed again.
     On success, the image is already delivered. A brief acknowledgement is enough;
     never fabricate an image URL or output a Markdown image link.
+    Delivery is not visual verification of the generated pixels. The prompt records
+    the requested subject/style/features, not proof that the output contains them.
+    You may describe what the user requested and what you asked the image service
+    to create. Keep any actual earlier observations of the source image separate
+    from output observations; do not deny that an image was sent or that a source
+    was previously inspected merely because this result contains no image pixels.
+    Do not claim exact retained features or visual quality of the output unless
+    its actual pixels have separately been inspected. Do not add an unnecessary
+    verification disclaimer to an ordinary short delivery acknowledgement.
 execution:
   python:
     path: generate_image.py

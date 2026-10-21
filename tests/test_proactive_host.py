@@ -563,6 +563,7 @@ async def test_patched_onebot_send_and_reply_record_actual_success_only(bridge, 
     result = await reply(bridge.bot.adapter, NS(source_platform_object=native), MessageChain([Plain(text="接另一个人的话")]))
     other = bridge.engine._groups["30000"].lanes["20001"]
     assert result.message_id == 911 and other.last_bot_id == "911" and other.last_recipient == "20001"
+    assert bridge.engine._groups["30000"].reply_index["911"].target_id == "123"
     assert state.last_bot_id == "910" and state.last_recipient == "20000"
 
 

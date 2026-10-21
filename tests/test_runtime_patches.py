@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import textwrap
@@ -87,6 +88,140 @@ def test_recheck_rejects_changes_since_preflight(tmp_path):
     with pytest.raises(patcher.PatchError, match="changed after preflight"):
         patcher.execute_plans([plan], apply=True)
     assert target.read_text() == "changed concurrently\n"
+
+
+PROACTIVE_NAME = "host-proactive-chat.patch"
+PROACTIVE_API = "src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py"
+PROACTIVE_OLD_CALL = "            proactive_sent(self, native.group_id, message, raw, str(native.user_id))\n"
+PROACTIVE_NEW_CALL = "            proactive_sent(self, native.group_id, message, raw, str(native.user_id), reply_to=str(native.message_id) if getattr(native, 'message_id', None) is not None else None)\n"
+
+
+def proactive_originals(root, source):
+    """Materialize all original hunk context; independent of ignored checkouts."""
+    originals, path, cursor = {}, None, None
+    for line in source.splitlines(keepends=True):
+        if line.startswith("diff --git "):
+            path = line.split(" b/", 1)[1].strip()
+            originals[path] = []
+            cursor = None
+        elif line.startswith("@@ "):
+            cursor = int(re.match(r"@@ -(\d+)", line)[1]) - 1
+        elif cursor is not None and line[:1] in (" ", "-"):
+            while len(originals[path]) <= cursor:
+                originals[path].append("# unused upstream context\n")
+            originals[path][cursor] = line[1:]
+            cursor += 1
+    for path, lines in originals.items():
+        write(root, path, "".join(lines))
+    return {path: (root / path).read_bytes() for path in originals}
+
+
+@pytest.fixture
+def legacy_proactive_install(tmp_path):
+    source = (ROOT / "patches" / PROACTIVE_NAME).read_text(encoding="utf-8")
+    original = proactive_originals(tmp_path, source)
+    assert source.count("+" + PROACTIVE_NEW_CALL) == 1
+    legacy = source.replace("+" + PROACTIVE_NEW_CALL, "+" + PROACTIVE_OLD_CALL)
+    payload, _ = patcher.runtime_payload(legacy, "host")
+    assert patcher.git_apply(tmp_path, payload, "--check").returncode == 0
+    assert patcher.git_apply(tmp_path, payload).returncode == 0
+    installed = {path: (tmp_path / path).read_bytes() for path in original}
+    return source, original, installed
+
+
+def test_proactive_new_install_applies_complete_patch_and_roundtrips(tmp_path):
+    source = (ROOT / "patches" / PROACTIVE_NAME).read_text(encoding="utf-8")
+    original = proactive_originals(tmp_path, source)
+    plan = patcher.build_plan(PROACTIVE_NAME, tmp_path, source, "host")
+    assert plan.state == "ready" and plan.upgrade_from is None
+    patcher.execute_plans([plan], apply=False)
+    assert {path: (tmp_path / path).read_bytes() for path in original} == original
+    patcher.execute_plans([plan], apply=True)
+    assert PROACTIVE_NEW_CALL in (tmp_path / PROACTIVE_API).read_text(encoding="utf-8")
+    assert patcher.build_plan(PROACTIVE_NAME, tmp_path, source, "host").state == "already-applied"
+    assert patcher.git_apply(tmp_path, plan.payload, "--reverse").returncode == 0
+    assert {path: (tmp_path / path).read_bytes() for path in original} == original
+
+
+def test_known_full_proactive_patch_upgrades_only_one_line_and_is_idempotent(tmp_path, legacy_proactive_install):
+    source, original, installed = legacy_proactive_install
+    plan = patcher.build_plan(PROACTIVE_NAME, tmp_path, source, "host")
+    assert plan.state == "ready" and plan.upgrade_from and plan.verify_payload
+    assert plan.payload.count(b"--- a/") == 1
+    assert ("-" + PROACTIVE_OLD_CALL).encode() in plan.payload
+    assert ("+" + PROACTIVE_NEW_CALL).encode() in plan.payload
+    patcher.execute_plans([plan], apply=False)
+    assert {path: (tmp_path / path).read_bytes() for path in original} == installed
+    patcher.execute_plans([plan], apply=True)
+    for path in original:
+        expected = installed[path].replace(PROACTIVE_OLD_CALL.rstrip("\n").encode(), PROACTIVE_NEW_CALL.rstrip("\n").encode()) if path == PROACTIVE_API else installed[path]
+        assert (tmp_path / path).read_bytes() == expected
+    second = patcher.build_plan(PROACTIVE_NAME, tmp_path, source, "host")
+    assert second.state == "already-applied" and second.upgrade_from is None
+    patcher.execute_plans([second], apply=True)
+    assert patcher.git_apply(tmp_path, second.payload, "--reverse").returncode == 0
+    assert {path: (tmp_path / path).read_bytes() for path in original} == original
+
+
+def test_proactive_upgrade_cli_default_reports_pending_without_writes(monkeypatch, tmp_path, legacy_proactive_install, capsys):
+    _, _, installed = legacy_proactive_install
+    write(tmp_path, "pyproject.toml", '[project]\nname="langbot"\nversion="4.11.0"\n')
+    monkeypatch.setattr(patcher, "PATCHES", ((PROACTIVE_NAME, "host", False),))
+    args = ["--langbot", str(tmp_path), "--component", "host"]
+    assert patcher.main(args) == 0
+    assert "ready: host-proactive-chat.patch" in capsys.readouterr().out
+    assert {path: (tmp_path / path).read_bytes() for path in installed} == installed
+    assert patcher.main(args + ["--apply"]) == 0
+    assert PROACTIVE_NEW_CALL in (tmp_path / PROACTIVE_API).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("after_preflight", [False, True])
+def test_partial_or_changed_legacy_proactive_patch_is_never_upgraded(tmp_path, legacy_proactive_install, after_preflight):
+    source, _, installed = legacy_proactive_install
+    if after_preflight:
+        plan = patcher.build_plan(PROACTIVE_NAME, tmp_path, source, "host")
+    target = tmp_path / "src/langbot/pkg/pipeline/pool.py"
+    target.write_text(target.read_text(encoding="utf-8").replace(
+        "proactive_completed(query.adapter, query.message_event)", "locally_changed(query.adapter, query.message_event)", 1), encoding="utf-8")
+    before = {path: (tmp_path / path).read_bytes() for path in installed}
+    with pytest.raises(patcher.PatchError, match="changed after preflight" if after_preflight else "does not match"):
+        if after_preflight:
+            patcher.execute_plans([plan], apply=True)
+        else:
+            patcher.build_plan(PROACTIVE_NAME, tmp_path, source, "host")
+    assert {path: (tmp_path / path).read_bytes() for path in installed} == before
+
+
+def test_upgrade_exception_is_not_available_for_other_patch_names(tmp_path, legacy_proactive_install):
+    source, _, installed = legacy_proactive_install
+    with pytest.raises(patcher.PatchError, match="does not match"):
+        patcher.build_plan("unrelated.patch", tmp_path, source, "host")
+    assert {path: (tmp_path / path).read_bytes() for path in installed} == installed
+
+
+def test_matching_but_unknown_complete_legacy_payload_is_rejected(tmp_path):
+    source = (ROOT / "patches" / PROACTIVE_NAME).read_text(encoding="utf-8").replace(
+        "await shutdown_proactive(self)", "await locally_changed(self)")
+    original = proactive_originals(tmp_path, source)
+    legacy, _ = patcher.runtime_payload(source.replace("+" + PROACTIVE_NEW_CALL, "+" + PROACTIVE_OLD_CALL), "host")
+    assert patcher.git_apply(tmp_path, legacy).returncode == 0
+    assert patcher.git_apply(tmp_path, legacy, "--reverse", "--check").returncode == 0
+    installed = {path: (tmp_path / path).read_bytes() for path in original}
+    with pytest.raises(patcher.PatchError, match="does not match"):
+        patcher.build_plan(PROACTIVE_NAME, tmp_path, source, "host")
+    assert {path: (tmp_path / path).read_bytes() for path in original} == installed
+
+
+@pytest.mark.parametrize("native_fields,expected", [({"message_id": 123}, "123"), ({"message_id": None}, None), ({}, None)])
+def test_patched_reply_call_passes_actual_source_id_without_stringifying_none(native_fields, expected):
+    sent = Mock()
+    native = SimpleNamespace(group_id=100, user_id=200, **native_fields)
+    namespace = {"proactive_sent": sent, "native": native, "self": object(), "message": object(), "raw": {"message_id": 456}}
+    source = (ROOT / "patches" / PROACTIVE_NAME).read_text(encoding="utf-8")
+    call = next(line[1:].strip() for line in source.splitlines() if line.startswith("+" + PROACTIVE_NEW_CALL.strip("\n")))
+    exec(call, namespace)
+    assert sent.call_args.kwargs == {"reply_to": expected}
+    assert sent.call_args.args[-1] == "200"
 
 
 @pytest.mark.parametrize("git_style", [True, False])

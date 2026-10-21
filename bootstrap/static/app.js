@@ -52,6 +52,7 @@ const proactiveEventNames = {
   wait: "判断暂缓接话", silence: "判断无需接话", cooldown: "等待发言间隔，待处理消息已排队",
   budget_exhausted: "达到调用限额", judging: "正在判断是否接话", generating: "正在组织回复",
   sent: "回复已发送", stale: "本次回复已过期，未发送", cancelled: "任务已取消",
+  duplicate_reply: "同话题已回复，省略重复内容",
   batch_expired: "本批次已过期，未继续回复", invalid_decision: "判断结果无效，未发言",
   invalid_generation: "回复内容未通过格式检查，未发言",
   model_error: "模型调用失败，未发言", delivery_failed: "发送未确认，未自动重发",

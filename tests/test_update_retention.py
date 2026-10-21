@@ -654,3 +654,226 @@ def test_digest_pinned_active_image_resolves_tag_alias_without_disabling_cleanup
     assert report["status"] == "completed"
     assert old_image in docker.removed_images
     assert actual_image in docker.images
+
+
+def maintenance_job(engine, docker, number, *, register=True, journal_name="proactive-job.json"):
+    from deploy.updater.retention import MAINTENANCE_VOLUMES, register_completed_maintenance
+
+    directory = engine.root / "jobs" / format(number + 100, "024x")
+    old = compose(docker.live_images)
+    candidate = docker.add_image(3000 + number, tags=[PROJECT + "-group-info:test-" + str(number)])
+    new = deepcopy(old)
+    for name in ("app", "wizard"):
+        new["services"][name]["image"] = candidate
+    volumes = {name: item["name"] for name, item in old["volumes"].items()}
+    before = {name: {"id": "before-" + name, "image": item["image"], "started_at": ""}
+              for name, item in old["services"].items()}
+    job = {"id": directory.name, "phase": "completed", "terminal_phase": "completed",
+           "backup_complete": True, "mutation_started": True, "services_stopped": True,
+           "candidate_image": candidate, "helper_image": docker.live_images["updater"],
+           "volumes": volumes, "before": before}
+    engine_module.write(directory / journal_name, job)
+    engine_module.write(directory / "old-compose.json", old)
+    engine_module.write(directory / "new-compose.json", new)
+    engine_module.write(directory / "adopted/old-compose.json", new)
+    engine_module.write(directory / "captured.json", {"volumes": volumes, "services": before})
+    engine_module.write(directory / "previous-status.json", {"phase": "idle"})
+    engine_module.write(directory / "retention-pin.json", {"version": 1, "project": PROJECT,
+                         "images": sorted({candidate, *docker.live_images.values()})})
+    data = engine.root / ("manual-fixture-volume-" + directory.name)
+    data.mkdir()
+    (data / "payload.db").write_bytes(b"verified maintenance database")
+    for logical in MAINTENANCE_VOLUMES:
+        volume.backup(data, directory / (logical + ".tar"))
+    timestamp = (datetime(2026, 10, 1, tzinfo=timezone.utc) + timedelta(days=number)).isoformat()
+    if register:
+        register_completed_maintenance(directory, PROJECT, volumes["update-data"], timestamp, journal_name)
+    return directory, candidate, timestamp
+
+
+@pytest.mark.parametrize("journal_name", ["proactive-job.json", "password-files-job.json",
+                                          "file-workspace-job.json", "recent-history-job.json"])
+def test_maintenance_registration_is_explicit_atomic_and_does_not_change_original_journal(deployed, journal_name):
+    from deploy.updater.retention import register_completed_maintenance
+
+    engine, docker = deployed
+    directory, candidate, timestamp = maintenance_job(engine, docker, 1, register=False, journal_name=journal_name)
+    before = (directory / journal_name).read_bytes()
+    record = register_completed_maintenance(directory, PROJECT, PROJECT + "_update-data", timestamp, journal_name)
+
+    assert record == engine_module.read(directory / "maintenance.json")
+    assert record["owned_images"] == [candidate]
+    assert record["backup_volumes"] == ["langbot-data", "setup-state"]
+    assert record["completed_at_source"] == "operator_supplied"
+    assert record["completed_at"] == timestamp
+    assert (directory / journal_name).read_bytes() == before
+    assert not list(directory.glob(".maintenance-*"))
+    assert register_completed_maintenance(directory, PROJECT, PROJECT + "_update-data", timestamp, journal_name) == record
+
+
+def test_registered_maintenance_rotates_only_completed_two_volume_backups(deployed):
+    engine, docker = deployed
+    oldest, candidate, _ = maintenance_job(engine, docker, 1)
+    middle, _, _ = maintenance_job(engine, docker, 2)
+    newest, _, _ = maintenance_job(engine, docker, 3)
+
+    report = cleanup(engine)
+
+    assert report["status"] == "completed"
+    assert report["removed_jobs"] == [oldest.name]
+    assert not oldest.exists() and middle.exists() and newest.exists()
+    assert candidate in docker.removed_images
+    assert set(docker.live_images.values()).issubset(docker.images)
+    # Deleted old image IDs in an expired registration are not interpreted as
+    # unresolved retained references on the following cleanup cycle.
+    again = cleanup(engine)
+    assert again["status"] == "completed"
+    assert not again["removed_jobs"] and not again["removed_images"]
+
+
+def test_two_volume_maintenance_does_not_displace_full_qq_backup_quota(deployed):
+    engine, docker = deployed
+    full = [completed_job(engine, docker, n)[0] for n in (1, 2, 3)]
+    partial = [maintenance_job(engine, docker, n)[0] for n in (4, 5, 6)]
+
+    report = cleanup(engine)
+
+    assert set(report["removed_jobs"]) == {full[0].name, partial[0].name}
+    assert all(path.exists() for path in [*full[1:], *partial[1:]])
+
+
+def test_unregistered_successful_manual_journal_remains_operator_managed(deployed):
+    engine, docker = deployed
+    manual, candidate, _ = maintenance_job(engine, docker, 1, register=False)
+    for number in (2, 3, 4):
+        maintenance_job(engine, docker, number)
+
+    report = cleanup(engine)
+
+    assert manual.exists() and candidate in docker.images
+    assert manual.name not in report["removed_jobs"]
+    assert "unmanaged_or_unresolved_history_preserved" in report["warnings"]
+
+
+@pytest.mark.parametrize("unsafe", ["unfinished", "rolled_back", "partial_backup", "wrong_id",
+                                    "foreign_project", "different_volume", "napcat_changed",
+                                    "helper_changed", "candidate_is_napcat", "unresolved_image_tag",
+                                    "captured_mismatch", "adopted_missing", "adopted_mismatch",
+                                    "unknown_file", "unexpected_directory", "corrupt_archive"])
+def test_maintenance_registration_rejects_incomplete_or_unproven_rollouts(deployed, unsafe):
+    from deploy.updater.retention import UnsafeInventory, register_completed_maintenance
+
+    engine, docker = deployed
+    directory, _, timestamp = maintenance_job(engine, docker, 1, register=False)
+    job_path = directory / "proactive-job.json"
+    job = engine_module.read(job_path)
+    if unsafe in {"unfinished", "rolled_back", "partial_backup", "wrong_id", "helper_changed", "candidate_is_napcat"}:
+        if unsafe == "unfinished":
+            job["phase"] = "finalizing"
+        elif unsafe == "rolled_back":
+            job["terminal_phase"] = "rolled_back"
+        elif unsafe == "partial_backup":
+            job["backup_complete"] = False
+        elif unsafe == "wrong_id":
+            job["id"] = "e" * 24
+        elif unsafe == "helper_changed":
+            job["helper_image"] = image_id(12345)
+        else:
+            job["candidate_image"] = docker.live_images["napcat"]
+        engine_module.write(job_path, job)
+    elif unsafe in {"foreign_project", "different_volume", "napcat_changed", "unresolved_image_tag"}:
+        document = engine_module.read(directory / "new-compose.json")
+        if unsafe == "foreign_project":
+            document["name"] = "someone-else"
+        elif unsafe == "different_volume":
+            document["volumes"]["setup-state"]["name"] = "another-volume"
+        elif unsafe == "napcat_changed":
+            document["services"]["napcat"]["image"] = image_id(22222)
+        else:
+            document["services"]["app"]["image"] = PROJECT + "-app:latest"
+        engine_module.write(directory / "new-compose.json", document)
+    elif unsafe == "captured_mismatch":
+        engine_module.write(directory / "captured.json", {})
+    elif unsafe == "adopted_missing":
+        (directory / "adopted/old-compose.json").unlink()
+    elif unsafe == "adopted_mismatch":
+        engine_module.write(directory / "adopted/old-compose.json", engine_module.read(directory / "old-compose.json"))
+    elif unsafe == "unknown_file":
+        (directory / "important.txt").write_text("keep")
+    elif unsafe == "unexpected_directory":
+        (directory / "operator-data").mkdir()
+    else:
+        path = directory / "langbot-data.tar"
+        raw = bytearray(path.read_bytes())
+        raw[len(raw) // 2] ^= 1
+        path.write_bytes(raw)
+
+    with pytest.raises((UnsafeInventory, engine_module.UpdateError)):
+        register_completed_maintenance(directory, PROJECT, PROJECT + "_update-data", timestamp)
+    assert not (directory / "maintenance.json").exists()
+    assert directory.exists() and not docker.removed_images
+
+
+@pytest.mark.parametrize("tamper", ["record_owned_ids", "record_volume", "journal", "metadata", "archive"])
+def test_registered_maintenance_is_revalidated_before_retention(deployed, tamper):
+    engine, docker = deployed
+    directory, candidate, _ = maintenance_job(engine, docker, 1)
+    for number in (2, 3, 4):
+        maintenance_job(engine, docker, number)
+    if tamper.startswith("record_"):
+        record = engine_module.read(directory / "maintenance.json")
+        if tamper == "record_owned_ids":
+            record["owned_images"].append(docker.live_images["napcat"])
+        else:
+            record["backup_volumes"] = ["langbot-data"]
+        engine_module.write(directory / "maintenance.json", record)
+    elif tamper == "journal":
+        job = engine_module.read(directory / "proactive-job.json")
+        job["phase"] = "recovery_required"
+        engine_module.write(directory / "proactive-job.json", job)
+    elif tamper == "metadata":
+        engine_module.write(directory / "previous-status.json", {"phase": "failed"})
+    else:
+        path = directory / "setup-state.tar"
+        raw = bytearray(path.read_bytes())
+        raw[len(raw) // 2] ^= 1
+        path.write_bytes(raw)
+
+    cleanup(engine)
+
+    assert directory.exists() and candidate in docker.images
+
+
+@pytest.mark.parametrize("protection", ["active", "stopped_container", "owner", "running_helper",
+                                       "foreign_tag", "foreign_owner", "digest", "unrecorded_image"])
+def test_maintenance_images_and_active_backups_keep_existing_safety_boundaries(deployed, protection):
+    engine, docker = deployed
+    oldest, candidate, _ = maintenance_job(engine, docker, 1)
+    for number in (2, 3):
+        maintenance_job(engine, docker, number)
+    target = candidate
+    if protection == "active":
+        active = engine_module.read(engine.active_path)
+        active["services"]["app"]["image"] = candidate
+        engine_module.write(engine.active_path, active)
+    elif protection == "stopped_container":
+        docker.add_container("unrelated-stopped", candidate, running=False)
+    elif protection == "owner":
+        engine.publish(proactive_owner=oldest.name)
+    elif protection == "running_helper":
+        docker.add_container("manual-helper", docker.live_images["updater"],
+                             labels={"io.qunling.proactive-helper": oldest.name})
+    elif protection == "foreign_tag":
+        docker.images[candidate]["RepoTags"].append("another-app:important")
+    elif protection == "foreign_owner":
+        docker.images[candidate]["Config"]["Labels"]["io.qunling.update-project"] = "foreign"
+    elif protection == "digest":
+        docker.images[candidate]["RepoDigests"] = ["registry.example/owned@" + image_id(98765)]
+    else:
+        target = docker.add_image(99999, tags=[PROJECT + "-group-info:unrecorded"])
+
+    cleanup(engine)
+
+    assert target in docker.images
+    if protection in {"owner", "running_helper"}:
+        assert oldest.exists()

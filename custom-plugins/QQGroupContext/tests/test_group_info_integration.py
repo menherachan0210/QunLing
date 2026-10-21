@@ -11,7 +11,7 @@ import pytest
 from langbot_plugin.api.entities.builtin.platform.message import MessageChain, Plain, Source
 
 from pkg.context import ContextStore, KEY
-from pkg import group_members, tools
+from pkg import group_evidence, group_members, tools
 from qunling.group_knowledge import recall
 from qunling.integration import CONTEXT_KEY, descriptor, workspace_key
 from qunling.qq_group_api import read_group_api
@@ -107,9 +107,77 @@ async def test_avatar_reuses_member_ref_real_scope_and_shared_summary(runtime):
     assert any(row["source"] == "avatar_analysis" and "白猫" in row["text"] for row in records)
     serialized = json.dumps(records, ensure_ascii=False)
     assert member["member_ref"] not in serialized and "qlogo" not in serialized
+    # Real tool publication carries the trusted question anchor, allowing a
+    # later brief correction even when it repeats no visual description.
+    correction = recall(workspace_id=workspace_key(runtime.plugin), bot_id="bot-a", group_id="1001",
+                        question="完全不像", related_message_ids=[runtime.context.anchor])
+    avatar_rows = [row for row in correction if row["source"] == "avatar_analysis"]
+    assert len(avatar_rows) == 1 and avatar_rows[0]["subject"] == "小明（QQ301）的头像"
+    assert avatar_rows[0]["actor_id"] == "201"
+    assert recall(workspace_id=workspace_key(runtime.plugin), bot_id="bot-a", group_id="1001",
+                  question="完全不像", related_message_ids=["other-task"]) == []
     second = await call(runtime, "avatar", {"target": "self", "question": "再看看"})
     assert second["status"] == "error" and runtime.plugin.invoke_llm.await_count == 1
     assert runtime.context.group_data_inflight == 0
+
+
+@pytest.mark.asyncio
+async def test_same_name_avatar_targets_keep_distinct_identity_and_request_evidence(runtime):
+    first_member = (await call(runtime, "members", {"action": "get", "member_id": "301"}))["member"]
+    first = await call(runtime, "avatar", {"target": first_member["member_ref"], "question": "小明的头像是什么图案"})
+    assert first["status"] == "ok"
+    original_call = runtime.onebot.call_action.side_effect
+
+    async def same_name_member(action, **params):
+        member = {"group_id": "1001", "user_id": "302", "nickname": "小明", "card": "", "role": "member"}
+        if action == "get_group_member_info" and str(params["user_id"]) == "302":
+            return member
+        if action == "get_group_member_list":
+            return [*(await original_call(action, **params)), member]
+        return await original_call(action, **params)
+
+    runtime.onebot.call_action.side_effect = same_name_member
+    runtime.source.message_chain = MessageChain([Source(id=-991, time=datetime.now()), Plain(text="查看小明的头像")])
+    runtime.event_ctx.query_id, runtime.event_ctx.query_uuid = 11, "query-b"
+    token = runtime.plugin.contexts.capture(runtime.plugin, runtime.event_ctx, "bot-a")
+    runtime.variables[KEY] = token
+    runtime.variables[CONTEXT_KEY] = descriptor(runtime.plugin, runtime.source, "query-b")
+    second_context = runtime.plugin.contexts.get(runtime.plugin, runtime.variables, 11, "query-b")
+    second_context.current_question = "查看小明的头像"
+    runtime.proxy.query_uuid = "query-b"
+    runtime.plugin.invoke_llm.return_value.content = "头像中是一只黑色的狗。"
+    second_member = (await call(runtime, "members", {"action": "get", "member_id": "302"},
+                                query_id=11, query_uuid="query-b"))["member"]
+    second = await call(runtime, "avatar", {"target": second_member["member_ref"], "question": "小明的头像是什么图案"},
+                        query_id=11, query_uuid="query-b")
+    assert second["status"] == "ok"
+    # Refreshing the other same-named person's analysis must not evict the
+    # original person's versions or merge the two subjects during retrieval.
+    for _ in range(3):
+        await group_evidence.publish_result(runtime.plugin, second_context, "avatar", second)
+    avatar_rows = [row for row in summaries(runtime) if row["source"] == "avatar_analysis"]
+    assert {row["subject"] for row in avatar_rows} == {"小明（QQ301）的头像", "小明（QQ302）的头像"}
+    for anchor, target, expected in ((runtime.context.anchor, "301", "白猫"),
+                                     (second_context.anchor, "302", "黑色的狗")):
+        correction = recall(workspace_id=workspace_key(runtime.plugin), bot_id="bot-a", group_id="1001",
+                            question="完全不像", related_message_ids=[anchor])
+        correction = [row for row in correction if row["source"] == "avatar_analysis"]
+        assert len(correction) == 1 and correction[0]["subject"] == f"小明（QQ{target}）的头像"
+        assert expected in correction[0]["text"]
+        assert correction[0]["actor_id"] == "201"  # Requester, never the avatar target.
+
+
+@pytest.mark.asyncio
+async def test_multi_avatar_subject_keeps_all_verified_ids_within_shared_budget(runtime):
+    identities = [str(10 ** 19 + index) for index in range(4)]
+    result = {"status": "ok", "analysis": "四个人的头像均已观察。", "targets": [
+        {"kind": "member", "user_id": identity, "nickname": "名字很长" * 25} for identity in identities
+    ]}
+    await group_evidence.publish_result(runtime.plugin, runtime.context, "avatar", result)
+    records = recall(workspace_id=workspace_key(runtime.plugin), bot_id="bot-a", group_id="1001",
+                     question="不对", related_message_ids=[runtime.context.anchor])
+    assert len(records) == 1 and len(records[0]["subject"]) <= 160
+    assert all(identity in records[0]["subject"] for identity in identities)
 
 
 @pytest.mark.asyncio

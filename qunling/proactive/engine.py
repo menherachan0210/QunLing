@@ -11,12 +11,14 @@ from collections import deque
 import contextvars
 from dataclasses import dataclass, field
 from datetime import datetime
+from difflib import SequenceMatcher
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import time
+import unicodedata
 from typing import Awaitable, Callable, Mapping
 from zoneinfo import ZoneInfo
 
@@ -110,6 +112,38 @@ _MODES = {
     "active": _Mode(2, 15, 240, 2400, 60, 600, 30, 5, 8),
 }
 GLOBAL_JUDGMENTS_PER_DAY = 4800
+
+
+def _repeated_reply(first: str, second: str) -> bool:
+    """Recognize text repetition, never infer that two corrections mean the same.
+
+    Keep numbers, negations, names, question marks and code punctuation intact.
+    A changed fact or an additional sentence must survive even when most of a
+    long reply is copied. Only harmless spacing/punctuation and a few spoken
+    particles may differ; paraphrases deliberately fail open.
+    """
+    if any(char in first + second for char in "`=<>\\{}[]()"):
+        return first.strip() == second.strip() and len(first.strip()) >= 24
+
+    def normalize(value):
+        value = " ".join(unicodedata.normalize("NFKC", value).split())
+        return "".join(char for index, char in enumerate(value)
+                       if char not in ",;!。、" or
+                       (char == "," and 0 < index < len(value) - 1
+                        and value[index - 1].isascii() and value[index - 1].isalnum()
+                        and value[index + 1].isascii() and value[index + 1].isalnum()))
+
+    first, second = normalize(first), normalize(second)
+    if min(len(first), len(second)) < 24:
+        return False  # Short acknowledgments may legitimately answer two people.
+    if first == second:
+        return True
+    matcher = SequenceMatcher(None, first, second, autojunk=False)
+    if matcher.ratio() < .96:
+        return False
+    changed = "".join(first[a:b] + second[c:d] for tag, a, b, c, d in matcher.get_opcodes()
+                      if tag != "equal")
+    return bool(changed) and len(changed) <= 3 and set(changed) <= set("啊呀呢吧嗯呃哦哎唉")
 
 
 @dataclass
@@ -439,8 +473,16 @@ class ProactiveEngine:
         if before_message_id is not None:
             for index, message in enumerate(messages):
                 if message.message_id == before_message_id:
+                    # QQ may round a request down to whole seconds while a
+                    # previously observed bot receipt retains host fractions.
+                    # Only that same-second predecessor is exempt from the
+                    # time bound; delayed requests still exclude future turns.
+                    rounded_anchor = (has_timestamp and message.timestamp == before_timestamp
+                                      and before_timestamp == math.floor(before_timestamp))
                     return tuple(item for item in messages[:index]
-                                 if not has_timestamp or item.timestamp <= before_timestamp)
+                                 if not has_timestamp or item.timestamp <= before_timestamp
+                                 or (rounded_anchor and item.is_bot
+                                     and math.floor(item.timestamp) == before_timestamp))
         if not has_timestamp:
             return ()
         return tuple(message for message in messages if message.timestamp < before_timestamp)
@@ -587,9 +629,12 @@ class ProactiveEngine:
 
     def on_bot_message(self, group_id: str, text: str, *, message_id: str | None = None,
                        recipient_id: str | None = None, proactive: bool = False,
-                       reply_to: str | None = None) -> None:
+                       reply_to: str | None = None, has_media: bool = False) -> None:
         self.refresh_configuration()
         if self._policy(self._snapshot, group_id) is None:
+            return
+        has_media = has_media is True and message_id is not None
+        if not str(text).strip() and not has_media:
             return
         state = self._state(group_id)
         if recipient_id is None and reply_to is not None:
@@ -614,13 +659,13 @@ class ProactiveEngine:
             if reply_to is not None and not proactive:
                 state.covered[str(reply_to)] = self._clock()
                 state.coverage_receipts[str(reply_to)] = str(message_id)
-        self._append_bot_message(group_id, state, text, message_id, reply_to, recipient)
+        self._append_bot_message(group_id, state, text, message_id, reply_to, recipient, has_media)
 
     def _append_bot_message(self, group_id: str, state: _Group, text: str,
                             message_id: str | None, reply_to: str | None = None,
-                            recipient_id: str | None = None) -> None:
+                            recipient_id: str | None = None, has_media: bool = False) -> None:
         text = str(text).strip()[:2000]
-        if not text:
+        if not text and not has_media:
             return
         key = str(message_id) if message_id is not None else f"bot-observed-{self._clock()}-{len(state.messages)}"
         if any(item.is_bot and item.message_id == key for item in state.messages):
@@ -629,7 +674,7 @@ class ProactiveEngine:
         state.messages.append(Message(self.bot_id, group_id, key, self.bot_id,
                                       text, self._clock(), reply_to=reply_to,
                                       sender_name=policy.display_name if policy else "", is_bot=True,
-                                      reply_recipient_id=recipient_id))
+                                      reply_recipient_id=recipient_id, has_media=has_media))
         self._prune(state, self._clock())
 
     def resolve_target(self, group_id: str, message_id: str) -> Message | None:
@@ -854,7 +899,29 @@ class ProactiveEngine:
             self._record(state, "cooldown")
             await self._wait_delay(lane, delay)
 
-    async def _deliver(self, group_id, sender, generation, revision, context, decision, text):
+    @staticmethod
+    def _new_duplicate_reply(state, policy, target_id, text, previous_receipts):
+        """Find a confirmed same-topic reply sent while this text was generated.
+
+        Receipt IDs, rather than timestamps, also work for simultaneous sends
+        within one clock tick. Nothing in a new user message can suppress a
+        pending answer, and an already-known reply never becomes a global ban.
+        """
+        roots = topic_roots(tuple(state.messages), ignored_terms=(policy.display_name, *policy.aliases))
+        root = roots.get(target_id)
+        if root is None:
+            return None
+        observed = {message.message_id for message in state.messages if message.is_bot}
+        for receipt_id, reply in reversed(tuple(state.reply_index.items())):
+            if (receipt_id in previous_receipts or receipt_id not in observed
+                    or reply.target_id is None or roots.get(reply.target_id) != root):
+                continue
+            if _repeated_reply(reply.text, text):
+                return receipt_id, roots
+        return None
+
+    async def _deliver(self, group_id, sender, generation, revision, context, decision, text,
+                       previous_receipts):
         addressed = decision.target_message_id in context.addressed_candidate_ids
         while True:
             current = self._current(group_id, sender, generation, revision)
@@ -881,6 +948,19 @@ class ProactiveEngine:
                 target = self.resolve_target(group_id, decision.target_message_id)
                 if target is None:
                     self._record(state, "stale")
+                    return
+                duplicate = self._new_duplicate_reply(
+                    state, policy, decision.target_message_id, text, previous_receipts)
+                if duplicate is not None:
+                    receipt_id, roots = duplicate
+                    root = roots[decision.target_message_id]
+                    # Reuse only a real successful receipt for the same topic.
+                    # Unrelated borrowed candidates retain their next attempt.
+                    for key in decision.covered_message_ids or (decision.target_message_id,):
+                        if roots.get(key) == root and key not in state.invalid_targets:
+                            state.covered[key] = self._clock()
+                            state.coverage_receipts[key] = receipt_id
+                    self._record(state, "duplicate_reply")
                     return
                 if not self._budget(state, policy, sending=True):
                     self._record(state, "budget_exhausted")
@@ -996,6 +1076,7 @@ class ProactiveEngine:
                     self._record(state, "batch_expired")
                     return
                 self._record(state, "generating")
+                previous_receipts = frozenset(state.reply_index)
                 text = await asyncio.wait_for(self._generate(context, decision), self._model_timeout)
                 if (not isinstance(text, str) or not text.strip()
                         or len(text.strip()) > reply_character_limit(context, decision)
@@ -1003,7 +1084,8 @@ class ProactiveEngine:
                                or 0xD800 <= ord(char) <= 0xDFFF for char in text)):
                     self._record(state, "invalid_generation")
                     return
-            await self._deliver(group_id, sender, generation, revision, context, decision, text.strip())
+            await self._deliver(group_id, sender, generation, revision, context, decision, text.strip(),
+                                previous_receipts)
         except asyncio.CancelledError:
             if state is not None and lane is not None and self._groups.get(group_id) is state and not lane.explicit:
                 self._record(state, "cancelled")

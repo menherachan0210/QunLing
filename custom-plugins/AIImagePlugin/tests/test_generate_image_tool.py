@@ -214,6 +214,39 @@ async def test_sends_one_image_to_current_query_and_returns_only_status(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("edit", [False, True])
+async def test_delivery_result_distinguishes_requested_traits_from_observed_output(tool_env, edit):
+    env = tool_env
+    prompt = "保留紫色短发和白色发饰，改成水彩头像。"
+    result = await call(env, {"prompt": prompt}, edit=edit)
+
+    # The provider received the requested traits; returning a generated image
+    # still supplies no visual assessment of whether those traits survived.
+    if edit:
+        env.editor.assert_awaited_once_with(prompt, env.context_state.selected)
+        env.generator.assert_not_awaited()
+    else:
+        env.generator.assert_awaited_once_with(prompt)
+        env.editor.assert_not_awaited()
+    assert len(env.handler.delivered) == 1
+    assert "图片已生成并发送" in result
+    assert "没有对成图做像素识别" in result
+    assert "生成描述是本次要求" in result
+    assert "可以简短说明" in result
+    assert "若此前确实识别过原图" in result
+    assert "不要因本轮未识别成图而否认已经发图或此前看过原图" in result
+    assert "紫色" not in result and "白色" not in result and "水彩" not in result
+    assert "data:" not in result and "https://" not in result
+
+    # A repeated tool call returns the same factual boundary without billing or
+    # implying the different retry prompt was executed or visually observed.
+    repeated = await call(env, {"prompt": "再保留红色帽子"}, edit=not edit)
+    assert repeated == result
+    assert env.generator.await_count + env.editor.await_count == 1
+    assert len(env.handler.delivered) == 1
+
+
+@pytest.mark.asyncio
 async def test_prompt_boundary_and_legacy_query_id_are_supported(tool_env):
     env = tool_env
     assert await call(env, {"prompt": "x" * 8000}, query_uuid=None) == env.module.SENT

@@ -15,12 +15,14 @@ import time
 
 from qunling.assets import AssetError, data_root
 
-TTL_SECONDS = 600
+TTL_SECONDS = 1800
 MAX_PER_GROUP = 12
 MAX_TOTAL = 1000
+MAX_VERSIONS = 3
+MAX_MESSAGE_IDS = 8
 MAX_RESULTS = 6
 MAX_RESULT_CHARS = 4000
-SOURCES = frozenset({"member_info", "avatar_analysis", "group_file_list"})
+SOURCES = frozenset({"member_info", "avatar_analysis", "group_file_list", "image_delivery"})
 
 _URL = re.compile(r"(?:[a-z][a-z0-9+.-]*://|data:|www\.)[^\s<>\"']+", re.I)
 _REF = re.compile(
@@ -67,6 +69,19 @@ def _scope(workspace, bot, group):
     return workspace, bot, str(int(group))
 
 
+def _identity(value):
+    if type(value) not in (str, int):
+        return ""
+    value = str(value)
+    return value if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value) else ""
+
+
+def _message_ids(values):
+    if not isinstance(values, (list, tuple)) or len(values) > 120:
+        return ()
+    return tuple(dict.fromkeys(identity for value in values if (identity := _identity(value))))
+
+
 def _connect(*, create):
     root = data_root()
     path = root / "group-knowledge.sqlite3"
@@ -82,16 +97,29 @@ def _connect(*, create):
         db.execute("""CREATE TABLE IF NOT EXISTS evidence (
             id INTEGER PRIMARY KEY, workspace TEXT NOT NULL, bot TEXT NOT NULL,
             group_id TEXT NOT NULL, question TEXT NOT NULL, source TEXT NOT NULL,
-            subject TEXT NOT NULL, text TEXT NOT NULL, created REAL NOT NULL)""")
+            subject TEXT NOT NULL, text TEXT NOT NULL, created REAL NOT NULL,
+            message_ids TEXT NOT NULL DEFAULT '[]', actor_id TEXT NOT NULL DEFAULT '')""")
+        # Existing installations keep their valid summaries. Serialize schema
+        # migration with other publishers, including separate plugin processes.
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(evidence)")}
+            for column, declaration in (("message_ids", "TEXT NOT NULL DEFAULT '[]'"),
+                                        ("actor_id", "TEXT NOT NULL DEFAULT ''")):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE evidence ADD COLUMN {column} {declaration}")
         db.execute("CREATE INDEX IF NOT EXISTS evidence_scope ON evidence(workspace,bot,group_id,created)")
     return db
 
 
-def publish(*, workspace_id, bot_id, group_id, question, source, subject, text):
+def publish(*, workspace_id, bot_id, group_id, question, source, subject, text,
+            message_ids=(), actor_id=""):
     """Best-effort publish by a trusted tool after a successful read.
 
-    Only the three public metadata/analysis sources above are accepted. The
+    Only public metadata/analysis and confirmed image-delivery facts are accepted. The
     caller must never publish a file's body or private per-request task state.
+    message_ids and actor_id must come from trusted Host/query context, never
+    model parameters. Delivery does not imply that output pixels were inspected.
     No network call, model call, or file grant occurs here.
     """
     scope = _scope(workspace_id, bot_id, group_id)
@@ -108,10 +136,13 @@ def publish(*, workspace_id, bot_id, group_id, question, source, subject, text):
         now = time.time()
         with db:
             db.execute("DELETE FROM evidence WHERE created <= ? OR created > ?", (now - TTL_SECONDS, now))
-            # Replace this public subject's older result, keeping refreshed
-            # membership/avatars from appearing as contradictory observations.
-            db.execute("DELETE FROM evidence WHERE workspace=? AND bot=? AND group_id=? AND source=? AND subject=?", (*scope, source, subject))
-            db.execute("INSERT INTO evidence(workspace,bot,group_id,question,source,subject,text,created) VALUES(?,?,?,?,?,?,?,?)", (*scope, question, source, subject, text, now))
+            db.execute("INSERT INTO evidence(workspace,bot,group_id,question,source,subject,text,created,message_ids,actor_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                       (*scope, question, source, subject, text, now,
+                        json.dumps(_message_ids(message_ids)[:MAX_MESSAGE_IDS]), _identity(actor_id)))
+            # A queued follow-up still needs the version visible at its receipt
+            # time even if another query refreshes the same subject meanwhile.
+            db.execute("DELETE FROM evidence WHERE workspace=? AND bot=? AND group_id=? AND source=? AND subject=? AND id NOT IN (SELECT id FROM evidence WHERE workspace=? AND bot=? AND group_id=? AND source=? AND subject=? ORDER BY created DESC,id DESC LIMIT ?)",
+                       (*scope, source, subject, *scope, source, subject, MAX_VERSIONS))
             db.execute("DELETE FROM evidence WHERE workspace=? AND bot=? AND group_id=? AND id NOT IN (SELECT id FROM evidence WHERE workspace=? AND bot=? AND group_id=? ORDER BY created DESC,id DESC LIMIT ?)", (*scope, *scope, MAX_PER_GROUP))
             db.execute("DELETE FROM evidence WHERE id NOT IN (SELECT id FROM evidence ORDER BY created DESC,id DESC LIMIT ?)", (MAX_TOTAL,))
         return True
@@ -140,10 +171,12 @@ def _score(row, query, terms):
     return len(overlap) if len(overlap) >= 2 or any(re.fullmatch(r"[a-z0-9_]{3,}", t) for t in overlap) else 0
 
 
-def recall(*, workspace_id, bot_id, group_id, question, nearby_text="", before=None):
+def recall(*, workspace_id, bot_id, group_id, question, nearby_text="", before=None,
+           related_message_ids=()):
     """Read relevant public summaries, never use this during participation judging.
 
-    `before` freezes evidence to the triggering message time. A short follow-up
+    `before` freezes evidence to the trusted Host receipt time, which preserves
+    same-second ordering unlike rounded platform timestamps. A short follow-up
     may use its own already-authorized topic text to identify the earlier subject.
     Missing storage and contention fail closed without affecting chat delivery.
     """
@@ -160,7 +193,10 @@ def recall(*, workspace_id, bot_id, group_id, question, nearby_text="", before=N
         db = _connect(create=False)
         if db is None:
             return []
-        rows = db.execute("SELECT question,source,subject,text,created FROM evidence WHERE workspace=? AND bot=? AND group_id=? AND created>? AND created<=? ORDER BY created DESC,id DESC LIMIT ?", (*scope, now - TTL_SECONDS, boundary, MAX_PER_GROUP)).fetchall()
+        columns = {row[1] for row in db.execute("PRAGMA table_info(evidence)")}
+        lineage = ("message_ids,actor_id" if {"message_ids", "actor_id"} <= columns
+                   else "'[]' AS message_ids,'' AS actor_id")
+        rows = db.execute(f"SELECT question,source,subject,text,created,{lineage} FROM evidence WHERE workspace=? AND bot=? AND group_id=? AND created>? AND created<=? ORDER BY created DESC,id DESC LIMIT ?", (*scope, now - TTL_SECONDS, boundary, MAX_PER_GROUP)).fetchall()
     except (OSError, sqlite3.Error, AssetError):
         return []
     finally:
@@ -171,26 +207,41 @@ def recall(*, workspace_id, bot_id, group_id, question, nearby_text="", before=N
     # independent new request that happens to follow another topic.
     use_nearby = len(question) <= 100 and bool(_FOLLOWUP.match(question.strip()))
     neighbor_terms = _terms(nearby) if use_nearby else set()
+    related = set(_message_ids(related_message_ids))
     ranked = []
     for row in rows:
         if row["source"] not in SOURCES:
             continue
-        score = _score(row, question, direct)
+        try:
+            linked = bool(related.intersection(_message_ids(json.loads(row["message_ids"]))))
+        except (TypeError, ValueError):
+            linked = False
+        # Actual message/topic lineage can identify terse corrections without
+        # guessing from whichever member was most recently looked up.
+        score = 40 if linked else _score(row, question, direct)
         if not score and neighbor_terms:
             score = _score(row, nearby, neighbor_terms) * .5
         if score:
             ranked.append((score, row))
     ranked.sort(key=lambda item: (item[0], item[1]["created"]), reverse=True)
-    output, remaining = [], MAX_RESULT_CHARS
-    for _, row in ranked[:MAX_RESULTS]:
+    output, remaining, selected = [], MAX_RESULT_CHARS, set()
+    for _, row in ranked:
+        key = row["source"], row["subject"]
+        if key in selected:
+            continue
         # Re-sanitize at read time too: an older version or damaged row must
         # never become a source of URLs/handles/credentials in another turn.
         subject = _safe_text(row["subject"], 160)
         text = _safe_text(row["text"], min(1200, max(0, remaining - len(subject))))
         if not text:
             break
-        output.append({"source": row["source"], "subject": subject, "text": text, "timestamp": int(row["created"])})
+        item = {"source": row["source"], "subject": subject, "text": text, "timestamp": int(row["created"])}
+        actor = _identity(row["actor_id"])
+        if actor:
+            item["actor_id"] = actor
+        output.append(item)
+        selected.add(key)
         remaining -= len(subject) + len(text)
-        if remaining <= 0:
+        if remaining <= 0 or len(output) >= MAX_RESULTS:
             break
     return output

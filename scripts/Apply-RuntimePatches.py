@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from difflib import unified_diff
+import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -61,6 +63,8 @@ class PatchPlan:
     root: Path
     payload: bytes
     state: str
+    upgrade_from: bytes | None = None
+    verify_payload: bytes | None = None
 
 
 def inspect_python(python: Path) -> dict:
@@ -212,6 +216,37 @@ def git_apply(root: Path, payload: bytes, *options: str) -> subprocess.Completed
         raise PatchError("Git could not check/apply a runtime patch.") from exc
 
 
+def proactive_reply_upgrade(name: str, root: Path, payload: bytes, component: str) -> PatchPlan | None:
+    """Upgrade exactly the previously released complete proactive Host patch.
+
+    Never treat a matching call line alone as an installed patch. Both this
+    known payload and every legacy hunk must match before a one-line delta is
+    even proposed. Other patch names/versions retain the normal strict checks.
+    """
+    if name != "host-proactive-chat.patch" or component != "host":
+        return None
+    path = "src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py"
+    old = "            proactive_sent(self, native.group_id, message, raw, str(native.user_id))\n"
+    new = old[:-2] + ", reply_to=str(native.message_id) if getattr(native, 'message_id', None) is not None else None)\n"
+    new_added = ("+" + new).encode("utf-8")
+    if payload.count(new_added) != 1:
+        return None
+    previous = payload.replace(new_added, ("+" + old).encode("utf-8"), 1)
+    if hashlib.sha256(previous).hexdigest() != "730713902613a135d25330a71ac54e5ba80e044f6bd20a399804f099b5043f0c":
+        return None
+    if git_apply(root, previous, "--reverse", "--check").returncode != 0:
+        return None
+    original = (root / path).read_text(encoding="utf-8")
+    if original.count(old) != 1:
+        return None
+    updated = original.replace(old, new, 1)
+    delta = "".join(unified_diff(original.splitlines(keepends=True), updated.splitlines(keepends=True),
+                                fromfile=f"a/{path}", tofile=f"b/{path}")).encode("utf-8")
+    if not delta or git_apply(root, delta, "--check").returncode != 0:
+        return None
+    return PatchPlan(name, root, delta, "ready", upgrade_from=previous, verify_payload=payload)
+
+
 def build_plan(name: str, root: Path, source: str, component: str) -> PatchPlan:
     payload, paths = runtime_payload(source, component)
     check_targets(root, paths)
@@ -220,6 +255,9 @@ def build_plan(name: str, root: Path, source: str, component: str) -> PatchPlan:
     elif git_apply(root, payload, "--check").returncode == 0:
         state = "ready"
     else:
+        upgrade = proactive_reply_upgrade(name, root, payload, component)
+        if upgrade is not None:
+            return upgrade
         raise PatchError(
             f"{name}: source does not match either the original or patched version; "
             "nothing was overwritten. Review the installed version and local changes."
@@ -239,6 +277,11 @@ def execute_plans(plans: list[PatchPlan], apply: bool) -> None:
     for plan in plans:
         if plan.state != "ready":
             continue
+        if (plan.upgrade_from is not None
+                and git_apply(plan.root, plan.upgrade_from, "--reverse", "--check").returncode != 0):
+            raise PatchError(
+                f"{plan.name}: complete legacy patch changed after preflight; stopped without applying this patch."
+            )
         if git_apply(plan.root, plan.payload, "--check").returncode != 0:
             raise PatchError(
                 f"{plan.name}: files changed after preflight; stopped without applying this patch."
@@ -247,7 +290,7 @@ def execute_plans(plans: list[PatchPlan], apply: bool) -> None:
             raise PatchError(
                 f"{plan.name}: Git refused to apply the patch; no reject/overwrite mode was used."
             )
-        if git_apply(plan.root, plan.payload, "--reverse", "--check").returncode != 0:
+        if git_apply(plan.root, plan.verify_payload or plan.payload, "--reverse", "--check").returncode != 0:
             raise PatchError(f"{plan.name}: post-apply verification failed.")
         print(f"applied: {plan.name}")
     print("Runtime patches verified. Restart LangBot with the same Python environment.")
