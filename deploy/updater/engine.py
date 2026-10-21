@@ -84,6 +84,18 @@ class UpdateEngine:
         self.state_path = self.root / "status.json"
         self.active_path = self.root / "active-compose.json"
         self.lock = threading.Lock()
+        self.cleanup_path = self.root / "cleanup.json"
+        self._cleanup_checked = 0.0
+        self._cleanup_generation = None
+        self.retention_valid = True
+        try:
+            self.keep_backups = int(os.environ.get("QQBOT_UPDATE_KEEP_BACKUPS", "2"))
+            if not 1 <= self.keep_backups <= 10:
+                raise ValueError()
+        except ValueError:
+            # A mistyped setting must not silently choose a smaller retention.
+            self.keep_backups = 2
+            self.retention_valid = False
 
     def run(self, *args, **kwargs):
         return self.runner.run(list(args), **kwargs)
@@ -119,7 +131,55 @@ class UpdateEngine:
             "phase": phase, "busy": phase not in TERMINAL,
             "message": value.get("message", "点击检查 GitHub 更新。"),
             "checked_at": value.get("checked_at", ""),
+            "cleanup": self.cleanup_snapshot(),
         }
+
+    def cleanup_snapshot(self):
+        try:
+            report = read(self.cleanup_path, {})
+            # Reports contain only counts, timestamps and fixed warning codes;
+            # never surface private command output or a backup's contents.
+            return {key: report[key] for key in (
+                "checked_at", "status", "keep_backups", "reclaimed_backup_bytes", "warnings"
+            ) if key in report} | {
+                "removed_jobs": len(report.get("removed_jobs", [])),
+                "removed_images": len(report.get("removed_images", [])),
+                "removed_workers": len(report.get("removed_workers", [])),
+            } if report else {}
+        except Exception:
+            return {}
+
+    def cleanup_history(self, force=False):
+        """Best-effort maintenance never changes the update transaction state."""
+        from deploy.updater.retention import cleanup
+
+        if not self.lock.acquire(blocking=False):
+            return None
+        try:
+            state = read(self.state_path, {})
+            if state.get("phase", "idle") not in TERMINAL:
+                return None
+            generation = (state.get("job_id"), state.get("phase"))
+            current = time.monotonic()
+            if (not force and self._cleanup_checked and current - self._cleanup_checked < 3600
+                    and generation == self._cleanup_generation):
+                return None
+            self._cleanup_checked = current
+            self._cleanup_generation = generation
+            try:
+                if self.retention_valid:
+                    report = cleanup(self, keep_backups=self.keep_backups)
+                else:
+                    report = {"checked_at": now(), "status": "failed", "keep_backups": self.keep_backups,
+                              "warnings": ["invalid_retention_setting_cleanup_disabled"]}
+                write(self.cleanup_path, report)
+                return report
+            except Exception:
+                # Disk/Docker failures during maintenance must never trigger a
+                # rollback of an otherwise successful update.
+                return None
+        finally:
+            self.lock.release()
 
     def publish(self, **values):
         state = read(self.state_path, {})
@@ -213,6 +273,7 @@ class UpdateEngine:
             "-e", "QQBOT_PROJECT=" + self.project,
             "-e", "QQBOT_UPDATE_REPOSITORY=" + self.repository,
             "-e", "QQBOT_UPDATE_BRANCH=" + self.branch,
+            "-e", "QQBOT_UPDATE_KEEP_BACKUPS=" + (str(self.keep_backups) if self.retention_valid else "disabled"),
             info["Image"], "worker", job_id,
         )
 
@@ -381,6 +442,7 @@ class UpdateEngine:
                                       ("deploy/updater/Dockerfile", updater_image)):
                 self.run("docker", "build", "--label",
                          "org.opencontainers.image.revision=" + job["revision"],
+                         "--label", "io.qunling.update-project=" + self.project,
                          "--build-arg", "QQBOT_REVISION=" + job["revision"],
                          "-t", image, "-f", str(source / dockerfile), str(source),
                          timeout=7200, log=log)
@@ -402,7 +464,8 @@ class UpdateEngine:
             # repository's default values differ in a future version.
             new["services"]["updater"].setdefault("environment", {}).update(
                 QQBOT_PROJECT=self.project, QQBOT_UPDATE_REPOSITORY=self.repository,
-                QQBOT_UPDATE_BRANCH=self.branch)
+                QQBOT_UPDATE_BRANCH=self.branch,
+                QQBOT_UPDATE_KEEP_BACKUPS=str(self.keep_backups) if self.retention_valid else "disabled")
             write(new_path, new)
             # Pull a changed QQ image before interrupting the running deployment.
             self.run("docker", "image", "inspect", new["services"]["napcat"]["image"]) \
@@ -417,7 +480,7 @@ class UpdateEngine:
             phase("verifying", "正在检查新版插件和配置恢复。")
             self.wait_ready()
             write(self.active_path, new)
-            job.update(finished=True, terminal_phase="completed", terminal_revision=job["revision"],
+            job.update(finished=True, terminal_phase="completed", terminal_revision=job["revision"], completed_at=now(),
                        terminal_message="更新完成。QQ 如需重新确认登录，请在上方扫码。")
             write(directory / "job.json", job)
             self.publish(phase="completed", current_revision=job["revision"],

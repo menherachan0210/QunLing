@@ -164,6 +164,7 @@ def main():
             while not stopping.wait(15):
                 try:
                     engine.monitor_once()
+                    engine.cleanup_history()
                 except Exception:
                     # A Docker outage is retryable. Keep the existing busy
                     # record rather than declaring a transaction successful.

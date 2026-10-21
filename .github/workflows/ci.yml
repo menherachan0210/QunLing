@@ -34,6 +34,7 @@ jobs:
         run: >-
           python -m pytest tests/test_public*.py tests/test_runtime_patches.py
           tests/test_release_check.py tests/test_script_paths.py
+          tests/test_update_retention.py
           tests/test_task*.py tests/test_file*.py
           --ignore=tests/test_file_pipeline.py
           --ignore=tests/test_file_tool_integration.py -q
