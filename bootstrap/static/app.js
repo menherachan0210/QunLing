@@ -12,6 +12,24 @@ let updateAction = false;
 let configAction = false;
 let qrAction = false;
 let adminAction = false;
+let proactiveDraft = null;
+let proactiveGroups = [];
+let proactiveSelected = "";
+let proactiveDirty = false;
+let proactiveConflict = false;
+let proactiveConfigReady = false;
+let proactiveGroupsReady = false;
+let proactiveAction = false;
+let proactiveLoading = false;
+let proactiveStatus = null;
+let proactiveLastPoll = 0;
+const proactiveModes = {off: "仅 @ 回复", quiet: "安静参与", natural: "自然参与", active: "活跃参与"};
+const proactiveModeNotes = {
+  off: "保留原来的 @ 和 /ai 回复方式，不判断是否主动插话。",
+  quiet: "只自然接住对自己的追问，不主动加入其他人的话题。",
+  natural: "结合讨论和上下文选择参与时机，适合先在少量群中尝试。",
+  active: "更愿意参与相关讨论，仍会控制频率，避免连续插话。"
+};
 let updateExpected = sessionStorage.getItem("qunling-update-pending") || "";
 let polling = false;
 let pollPromise = null;
@@ -40,6 +58,9 @@ function locked(message) {
   authEpoch += 1;
   authenticated = false;
   setupState = null;
+  proactiveConfigReady = false;
+  proactiveGroupsReady = false;
+  proactiveLastPoll = 0;
   $("console-content").hidden = true;
   $("unlock").hidden = false;
   $("qr").hidden = true;
@@ -76,12 +97,176 @@ async function api(path, body, timeout = 15000) {
 }
 function controls() {
   const updating = updateAction || Boolean(updateExpected) || Boolean(updateState?.busy);
-  $("save").disabled = !authenticated || configAction || updating || !setupState?.plugins_ready || setupState.stage === "configuring";
+  $("save").disabled = !authenticated || configAction || proactiveAction || updating || !setupState?.plugins_ready || setupState.stage === "configuring";
   text("save-label", configAction || setupState?.stage === "configuring" ? "正在应用配置…" : "保存并启用");
   $("check-update").disabled = !authenticated || updating || !updateState?.available;
-  $("apply-update").disabled = !authenticated || configAction || updating || !updateState?.available || !updateState.update_available || !updateState.latest_revision || !setupState || ["starting", "configuring"].includes(setupState.stage);
+  $("apply-update").disabled = !authenticated || configAction || proactiveAction || updating || !updateState?.available || !updateState.update_available || !updateState.latest_revision || !setupState || ["starting", "configuring"].includes(setupState.stage);
   $("refresh").disabled = !authenticated || qrAction || updating || !setupState || setupState.qq_logged_in;
   $("admin").disabled = !authenticated || adminAction;
+  const proactiveBlocked = !authenticated || !setupState?.qq_logged_in || configAction || updating || proactiveAction || proactiveLoading || !proactiveConfigReady || !proactiveGroupsReady || proactiveConflict || proactiveStatus?.available === false;
+  document.querySelectorAll("[data-proactive-edit], .proactive-group").forEach((element) => { element.disabled = proactiveBlocked; });
+  $("proactive-group-settings").disabled = proactiveBlocked || !proactiveSelected;
+  $("proactive-reset-group").disabled = proactiveBlocked || !proactiveSelected || !proactiveDraft || !Object.hasOwn(proactiveDraft.groups, proactiveSelected);
+  $("proactive-save").disabled = proactiveBlocked || !proactiveDirty;
+  $("proactive-refresh").disabled = !authenticated || !setupState?.qq_logged_in || updating || proactiveLoading || proactiveAction;
+  $("proactive-search").disabled = !proactiveGroupsReady;
+  $("proactive-reload").disabled = !authenticated || updating || proactiveAction || proactiveLoading;
+  $("proactive-reload").hidden = !proactiveDirty && !proactiveConflict;
+  text("proactive-save-label", proactiveAction ? "正在保存…" : "保存自由对话设置");
+}
+function proactiveDefaultGroup() {
+  return {mode: "off", display_name: "群灵", persona: "", quiet_hours: {enabled: false, start: "23:00", end: "08:00", timezone: "Asia/Shanghai"}};
+}
+function validProactiveConfig(value) {
+  return value?.version === 1 && typeof value.revision === "string" && typeof value.enabled === "boolean" &&
+    value.groups && !Array.isArray(value.groups) && typeof value.groups === "object" &&
+    Object.entries(value.groups).every(([id, group]) => /^\d+$/.test(id) && group && Object.hasOwn(proactiveModes, group.mode) &&
+      typeof group.display_name === "string" && typeof group.persona === "string" && typeof group.quiet_hours?.enabled === "boolean" &&
+      typeof group.quiet_hours.start === "string" && typeof group.quiet_hours.end === "string");
+}
+function proactiveFeedback(message, state = "error") {
+  text("proactive-message", message);
+  tone("proactive-message", state);
+}
+function proactiveSummary() {
+  if (!proactiveDraft) return;
+  const count = Object.values(proactiveDraft.groups).filter((group) => group.mode !== "off").length;
+  const paused = !proactiveDraft.enabled;
+  text("proactive-summary", count ? `已选择 ${count} 个群${paused ? "，总开关关闭时全部暂停主动发言" : "，其他群保持仅 @ 回复"}。新群不会自动开放。` : "尚未开放任何群。请在下方选择群，并明确设置参与方式。");
+  text("proactive-dirty", proactiveDirty ? "有未保存的修改，保存后才会生效" : "设置独立保存，不影响 AI 接口配置");
+  text("proactive-state", proactiveDirty ? "待保存" : paused ? "已暂停" : count ? `${count} 个群已开放` : "尚未选群");
+  tone("proactive-state", proactiveDirty ? "warning" : !paused && count ? "success" : "neutral");
+}
+function renderProactiveEditor() {
+  const selected = proactiveSelected;
+  $("proactive-empty").hidden = Boolean(selected);
+  $("proactive-group-settings").hidden = !selected;
+  if (!selected || !proactiveDraft) return;
+  const member = proactiveGroups.find((group) => group.group_id === selected);
+  const group = proactiveDraft.groups[selected] || proactiveDefaultGroup();
+  text("proactive-group-name", member?.name || "已保存的群");
+  text("proactive-group-id", `群号 ${selected}${member ? "" : " · 当前群列表中未找到，可设为仅 @ 回复"}`);
+  $("proactive-mode").value = group.mode;
+  document.querySelectorAll("#proactive-mode option").forEach((option) => { option.disabled = !member && option.value !== "off"; });
+  $("proactive-display-name").value = group.display_name;
+  $("proactive-persona").value = group.persona;
+  $("proactive-quiet-enabled").checked = group.quiet_hours.enabled;
+  $("proactive-quiet-start").value = group.quiet_hours.start;
+  $("proactive-quiet-end").value = group.quiet_hours.end;
+  $("proactive-quiet-fields").hidden = !group.quiet_hours.enabled;
+  text("proactive-mode-note", proactiveModeNotes[group.mode]);
+}
+function renderProactiveGroups() {
+  const list = $("proactive-group-list");
+  list.replaceChildren();
+  if (!proactiveDraft) return;
+  const query = $("proactive-search").value.trim().toLocaleLowerCase();
+  const groups = proactiveGroups.map((group) => ({...group, current: true}));
+  const known = new Set(groups.map((group) => group.group_id));
+  for (const group_id of Object.keys(proactiveDraft.groups)) {
+    if (!known.has(group_id)) groups.push({group_id, name: "已保存的群", current: false});
+  }
+  const visible = groups.filter((group) => (group.name + " " + group.group_id).toLocaleLowerCase().includes(query));
+  for (const group of visible) {
+    const mode = proactiveDraft.groups[group.group_id]?.mode || "off";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "proactive-group";
+    button.classList.toggle("is-selected", group.group_id === proactiveSelected);
+    button.setAttribute("aria-pressed", String(group.group_id === proactiveSelected));
+    const title = document.createElement("span");
+    title.className = "proactive-group-title";
+    const name = document.createElement("strong");
+    name.textContent = group.name || group.group_id;
+    const id = document.createElement("small");
+    id.textContent = group.group_id + (group.current ? "" : " · 未在当前列表");
+    title.append(name, id);
+    const badge = document.createElement("span");
+    badge.className = "proactive-group-mode";
+    badge.dataset.enabled = String(mode !== "off");
+    badge.textContent = proactiveModes[mode];
+    button.append(title, badge);
+    button.addEventListener("click", () => {
+      if (button.disabled) return;
+      proactiveSelected = group.group_id;
+      renderProactiveGroups();
+      renderProactiveEditor();
+      controls();
+    });
+    list.append(button);
+  }
+  if (proactiveGroupsReady) text("proactive-groups-message", query && !visible.length ? "没有匹配的群。" : groups.length ? `已读取 ${proactiveGroups.length} 个当前 QQ 群，选择一个进行设置。` : "当前 QQ 尚未加入群；加入后点击刷新。");
+  controls();
+}
+function applyProactive(value, replace = false) {
+  if (!validProactiveConfig(value.config)) throw new Error("自由对话设置格式无法识别，请更新管理服务后重试。");
+  proactiveConfigReady = true;
+  proactiveStatus = value.status || {};
+  if (replace || !proactiveDraft || !proactiveDirty) {
+    proactiveDraft = JSON.parse(JSON.stringify(value.config));
+    proactiveDirty = false;
+    proactiveConflict = false;
+    $("proactive-enabled").checked = proactiveDraft.enabled;
+    renderProactiveGroups();
+    renderProactiveEditor();
+  } else if (value.config.revision !== proactiveDraft.revision) {
+    proactiveConflict = true;
+    proactiveFeedback("设置已在其他页面修改。当前编辑已保留，请重新载入已保存设置后再调整。");
+  }
+  proactiveSummary();
+  if (proactiveStatus.available === false) proactiveFeedback(proactiveStatus.message || "自由对话服务暂不可用，请稍后重试。");
+}
+async function pollProactive(epoch = authEpoch, force = false, replace = false) {
+  if (!authenticated || proactiveLoading || proactiveAction || (!force && Date.now() - proactiveLastPoll < 15000)) return;
+  proactiveLoading = true;
+  proactiveLastPoll = Date.now();
+  controls();
+  try {
+    const results = await Promise.allSettled([
+      api("/api/proactive"),
+      setupState?.qq_logged_in ? api("/api/proactive/groups") : Promise.reject(new Error("请先登录 QQ，再选择开放自由对话的群。"))
+    ]);
+    if (epoch !== authEpoch || !authenticated) return;
+    const [configResult, groupsResult] = results;
+    if (groupsResult.status === "fulfilled" && Array.isArray(groupsResult.value.groups) && groupsResult.value.groups.every((group) => /^\d+$/.test(String(group.group_id)) && typeof group.name === "string")) {
+      proactiveGroups = groupsResult.value.groups.map((group) => ({group_id: String(group.group_id), name: group.name}));
+      proactiveGroupsReady = true;
+    } else {
+      proactiveGroupsReady = false;
+      text("proactive-groups-message", groupsResult.status === "rejected" ? groupsResult.reason.message : "群列表读取失败，请刷新重试。已保存的设置不会被覆盖。");
+    }
+    if (configResult.status === "fulfilled") {
+      try { applyProactive(configResult.value, replace); }
+      catch (error) { proactiveConfigReady = false; proactiveFeedback(error.message); }
+    } else {
+      proactiveConfigReady = false;
+      proactiveFeedback(configResult.reason.message);
+    }
+    if (proactiveDraft) renderProactiveGroups();
+  } finally {
+    proactiveLoading = false;
+    controls();
+  }
+}
+function editProactiveGroup() {
+  if (!proactiveDraft || !proactiveSelected || $("proactive-group-settings").disabled) return;
+  if (!Object.hasOwn(proactiveDraft.groups, proactiveSelected) && Object.keys(proactiveDraft.groups).length >= 100) {
+    proactiveFeedback("最多保存 100 个群的独立设置。请先整理已保存的群设置。");
+    renderProactiveEditor();
+    return;
+  }
+  const group = {
+    mode: $("proactive-mode").value,
+    display_name: $("proactive-display-name").value,
+    persona: $("proactive-persona").value,
+    quiet_hours: {enabled: $("proactive-quiet-enabled").checked, start: $("proactive-quiet-start").value, end: $("proactive-quiet-end").value, timezone: "Asia/Shanghai"}
+  };
+  proactiveDraft.groups[proactiveSelected] = group;
+  proactiveDirty = true;
+  $("proactive-quiet-fields").hidden = !group.quiet_hours.enabled;
+  text("proactive-mode-note", proactiveModeNotes[group.mode]);
+  proactiveSummary();
+  renderProactiveGroups();
 }
 function summary(name, label, detail, state = "neutral") {
   text("summary-" + name, label);
@@ -226,7 +411,7 @@ async function poll(fresh = false) {
   const epoch = authEpoch;
   $("refresh-state").classList.add("is-loading");
   $("refresh-state").disabled = true;
-  pollPromise = Promise.allSettled([pollSetup(epoch), pollUpdate(epoch)]).finally(() => {
+  pollPromise = Promise.allSettled([pollSetup(epoch), pollUpdate(epoch)]).then(() => pollProactive(epoch)).finally(() => {
     polling = false;
     pollPromise = null;
     $("refresh-state").classList.remove("is-loading");
@@ -234,6 +419,60 @@ async function poll(fresh = false) {
   });
   return pollPromise;
 }
+$("proactive-search").addEventListener("input", renderProactiveGroups);
+$("proactive-refresh").addEventListener("click", async () => {
+  if ($("proactive-refresh").disabled) return;
+  await pollProactive(authEpoch, true);
+});
+$("proactive-enabled").addEventListener("change", () => {
+  if ($("proactive-enabled").disabled || !proactiveDraft) return;
+  proactiveDraft.enabled = $("proactive-enabled").checked;
+  proactiveDirty = true;
+  proactiveSummary();
+  controls();
+});
+$("proactive-reset-group").addEventListener("click", () => {
+  if ($("proactive-reset-group").disabled || !proactiveDraft || !proactiveSelected) return;
+  delete proactiveDraft.groups[proactiveSelected];
+  proactiveDirty = true;
+  renderProactiveEditor();
+  renderProactiveGroups();
+  proactiveSummary();
+  proactiveFeedback("已恢复此群默认设置，保存后将仅响应 @ 和 /ai。", "success");
+});
+for (const id of ["proactive-mode", "proactive-quiet-enabled", "proactive-quiet-start", "proactive-quiet-end"]) {
+  $(id).addEventListener("change", editProactiveGroup);
+}
+for (const id of ["proactive-display-name", "proactive-persona"]) {
+  $(id).addEventListener("input", editProactiveGroup);
+}
+$("proactive-reload").addEventListener("click", async () => {
+  if ($("proactive-reload").disabled) return;
+  if (proactiveDirty && !window.confirm("重新载入将丢弃当前未保存的自由对话修改，改用服务器上已保存的设置。继续吗？")) return;
+  await pollProactive(authEpoch, true, true);
+  if (!proactiveDirty && !proactiveConflict && proactiveConfigReady) proactiveFeedback("已重新载入服务器上保存的设置。", "success");
+});
+$("proactive-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if ($("proactive-save").disabled || !proactiveDraft) return;
+  const epoch = authEpoch;
+  const config = JSON.parse(JSON.stringify(proactiveDraft));
+  const invalidQuiet = Object.values(config.groups).some((group) => group.quiet_hours.enabled && (!group.quiet_hours.start || !group.quiet_hours.end || group.quiet_hours.start === group.quiet_hours.end));
+  if (invalidQuiet) { proactiveFeedback("请填写完整的安静时段，开始和结束时间不能相同。"); return; }
+  proactiveAction = true;
+  proactiveFeedback("");
+  controls();
+  try {
+    const value = await api("/api/proactive", config, 60000);
+    if (epoch !== authEpoch || !authenticated) return;
+    applyProactive(value, true);
+    proactiveFeedback("自由对话设置已保存。只有明确选择的群会开放主动参与。", "success");
+  } catch (error) {
+    if (epoch !== authEpoch) return;
+    if (error.status === 409) proactiveConflict = true;
+    proactiveFeedback(error.status === 409 ? "设置已发生变化，当前编辑已保留。请重新载入已保存设置后再调整。" : error.message);
+  } finally { proactiveAction = false; controls(); }
+});
 $("settings").addEventListener("submit", async (event) => {
   event.preventDefault();
   if ($("save").disabled) return;
@@ -316,6 +555,14 @@ async function unlock() {
   token = value;
   $("token").value = "";
   loaded = false;
+  proactiveDraft = null;
+  proactiveGroups = [];
+  proactiveSelected = "";
+  proactiveDirty = false;
+  proactiveConflict = false;
+  proactiveConfigReady = false;
+  proactiveGroupsReady = false;
+  proactiveLastPoll = 0;
   sessionStorage.setItem("qqbot-setup", token);
   $("unlock-button").disabled = true;
   try { await poll(); }
@@ -341,7 +588,7 @@ if (typeof IntersectionObserver !== "undefined") {
     const visible = entries.filter((entry) => entry.isIntersecting);
     if (visible.length) selectNav(visible[0].target.id);
   }, {rootMargin: "-10% 0px -65% 0px"});
-  ["overview", "models", "connection", "maintenance", "advanced"].forEach((id) => observer.observe($(id)));
+  ["overview", "models", "connection", "proactive", "maintenance", "advanced"].forEach((id) => observer.observe($(id)));
 }
 poll();
 setInterval(poll, 4000);

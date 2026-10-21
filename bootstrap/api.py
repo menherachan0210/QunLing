@@ -14,6 +14,12 @@ class SetupError(RuntimeError):
     pass
 
 
+class ProactiveAPIError(SetupError):
+    def __init__(self, message, status):
+        self.status = status
+        super().__init__(message)
+
+
 class LangBotAPI:
     def __init__(self, url, state):
         self.url = url.rstrip("/")
@@ -29,6 +35,21 @@ class LangBotAPI:
             if response.status_code == 401 and _refresh and "/user/" not in path:
                 self.login()
                 return self.call(method, path, data, _refresh=False)
+            if "/proactive" in path and not response.ok:
+                # Only fixed public errors cross this management boundary;
+                # never echo provider responses or private adapter details.
+                try:
+                    reason = response.json().get("error_code")
+                except (ValueError, AttributeError):
+                    reason = None
+                messages = {
+                    "revision_conflict": (409, "设置已在其他页面修改，请重新载入后再保存。"),
+                    "group_not_joined": (400, "只能为当前 QQ 已加入的群开启自由对话。"),
+                    "groups_unavailable": (503, "群列表暂不可用，请确认 QQ 已连接后重试。"),
+                    "invalid_config": (400, "自由对话配置无效，请检查群模式、人设和安静时段。"),
+                }
+                status, message = messages.get(reason, (503, "自由对话管理暂不可用，请稍后重试。"))
+                raise ProactiveAPIError(message, status)
             response.raise_for_status()
             body = response.json()
             if body.get("code") != 0:

@@ -15,7 +15,7 @@
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; scroll-padding-top: 28px; }
 body { margin: 0; font-size: 14px; line-height: 1.6; }
-button, input { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button, a, input, summary { -webkit-tap-highlight-color: transparent; }
 button, a, summary { touch-action: manipulation; }
 button { cursor: pointer; }
@@ -175,6 +175,61 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; fo
 #ready code { background: #e1efe7; color: #608f75; }
 
 /* Advanced controls */
+.proactive-card { grid-column: 1 / -1; }
+.proactive-master { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 20px; background: #f7f6ff; border: 1px solid #e9e6fb; border-radius: 9px; }
+.proactive-master label { font-weight: 600; color: #505675; }
+.proactive-master p { margin: 5px 0 0; color: #727b94; font-size: 12px; }
+.toggle-control { display: inline-flex; position: relative; flex-shrink: 0; cursor: pointer; }
+.toggle-control input { appearance: none; margin: 0; width: 42px; height: 24px; padding: 0; border: 1px solid #c4cada; border-radius: 14px; background: #cbd1de; cursor: pointer; }
+.toggle-control input:checked { border-color: var(--accent); background: var(--accent); }
+.toggle-control input:disabled { opacity: .5; cursor: not-allowed; }
+.toggle-control input + span { position: absolute; pointer-events: none; width: 18px; height: 18px; top: 3px; left: 3px; background: #fff; border-radius: 50%; box-shadow: 0 1px 3px #39436426; transition: transform .15s; }
+.toggle-control input:checked + span { transform: translateX(18px); }
+.proactive-workspace { display: grid; grid-template-columns: minmax(225px, .85fr) minmax(0, 1.6fr); margin: 18px 0 23px; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+.proactive-groups { padding: 17px; background: #fafbfe; border-right: 1px solid var(--border); min-width: 0; }
+.proactive-group-toolbar { display: flex; align-items: center; gap: 8px; }
+.proactive-group-toolbar > input { flex: 1; min-width: 0; height: 38px; font-size: 12px; background: #fff; }
+.proactive-group-toolbar > button { flex-shrink: 0; width: 36px; height: 36px; }
+#proactive-groups-message { margin: 10px 1px; font-size: 12px; }
+.proactive-group-list { display: flex; flex-direction: column; gap: 6px; max-height: 460px; overflow-y: auto; }
+button.proactive-group:not(.icon-button, .input-action) { width: 100%; display: flex; justify-content: space-between; text-align: left; gap: 8px; padding: 11px 12px; min-height: 60px; color: #657189; background: transparent; border: 1px solid transparent; font-weight: 400; }
+button.proactive-group:not(.icon-button, .input-action):hover:enabled { background: #f0f0fb; box-shadow: none; }
+button.proactive-group.is-selected:not(.icon-button, .input-action) { border-color: #dcd8f8; background: #f0edfc; color: #6860bc; }
+.proactive-group-title { min-width: 0; }
+.proactive-group-title strong { display: block; color: inherit; font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proactive-group-title small { display: block; color: #8590a4; font-size: 12px; margin-top: 2px; }
+.proactive-group-mode { white-space: nowrap; font-size: 11px; color: #748197; flex-shrink: 0; }
+.proactive-group-mode[data-enabled=true] { color: #6860bc; }
+.proactive-editor { padding: 22px; min-width: 0; }
+.proactive-empty { display: flex; align-items: center; justify-content: center; flex-direction: column; min-height: 280px; padding: 25px; text-align: center; }
+.proactive-empty > .icon { width: 30px; height: 30px; color: #a69dd5; margin-bottom: 16px; }
+.proactive-empty strong { color: #738099; font-size: 14px; font-weight: 500; }
+.proactive-empty p { max-width: 300px; color: #8490a4; font-size: 12px; line-height: 1.9; }
+.proactive-editor fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.proactive-editor legend { padding: 0; font-size: 16px; font-weight: 600; color: #4b5772; overflow-wrap: anywhere; }
+#proactive-group-id { margin: 3px 0 18px; }
+.proactive-editor select, .proactive-editor textarea { display: block; width: 100%; padding: 10px 12px; color: #37415a; border: 1px solid #e2e6ef; border-radius: 7px; background: #fcfdff; }
+.proactive-editor textarea { resize: vertical; min-height: 96px; line-height: 1.7; }
+.proactive-editor select:focus, .proactive-editor textarea:focus { outline: 2px solid #b5adf0; outline-offset: 2px; }
+.proactive-editor input:disabled, .proactive-editor textarea:disabled, .proactive-editor select:disabled { opacity: .55; cursor: not-allowed; }
+.proactive-editor .field > .note { margin: 7px 0 0; }
+.proactive-quiet-heading { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 12px; }
+.proactive-quiet-heading label { color: #566178; font-size: 14px; font-weight: 550; }
+.proactive-quiet-heading label span { margin-left: 10px; font-weight: 400; color: #758197; font-size: 12px; }
+.proactive-quiet-heading input { width: 17px; height: 17px; accent-color: var(--accent); }
+.proactive-editor-note { padding-top: 12px; margin: 7px 0 0; border-top: 1px solid #edf0f5; }
+#proactive-reset-group { margin-top: 13px; }
+.proactive-editor .form-row .field { margin-bottom: 8px; }
+@media (max-width: 940px) { .proactive-workspace { grid-template-columns: minmax(190px, .9fr) minmax(0, 1.4fr); } }
+@media (max-width: 700px) {
+  .proactive-master { padding: 15px; }
+  .proactive-workspace { grid-template-columns: 1fr; }
+  .proactive-groups { border-right: 0; border-bottom: 1px solid var(--border); padding: 14px; }
+  .proactive-group-list { max-height: 210px; }
+  .proactive-editor { padding: 17px; }
+  .proactive-empty { min-height: 170px; padding: 18px; }
+  .proactive-editor select, .proactive-editor textarea { font-size: 16px; }
+}
 .advanced-card .card-heading { margin-bottom: 18px; }
 .management-link { display: flex; align-items: center; justify-content: space-between; gap: 13px; padding: 13px 14px; background: #f8f9fc; border: 1px solid #edf0f6; border-radius: 8px; transition: background .15s, border-color .15s; }
 .management-link:hover { background: #f4f3fd; border-color: #dfdcf5; }

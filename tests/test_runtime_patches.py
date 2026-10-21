@@ -132,7 +132,8 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("file-outbox-host.patch", "host", False) in patcher.PATCHES
     assert ("sdk-qunling-worker-storage.patch", "sdk", False) in patcher.PATCHES
     assert ("host-tool-password-redaction.patch", "host", False) in patcher.PATCHES
-    assert len(names) == 18
+    assert ("host-proactive-chat.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 19
 
 
 def test_all_bundled_patches_have_supported_runtime_blocks():

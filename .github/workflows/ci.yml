@@ -27,14 +27,20 @@ jobs:
           python-version: "3.12"
       - name: Install public test and document parser dependencies
         run: python -m pip install pytest pytest-asyncio PyYAML requests qrcode Pillow aiohttp -r qunling/requirements.txt
+      - name: Require JavaScript runtime for console interaction tests
+        # ubuntu-24.04 provides Node; fail visibly instead of silently skipping
+        # the actual console script's authorization and conflict regressions.
+        run: node --version
       - name: Check publishable files for private runtime state and credentials
         run: python scripts/Check-Release.py
       - name: Test public setup, files, tasks and fixed-source patches without the SDK
-        # These two suites exercise actual SDK message delivery in linux-compose.
+        # SDK message delivery and the proactive Host bridge run in linux-compose.
         run: >-
           python -m pytest tests/test_public*.py tests/test_runtime_patches.py
           tests/test_release_check.py tests/test_script_paths.py
           tests/test_update_retention.py
+          tests/test_proactive_config.py tests/test_proactive_engine.py
+          tests/test_proactive_setup.py tests/test_proactive_frontend.py
           tests/test_task*.py tests/test_file*.py
           --ignore=tests/test_file_pipeline.py
           --ignore=tests/test_file_tool_integration.py -q
@@ -71,7 +77,7 @@ jobs:
         run: >-
           python -m pip download --only-binary=:all:
           --dest "$RUNNER_TEMP/qunling-test-wheels" pytest pytest-asyncio
-      - name: Test actual SDK, file worker and each plugin without network access
+      - name: Test actual SDK, proactive bridge, file worker and plugins without network access
         timeout-minutes: 15
         run: |
           docker run --rm --network none \
@@ -86,6 +92,7 @@ jobs:
               uv pip install --python "$VIRTUAL_ENV/bin/python" --no-index --find-links=/wheels pytest pytest-asyncio
               cd /workspace
               python -m pytest tests/test_task*.py tests/test_file*.py tests/test_attachment_transport_budget.py -q -p no:cacheprovider
+              python -m pytest tests/test_proactive_config.py tests/test_proactive_engine.py tests/test_proactive_setup.py tests/test_proactive_host.py -q -p no:cacheprovider
               python -m qunling.daemon --once
               for plugin in QQTextReader QQGroupContext QQWebSearch QQComicTranslator AIImagePlugin LongTermMemory; do
                 cd "/workspace/custom-plugins/$plugin"

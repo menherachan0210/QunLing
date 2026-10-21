@@ -1,0 +1,209 @@
+diff --git a/src/langbot/pkg/platform/botmgr.py b/src/langbot/pkg/platform/botmgr.py
+--- a/src/langbot/pkg/platform/botmgr.py
++++ b/src/langbot/pkg/platform/botmgr.py
+@@ -6,6 +6,7 @@
+ import functools
+ import hashlib
+ import json
++import os
+ import re
+ import time
+ import traceback
+@@ -917,6 +918,10 @@
+         from ..telemetry.execution import ingress
+ 
+         event.bot_uuid = self.bot_entity.uuid
++        if os.environ.get('QUNLING_DATA_DIR'):
++            from qunling.proactive.host import observe as observe_proactive
++
++            observe_proactive(self, event, adapter)
+         execution_id = self._platform_event_execution_id(event)
+         if getattr(event, 'adapter_name', None) == 'wecomcs-omni':
+             from ..agent.runner.event_log_store import EventLogStore
+@@ -938,7 +943,13 @@
+             # The inbound event is the root workflow step: everything recorded
+             # while handling it hangs under this node.
+             with trace_mod.stage_scope() as node:
+-                await self._handle_platform_event_body(event, adapter, execution_id, node)
++                try:
++                    await self._handle_platform_event_body(event, adapter, execution_id, node)
++                finally:
++                    if os.environ.get('QUNLING_DATA_DIR'):
++                        from qunling.proactive.host import ingress_done
++
++                        ingress_done(self, event)
+ 
+     @staticmethod
+     def _summarize_event_delivery(results: list[typing.Any]) -> tuple[str, str]:
+@@ -1474,19 +1485,30 @@
+             )
+             return
+ 
+-        await self.ap.msg_aggregator.add_message(
+-            bot_uuid=self.bot_entity.uuid,
+-            launcher_type=launcher_type,
+-            launcher_id=launcher_id,
+-            sender_id=sender_id,
+-            message_event=event,
+-            message_chain=event.message_chain,
+-            adapter=adapter,
+-            pipeline_uuid=pipeline_uuid,
+-            routed_by_rule=routed_by_rule,
+-            variables=variables,
+-            execution_context=self.execution_context,
+-        )
++        if os.environ.get('QUNLING_DATA_DIR'):
++            from qunling.proactive.host import queued as proactive_queued
++
++            proactive_queued(adapter, event)
++        try:
++            await self.ap.msg_aggregator.add_message(
++                bot_uuid=self.bot_entity.uuid,
++                launcher_type=launcher_type,
++                launcher_id=launcher_id,
++                sender_id=sender_id,
++                message_event=event,
++                message_chain=event.message_chain,
++                adapter=adapter,
++                pipeline_uuid=pipeline_uuid,
++                routed_by_rule=routed_by_rule,
++                variables=variables,
++                execution_context=self.execution_context,
++            )
++        except BaseException:
++            if os.environ.get('QUNLING_DATA_DIR'):
++                from qunling.proactive.host import completed as proactive_completed
++
++                proactive_completed(adapter, event)
++            raise
+ 
+     async def _handle_interaction_submission(
+         self,
+@@ -1867,6 +1889,10 @@
+             if self._shutdown_complete:
+                 return
+ 
++            if os.environ.get('QUNLING_DATA_DIR'):
++                from qunling.proactive.host import shutdown as shutdown_proactive
++
++                await shutdown_proactive(self)
+             wrapper = self.task_wrapper
+             self.task_wrapper = None
+             try:
+diff --git a/src/langbot/pkg/pipeline/pool.py b/src/langbot/pkg/pipeline/pool.py
+--- a/src/langbot/pkg/pipeline/pool.py
++++ b/src/langbot/pkg/pipeline/pool.py
+@@ -3,6 +3,7 @@
+ import asyncio
+ import dataclasses
+ import inspect
++import os
+ import typing
+ import uuid
+ 
+@@ -170,6 +171,10 @@
+                 self.active_query_count_by_workspace[query_workspace_uuid] = remaining
+             else:
+                 self.active_query_count_by_workspace.pop(query_workspace_uuid, None)
++            if os.environ.get('QUNLING_DATA_DIR'):
++                from qunling.proactive.host import completed as proactive_completed
++
++                proactive_completed(query.adapter, query.message_event)
+             plugin_diagnostics.discard_query_state(query)
+             completion = getattr(query, '_completion_event', None)
+             if completion is not None:
+@@ -425,6 +430,10 @@
+             if queued_query is query:
+                 self.queries.pop(index)
+                 break
++        if os.environ.get('QUNLING_DATA_DIR'):
++            from qunling.proactive.host import completed as proactive_completed
++
++            proactive_completed(query.adapter, query.message_event)
+         plugin_diagnostics.discard_query_state(query)
+         completion = getattr(query, '_completion_event', None)
+         if completion is not None:
+diff --git a/src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py b/src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import os
+ import typing
+ 
+ import aiocqhttp
+@@ -33,6 +34,10 @@
+             raw = await self.bot.send_private_msg(user_id=int(target_id), message=aiocq_msg)
+         else:
+             raise ValueError(f'Unsupported aiocqhttp target_type: {target_type}')
++        if target_type == 'group' and os.environ.get('QUNLING_DATA_DIR'):
++            from qunling.proactive.host import sent as proactive_sent
++
++            proactive_sent(self, target_id, message, raw)
+         return platform_events.MessageResult(message_id=(raw or {}).get('message_id'), raw=raw or {})
+ 
+     async def reply_message(
+@@ -47,6 +52,11 @@
+             source_id = getattr(message_source, 'message_id', None) or message_source.message_chain.message_id
+             aiocq_msg = aiocqhttp.MessageSegment.reply(source_id) + aiocq_msg
+         raw = await self.bot.send(message_source.source_platform_object, aiocq_msg)
++        native = message_source.source_platform_object
++        if getattr(native, 'message_type', None) == 'group' and os.environ.get('QUNLING_DATA_DIR'):
++            from qunling.proactive.host import sent as proactive_sent
++
++            proactive_sent(self, native.group_id, message, raw, str(native.user_id))
+         return platform_events.MessageResult(message_id=(raw or {}).get('message_id'), raw=raw or {})
+ 
+     async def delete_message(
+diff --git a/src/langbot/pkg/api/http/controller/groups/platform/bots.py b/src/langbot/pkg/api/http/controller/groups/platform/bots.py
+--- a/src/langbot/pkg/api/http/controller/groups/platform/bots.py
++++ b/src/langbot/pkg/api/http/controller/groups/platform/bots.py
+@@ -18,6 +18,47 @@
+         ), 400
+ 
+     async def initialize(self) -> None:
++        async def proactive_call(operation, request_context, bot_uuid, *args):
++            from qunling.proactive.config import ConfigError
++            from qunling.proactive.host import ProactiveUnavailable
++
++            try:
++                return self.success(data=await operation(self.ap, request_context, bot_uuid, *args))
++            except ConfigError as exc:
++                return quart.jsonify(code=exc.code, error_code=exc.code, msg=str(exc)), (409 if exc.code == 'revision_conflict' else 400)
++            except ProactiveUnavailable as exc:
++                return self.http_status(400, 'proactive_unavailable', str(exc))
++            except Exception:
++                return self.http_status(503, 'proactive_unavailable', '自由对话服务暂不可用，请确认 QQ 连接后重试。')
++
++        @self.route(
++            '/<bot_uuid>/proactive', methods=['GET'],
++            auth_type=group.AuthType.USER_TOKEN_OR_API_KEY, permission=Permission.RESOURCE_MANAGE,
++        )
++        async def proactive_get(bot_uuid: str, request_context: RequestContext):
++            from qunling.proactive.host import get_config
++
++            return await proactive_call(get_config, request_context, bot_uuid)
++
++        @self.route(
++            '/<bot_uuid>/proactive', methods=['POST'],
++            auth_type=group.AuthType.USER_TOKEN_OR_API_KEY, permission=Permission.RESOURCE_MANAGE,
++        )
++        async def proactive_save(bot_uuid: str, request_context: RequestContext):
++            from qunling.proactive.host import save_config
++
++            values = await quart.request.get_json(silent=True)
++            return await proactive_call(save_config, request_context, bot_uuid, values)
++
++        @self.route(
++            '/<bot_uuid>/proactive/groups', methods=['GET'],
++            auth_type=group.AuthType.USER_TOKEN_OR_API_KEY, permission=Permission.RESOURCE_MANAGE,
++        )
++        async def proactive_groups(bot_uuid: str, request_context: RequestContext):
++            from qunling.proactive.host import list_groups
++
++            return await proactive_call(list_groups, request_context, bot_uuid)
++
+         @self.route(
+             '',
+             methods=['GET'],

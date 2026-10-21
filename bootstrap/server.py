@@ -15,6 +15,7 @@ import time
 from urllib.parse import urlsplit
 
 from bootstrap.api import LangBotAPI, NapCatAPI, SetupError
+from bootstrap import proactive
 from bootstrap.configure import (
     configure,
     ensure_plugins,
@@ -79,6 +80,15 @@ class SetupManager:
             self.status.update(
                 stage="configuring", message="正在统一配置模型、工具和记忆。"
             )
+
+    def proactive_settings(self):
+        return proactive.settings(self)
+
+    def proactive_groups(self):
+        return proactive.groups(self)
+
+    def save_proactive(self, values):
+        return proactive.save(self, values)
 
     def update_status(self):
         with self.lock:
@@ -388,6 +398,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.manager.snapshot())
         if path == "/api/update":
             return self._send(200, self.server.manager.update_status())
+        if path in {"/api/proactive", "/api/proactive/groups"}:
+            try:
+                method = (self.server.manager.proactive_settings if path == "/api/proactive"
+                          else self.server.manager.proactive_groups)
+                return self._send(200, method())
+            except SetupError as exc:
+                return self._send(getattr(exc, "status", 503), {"error": str(exc)})
+            except Exception:
+                return self._send(503, {"error": "自由对话设置暂不可用，请稍后重试。"})
         if path == "/api/admin":
             return self._send(
                 200, self.server.manager.state.read("langbot-admin.json", {})
@@ -406,12 +425,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._reject_post(415, {"error": "需要 JSON 请求。"})
         try:
             size = int(self.headers.get("Content-Length", ""))
-            if not 0 < size <= 16 * 1024:
+            maximum = 256 * 1024 if self.path == "/api/proactive" else 16 * 1024
+            if not 0 < size <= maximum:
                 return self._reject_post(413, {"error": "请求过大。"})
             self.connection.settimeout(10)
             body = json.loads(self.rfile.read(size))
             if self.path == "/api/configure":
                 self.server.manager.submit(body)
+            elif self.path == "/api/proactive":
+                return self._send(200, self.server.manager.save_proactive(body))
             elif self.path == "/api/qr/refresh":
                 self.server.manager.refresh_qr()
             elif self.path == "/api/update/check":
@@ -426,7 +448,7 @@ class Handler(BaseHTTPRequestHandler):
         except UpdateError as exc:
             return self._send(503 if exc.uncertain else 409, {"error": str(exc)})
         except SetupError as exc:
-            return self._send(400, {"error": str(exc)})
+            return self._send(getattr(exc, "status", 400), {"error": str(exc)})
         except Exception:
             return self._send(500, {"error": "设置暂未完成，请稍后再试。"})
 

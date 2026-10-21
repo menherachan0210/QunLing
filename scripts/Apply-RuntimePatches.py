@@ -26,6 +26,7 @@ PATCHES = (
     ("host-managed-runtime-transport.patch", "host", False),
     ("host-persisted-plugin-installations.patch", "host", False),
     ("host-tool-password-redaction.patch", "host", False),
+    ("host-proactive-chat.patch", "host", False),
     ("onebot-group-trigger.patch", "host", False),
     ("chroma-delete-count.patch", "host", False),
     ("onebot-image-vision.patch", "host", False),

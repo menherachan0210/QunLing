@@ -36,6 +36,7 @@
     <a class="nav-link is-active" href="#overview"><svg class="icon"><use href="#i-grid"/></svg><span>工作台</span></a>
     <a class="nav-link" href="#models"><svg class="icon"><use href="#i-spark"/></svg><span>AI 服务</span></a>
     <a class="nav-link" href="#connection"><svg class="icon"><use href="#i-chat"/></svg><span>QQ 连接</span></a>
+    <a class="nav-link" href="#proactive"><svg class="icon"><use href="#i-spark"/></svg><span>自由对话</span></a>
     <a class="nav-link" href="#maintenance"><svg class="icon"><use href="#i-refresh"/></svg><span>版本维护</span></a>
     <a class="nav-link" href="#advanced"><svg class="icon"><use href="#i-sliders"/></svg><span>高级管理</span></a>
   </nav>
@@ -94,6 +95,31 @@
         </section>
         <section class="card advanced-card" id="advanced" aria-labelledby="advanced-heading"><div class="card-heading"><div class="heading-icon muted"><svg class="icon"><use href="#i-sliders"/></svg></div><div><h2 id="advanced-heading">高级管理</h2><p>更细致地调整你的机器人。</p></div></div><a class="management-link" href="http://127.0.0.1:5300/" target="_blank" rel="noreferrer"><div><strong>LangBot 管理页</strong><span>插件、流水线与更多配置</span></div><svg class="icon"><use href="#i-external"/></svg></a><details class="admin-details" id="admin-open"><summary>本地管理账号<svg class="chevron icon"><use href="#i-chevron"/></svg></summary><p class="note">仅在需要登录 LangBot 管理页时查看。</p><button id="admin" type="button" class="secondary small">查看管理账号</button><pre id="admin-info" aria-live="polite" hidden></pre></details></section>
       </div>
+      <section class="card proactive-card" id="proactive" aria-labelledby="proactive-heading">
+        <div class="update-heading"><div class="card-heading"><div class="heading-icon"><svg class="icon"><use href="#i-chat"/></svg></div><div><h2 id="proactive-heading">自由对话</h2><p>让它适时加入讨论，也懂得保持安静。</p></div></div><span id="proactive-state" class="phase" data-tone="neutral">正在读取</span></div>
+        <form id="proactive-form" autocomplete="off">
+          <div class="proactive-master"><div><label for="proactive-enabled">允许在指定群主动参与</label><p>默认所有群关闭。总开关只影响你已选择的群，新加入的群始终仅响应 @ 和 /ai。</p></div><label class="toggle-control"><input id="proactive-enabled" type="checkbox" role="switch" data-proactive-edit disabled><span aria-hidden="true"></span><span class="visually-hidden">自由对话总开关</span></label></div>
+          <p id="proactive-summary" class="note">正在读取已保存的群设置…</p>
+          <div class="proactive-workspace">
+            <div class="proactive-groups"><div class="proactive-group-toolbar"><label for="proactive-search" class="visually-hidden">搜索群名或群号</label><input id="proactive-search" type="search" placeholder="搜索群名或群号" disabled><button id="proactive-refresh" type="button" class="icon-button" title="刷新群列表" aria-label="刷新群列表" disabled><svg class="icon"><use href="#i-refresh"/></svg></button></div><p id="proactive-groups-message" class="note" role="status" aria-live="polite">QQ 登录后可选择开放的群。</p><div id="proactive-group-list" class="proactive-group-list" aria-label="选择要设置的群"></div></div>
+            <div class="proactive-editor">
+              <div id="proactive-empty" class="proactive-empty"><svg class="icon"><use href="#i-chat"/></svg><strong>先选一个群，从少量参与开始</strong><p>选择群后调整参与程度和性格。未开启的群不会调用模型判断是否插话。</p></div>
+              <fieldset id="proactive-group-settings" hidden disabled>
+                <legend id="proactive-group-name">群设置</legend><p id="proactive-group-id" class="note"></p>
+                <div class="field"><label for="proactive-mode">参与方式</label><select id="proactive-mode" data-proactive-edit><option value="off">仅 @ 回复</option><option value="quiet">安静参与</option><option value="natural">自然参与</option><option value="active">活跃参与</option></select><p id="proactive-mode-note" class="note">保留原来的 @ 和 /ai 回复方式。</p></div>
+                <div class="field"><label for="proactive-display-name">机器人称呼<span>只用于这个群</span></label><input id="proactive-display-name" maxlength="40" placeholder="群灵" data-proactive-edit></div>
+                <div class="field"><label for="proactive-persona">性格与交流习惯<span>选填</span></label><textarea id="proactive-persona" rows="3" maxlength="1000" placeholder="例如：说话简短，有自己的看法，熟悉的话题偶尔接一句；不强行接梗。" data-proactive-edit></textarea></div>
+                <div class="proactive-quiet-heading"><label for="proactive-quiet-enabled">安静时段<span>北京时间</span></label><input id="proactive-quiet-enabled" type="checkbox" data-proactive-edit></div>
+                <div id="proactive-quiet-fields" class="form-row" hidden><div class="field"><label for="proactive-quiet-start">开始</label><input id="proactive-quiet-start" type="time" value="23:00" data-proactive-edit></div><div class="field"><label for="proactive-quiet-end">结束</label><input id="proactive-quiet-end" type="time" value="08:00" data-proactive-edit></div></div>
+                <p class="note proactive-editor-note">只控制主动发言，@ 请求仍可正常回复。各参与方式均有限频和每日预算，没人接话时会停下来。</p>
+                <button id="proactive-reset-group" type="button" class="secondary small" disabled>恢复此群默认设置</button>
+              </fieldset>
+            </div>
+          </div>
+          <div class="form-actions"><button id="proactive-save" type="submit" disabled><svg class="icon"><use href="#i-check"/></svg><span id="proactive-save-label">保存自由对话设置</span></button><button id="proactive-reload" type="button" class="secondary" hidden disabled>重新载入已保存设置</button><span id="proactive-dirty" class="save-note">设置独立保存，不影响 AI 接口配置</span></div>
+          <p id="proactive-message" class="form-feedback" role="status" aria-live="polite"></p>
+        </form>
+      </section>
       <section class="card updates" id="maintenance" aria-labelledby="update-heading">
         <div class="update-heading"><div class="card-heading"><div class="heading-icon"><svg class="icon"><use href="#i-refresh"/></svg></div><div><h2 id="update-heading">版本维护</h2><p id="update-source">正在读取部署版本…</p></div></div><span id="update-phase" class="phase" data-tone="neutral">连接中</span></div>
         <div class="update-body"><dl class="versions"><div><dt>当前版本</dt><dd><code id="current-revision">—</code></dd></div><div class="version-divider" aria-hidden="true"><dt class="visually-hidden">更新至</dt><dd><svg class="icon"><use href="#i-arrow"/></svg></dd></div><div><dt>最新版本</dt><dd><code id="latest-revision">—</code></dd></div></dl><div class="update-actions"><button id="check-update" type="button" class="secondary" disabled><svg class="icon"><use href="#i-refresh"/></svg><span>检查更新</span></button><button id="apply-update" type="button" disabled><svg class="icon"><use href="#i-download"/></svg><span>更新到此版本</span></button></div></div>
