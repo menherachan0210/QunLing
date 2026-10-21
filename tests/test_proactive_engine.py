@@ -34,7 +34,7 @@ class Harness:
     async def judge(self, context):
         self.checked.append(context)
         return {"action": self.action, "target_message_id":
-                context.messages[-1].message_id if self.action in ("reply", "followup") else None}
+                context.reply_candidate_ids[-1] if self.action in ("reply", "followup") else None}
 
     async def generate(self, context, decision):
         self.generated.append((context, decision))
@@ -126,7 +126,7 @@ def test_text_window_is_bounded_and_old_text_expires():
     asyncio.run(scenario())
 
 
-def test_explicit_request_cancels_passive_and_remains_exclusive_until_done():
+def test_explicit_request_replaces_own_passive_and_resumes_new_followup_when_done():
     async def scenario():
         h = Harness()
         entered = asyncio.Event()
@@ -144,10 +144,12 @@ def test_explicit_request_cancels_passive_and_remains_exclusive_until_done():
         h.engine.explicit_done("100", "request")
         h.engine._judge = h.judge
         await h.engine.drain()
-        assert not h.checked  # Completion alone never resurrects old passive messages.
+        assert [context.reply_candidate_ids for context in h.checked] == [("while-busy",)]
+        assert [item[2] for item in h.sent] == ["while-busy"]
+        h.now += 100
         h.engine.on_message(h.message("after-done"))
         await h.engine.drain()
-        assert h.sent[0][2] == "after-done"
+        assert h.sent[-1][2] == "after-done"
     asyncio.run(scenario())
 
 
@@ -168,21 +170,23 @@ def test_turning_off_removes_text_and_invalidates_inflight_generation():
     asyncio.run(scenario())
 
 
-def test_new_topic_during_generation_cancels_outdated_answer():
+def test_new_topic_during_generation_does_not_cancel_current_answer():
     async def scenario():
         h = Harness()
-        entered = asyncio.Event()
+        entered, release = asyncio.Event(), asyncio.Event()
         async def slow_first(context, decision):
             if decision.target_message_id == "old":
                 entered.set()
-                await asyncio.Event().wait()
-            return "只回答新话题"
+                await release.wait()
+            return "完成已经开始的回答"
         h.engine._generate = slow_first
         h.engine.on_message(h.message("old"))
         await entered.wait()
         h.engine.on_message(h.message("new", text="换个话题"))
+        release.set()
         await h.engine.drain()
-        assert h.sent == [("100", "只回答新话题", "new")]
+        assert h.sent == [("100", "完成已经开始的回答", "old")]
+        assert not h.engine._pending
     asyncio.run(scenario())
 
 
@@ -274,11 +278,11 @@ def test_decision_schema_requires_known_action_and_grounded_target(value):
     assert validate_decision(value, context) is None
 
 
-def test_decision_cannot_reply_to_an_older_message_even_if_it_is_visible():
+def test_decision_cannot_reply_to_an_already_consumed_message_even_if_visible():
     context = ConversationContext("bot", "100", "natural", "", (
         Message("bot", "100", "old", "user", "旧话题", 1),
         Message("bot", "100", "new", "user", "新话题", 2),
-    ), ("old", "new"), "", None, None)
+    ), ("old", "new"), "", None, None, reply_candidate_ids=("new",))
     for action in ("reply", "followup"):
         assert validate_decision({"action": action, "target_message_id": "old"}, context) is None
         assert validate_decision({"action": action, "target_message_id": "new"}, context) is not None
@@ -331,12 +335,12 @@ def test_ignored_interjection_does_not_become_repeated_unsolicited_speech():
         h = Harness()
         h.engine.on_message(h.message())
         await h.engine.drain()
-        h.now += 121
-        h.engine.on_message(h.message("unrelated", sender_id="other", text="我们聊别的吧"))
+        h.now += 89
+        h.engine.on_message(h.message("unrelated", sender_id="user", text="我们聊别的吧"))
         await h.engine.drain()
-        assert len(h.checked) == 1 and len(h.sent) == 1
-        h.now += 480
-        h.engine.on_message(h.message("new-topic", sender_id="other"))
+        assert len(h.sent) == 1
+        h.now += 2
+        h.engine.on_message(h.message("new-topic", sender_id="user"))
         await h.engine.drain()
         assert len(h.sent) == 2
     asyncio.run(scenario())
@@ -385,7 +389,7 @@ def test_budget_survives_restart_without_persisting_chat_content(tmp_path):
 def test_all_groups_share_daily_budget_and_corrupt_state_is_not_overwritten(tmp_path):
     async def scenario():
         h = Harness(state_dir=tmp_path)
-        h.engine._global_judgments.extend([h.now] * 240)
+        h.engine._global_judgments.extend([h.now] * 4800)
         h.engine.on_message(h.message())
         await h.engine.drain()
         assert not h.checked
@@ -514,41 +518,41 @@ def test_long_generation_expires_even_when_no_new_event_arrives():
     asyncio.run(scenario())
 
 
-def test_natural_followups_stop_after_two_and_resume_only_after_explicit_exchange():
+def test_natural_followups_stop_after_six_and_resume_after_explicit_exchange():
     async def scenario():
         h = Harness()
         h.action = "followup"
         h.engine.on_bot_message("100", "开始的话题", message_id="explicit", recipient_id="user")
-        for index in range(3):
-            h.now += 31
+        for index in range(7):
+            h.now += 11
             h.engine.on_message(h.message(str(index), text="那这个呢？"))
             await h.engine.drain()
-        assert len(h.sent) == 2 and len(h.checked) == 2
+        assert len(h.sent) == 6 and len(h.checked) == 6
         h.engine.on_bot_message("100", "新的明确回答", message_id="explicit-2", recipient_id="user")
-        h.now += 31
+        h.now += 11
         h.engine.on_message(h.message("resumed"))
         await h.engine.drain()
-        assert len(h.sent) == 3
+        assert len(h.sent) == 7
     asyncio.run(scenario())
 
 
-def test_direct_quotes_can_continue_after_two_inferred_followups_within_budgets():
+def test_direct_quotes_can_continue_after_six_inferred_followups_within_budgets():
     async def scenario():
         h = Harness()
         h.action = "followup"
         h.engine.on_bot_message("100", "开始的话题", message_id="explicit", recipient_id="user")
-        for index in range(2):
-            h.now += 31
+        for index in range(6):
+            h.now += 11
             h.engine.on_message(h.message(str(index), text="那这个呢？"))
             await h.engine.drain()
-        assert len(h.sent) == 2
-        h.now += 31
-        h.engine.on_message(h.message("quoted", sender_id="other", reply_to="outbound-2"))
+        assert len(h.sent) == 6
+        h.now += 5
+        h.engine.on_message(h.message("quoted", sender_id="other", reply_to="outbound-6"))
         await h.engine.drain()
-        assert len(h.sent) == 3
-        h.engine.on_message(h.message("too-fast", reply_to="outbound-3"))
+        assert len(h.sent) == 7
+        h.engine.on_message(h.message("too-fast", reply_to="outbound-7"))
         await h.engine.drain()
-        assert len(h.sent) == 3  # Quoting does not bypass the 30-second cooldown.
+        assert len(h.sent) == 7  # Direct quotes retain the five-second send spacing.
     asyncio.run(scenario())
 
 
@@ -590,20 +594,24 @@ def test_unwritable_budget_storage_fails_closed(tmp_path):
     asyncio.run(scenario())
 
 
-def test_image_only_event_cancels_old_text_reply_without_invoking_vision():
+def test_image_only_event_preserves_current_text_reply_without_invoking_vision():
     async def scenario():
         h = Harness()
-        entered = asyncio.Event()
+        entered, release = asyncio.Event(), asyncio.Event()
         async def waiting(context, decision):
             entered.set()
-            await asyncio.Event().wait()
+            await release.wait()
+            return "继续回答原先的问题"
         h.engine._generate = waiting
         h.engine.on_message(h.message())
         await entered.wait()
         assert h.engine.on_message(h.message("picture", text=""))
+        release.set()
         await h.engine.drain()
-        assert len(h.checked) == 1 and not h.sent
-        assert all(item.message_id != "picture" for item in h.engine._groups["100"].messages)
+        assert len(h.checked) == len(h.sent) == 1
+        assert h.sent[0][2] == "m1"
+        assert any(item.message_id == "picture" and item.has_media
+                   for item in h.engine._groups["100"].messages)
         assert h.engine.on_message(h.message("image-request", text="", explicit_request=True))
         assert h.engine.status()["groups"]["100"]["explicit_busy"] is True
     asyncio.run(scenario())
@@ -615,18 +623,19 @@ def test_bot_reply_expires_with_short_context_without_resetting_budgets():
         h.engine.on_message(h.message("original"))
         await h.engine.drain()
         state = h.engine._groups["100"]
+        lane = state.lanes["user"]
         sent_at = h.now
-        state.after_bot_ids.add("original")
-        state.followup_streak = 2
+        lane.after_bot_ids.add("original")
+        lane.followup_streak = 2
         h.now += 240
         h.engine.status()
-        assert state.last_bot_text == h.text
+        assert lane.last_bot_text == h.text
         h.now += 1
         h.engine.status()
-        assert state.last_bot_text == ""
-        assert state.last_bot_id is None and state.last_bot_at is None
-        assert state.last_recipient is None
-        assert not state.after_bot_ids and state.followup_streak == 0
+        assert lane.last_bot_text == ""
+        assert lane.last_bot_id is None and lane.last_bot_at is None
+        assert lane.last_recipient is None
+        assert not lane.after_bot_ids and lane.followup_streak == 0
         assert state.last_proactive_at == sent_at
         assert list(state.sends) == [sent_at]
         assert list(state.judgments) == [sent_at]
@@ -723,7 +732,7 @@ def test_followup_clears_ignored_backoff_only_after_judge_accepts_engagement():
     asyncio.run(scenario())
 
 
-def test_old_followup_candidate_does_not_override_latest_unrelated_message_gate():
+def test_followup_in_batch_does_not_let_unrelated_selected_target_bypass_cooldown():
     async def scenario():
         h = Harness()
         h.engine.on_message(h.message())
@@ -732,7 +741,9 @@ def test_old_followup_candidate_does_not_override_latest_unrelated_message_gate(
         h.engine.on_message(h.message("potential-followup", text="你刚才这个意思？"))
         h.engine.on_message(h.message("unrelated", sender_id="other", text="我们继续自己的话题"))
         await h.engine.drain()
-        assert len(h.checked) == len(h.sent) == 1
+        assert len(h.checked) == 2 and len(h.sent) == 1
+        assert h.checked[-1].reply_candidate_ids == ("potential-followup",)
+        assert "unrelated" not in h.checked[-1].followup_candidate_ids
     asyncio.run(scenario())
 
 
@@ -846,14 +857,14 @@ def test_diagnostics_include_idle_groups_and_surviving_budget_without_chat_text(
         h.engine.on_message(h.message(text="绝不出现在诊断中的内容"))
         await h.engine.drain()
         row = h.engine.status()["groups"]["100"]
-        assert row["status_code"] == "cooldown" and row["cooldown_until"] == h.now + 600
+        assert row["status_code"] == "cooldown" and row["cooldown_until"] == h.now + 45
         assert row["last_event"] == {"code": "sent", "at": h.now}
-        assert row["replies_hour_limit"] == 6 and row["judgments_day_limit"] == 160
+        assert row["replies_hour_limit"] == 30 and row["judgments_day_limit"] == 1200
         assert "诊断中的内容" not in json.dumps(h.engine.status(), ensure_ascii=False)
         await h.engine.close()
         restored = Harness(state_dir=tmp_path)
         row = restored.engine.status()["groups"]["100"]
         assert row["replies_day"] == 1 and row["judgments_day"] == 1
-        assert row["cooldown_until"] == restored.now + 600
+        assert row["cooldown_until"] == restored.now + 45
         assert not restored.engine._groups
     asyncio.run(scenario())

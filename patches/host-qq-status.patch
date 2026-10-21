@@ -1,0 +1,15 @@
+diff --git a/src/langbot/pkg/api/http/service/bot.py b/src/langbot/pkg/api/http/service/bot.py
+--- a/src/langbot/pkg/api/http/service/bot.py
++++ b/src/langbot/pkg/api/http/service/bot.py
+@@ -660,6 +660,11 @@
+         if runtime_bot is not None:
+             adapter_runtime_values['bot_account_id'] = runtime_bot.adapter.bot_account_id
+ 
++        if persistence_bot['adapter'] == 'onebot-v11':
++            from qunling.qq_status import probe as probe_qq_status
++
++            adapter_runtime_values['qq_status'] = await probe_qq_status(runtime_bot)
++
+         # Webhook URL for adapters that declare a generated webhook config item.
+         # This is manifest-driven so EBA adapters do not need to be mirrored in a
+         # second hard-coded list.

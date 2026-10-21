@@ -7,6 +7,7 @@ let loaded = false;
 let authenticated = false;
 let authEpoch = 0;
 let setupState = null;
+let qqStatusReceivedAt = 0;
 let updateState = null;
 let updateAction = false;
 let configAction = false;
@@ -28,17 +29,17 @@ const proactiveModes = {off: "仅 @ 回复", quiet: "安静参与", natural: "�
 const proactiveModeNotes = {
   off: "保留原来的 @ 和 /ai 回复方式，不判断是否主动插话。",
   quiet: "回应直接称呼、引用或对自己的追问，不主动加入其他人的话题。",
-  natural: "结合讨论和上下文选择参与时机，适合先在少量群中尝试。",
-  active: "更愿意参与相关讨论，仍会控制频率，避免连续插话。"
+  natural: "自然接续对话，也会选择性加入讨论；普通消息和表情不会打断已开始的回复。",
+  active: "更积极地接话和参与讨论，发言间隔更短、额度更高；仍会合并消息，避免逐条刷屏。"
 };
 const proactiveRuntimeStates = {
   off: ["未开启", "neutral", "此群当前不参与自由对话，@ 和 /ai 仍可正常使用。"],
   quiet_hours: ["安静时段", "neutral", "正在执行已保存的安静时段，暂不主动发言。"],
-  explicit_busy: ["优先处理提问", "neutral", "正在处理明确提问，自由对话暂时让路。"],
-  pending: ["正在处理", "neutral", "正在等待消息合并或判断是否接话。新消息到来时可能重新判断。"],
-  cooldown: ["控制发言频率", "neutral", "普通主动插话正在冷却；点名或引用等接话可能采用更短的间隔。"],
+  explicit_busy: ["有明确任务进行中", "neutral", "正在处理明确提问；同一个人的后续消息按顺序等待，其他人的对话可以继续。"],
+  pending: ["正在接话", "neutral", "按说话人分别处理对话，同一个人的连续消息会合并等待，不打断当前回复；不同人的提问和闲聊可以并行推进。发言仍按群控制间隔。"],
+  cooldown: ["控制发言频率", "neutral", "正在等待发言间隔，待处理消息会合并排队；点名或引用等接话可能采用更短的间隔。"],
   budget_exhausted: ["已达参与限额", "warning", "本群或机器人的自由对话限额已用完，额度随时间恢复。@ 提问不受此预算影响。"],
-  ready: ["已就绪", "success", "正在接收本群新消息，并按上下文选择是否接话；开启不代表每条都会回复。"],
+  ready: ["已就绪", "success", "正在接收本群新消息，合并后按上下文选择是否接话；并非每条消息都调用模型，也不保证每条都会回复。"],
   storage_error: ["已暂停", "error", "运行状态存储异常，已暂停自由对话。请检查服务日志。"],
   unavailable: ["等待服务", "warning", "暂时无法读取自由对话状态，请刷新重试。"],
   disconnected: ["QQ 未连接", "warning", "QQ 尚未连接，登录并恢复连接后才能接收群消息。"],
@@ -46,10 +47,12 @@ const proactiveRuntimeStates = {
 };
 const proactiveEventNames = {
   initial: "等待新消息", observed: "已接收新消息", explicit_started: "开始处理明确提问",
+  queued: "后续消息已合并等待", media_observed: "已收到非文字消息，不打断当前回复",
   explicit_finished: "明确提问处理结束", quiet_hours: "安静时段，保持安静",
-  wait: "判断暂缓接话", silence: "判断无需接话", cooldown: "发言间隔未到，保持安静",
+  wait: "判断暂缓接话", silence: "判断无需接话", cooldown: "等待发言间隔，待处理消息已排队",
   budget_exhausted: "达到调用限额", judging: "正在判断是否接话", generating: "正在组织回复",
-  sent: "回复已发送", stale: "上下文变化，已取消过期回复", invalid_decision: "判断结果无效，未发言",
+  sent: "回复已发送", stale: "本次回复已过期，未发送", cancelled: "任务已取消",
+  batch_expired: "本批次已过期，未继续回复", invalid_decision: "判断结果无效，未发言",
   invalid_generation: "回复内容未通过格式检查，未发言",
   model_error: "模型调用失败，未发言", delivery_failed: "发送未确认，未自动重发",
   config_changed: "设置已变化，旧任务已取消"
@@ -72,6 +75,32 @@ function connectionTone(value) {
   }
 }
 function text(id, value) { $(id).textContent = value; }
+function qqHealth(state) {
+  const checkedAt = state?.qq_checked_at;
+  const validTime = typeof checkedAt === "number" && Number.isFinite(checkedAt) && checkedAt > 0 && checkedAt <= 253402300799;
+  const states = {
+    online: ["已连接", "QQ 在线，消息通道正常连接", "success"],
+    offline: ["QQ 已离线", "QQ 已离线，恢复登录后才能收发消息", "warning"],
+    disconnected: ["消息通道断开", "QQ 已登录，但机器人消息通道尚未连接", "warning"],
+    waiting_login: ["等待登录", "使用手机 QQ 扫码，并在手机上确认", "warning"],
+    connecting: ["连接中", "QQ 正在连接，等待完成在线状态检查", "warning"],
+    unknown: ["状态待确认", "暂时无法确认 QQ 是否在线，正在重新检查", "warning"]
+  };
+  const fresh = state?.qq_status_fresh === true && validTime;
+  let code = fresh && Object.hasOwn(states, state?.qq_state) ? state.qq_state : "unknown";
+  if (code === "online" && (state.qq_logged_in !== true || state.qq_connected !== true)) code = "unknown";
+  const loggedIn = fresh && state?.qq_logged_in === true && ["online", "connecting", "disconnected"].includes(code);
+  const [label, detail, stateTone] = states[code];
+  return {code, fresh, loggedIn, connected: code === "online", checkedAt: validTime ? checkedAt : null, label, detail, tone: stateTone};
+}
+function expireQQStatus(now = Date.now()) {
+  // Use elapsed browser time, not a comparison with the server's clock.
+  if (!authenticated || !setupState?.qq_status_fresh || now - qqStatusReceivedAt < 30000) return;
+  setupState = {...setupState, qq_state: "unknown", qq_status_fresh: false, qq_logged_in: false, qq_connected: false};
+  renderSetup(setupState);
+  renderProactiveRuntime();
+  controls();
+}
 function hideAdmin() {
   text("admin-info", "");
   $("admin-info").hidden = true;
@@ -128,7 +157,7 @@ function controls() {
   text("save-label", configAction || setupState?.stage === "configuring" ? "正在应用配置…" : "保存并启用");
   $("check-update").disabled = !authenticated || updating || !updateState?.available;
   $("apply-update").disabled = !authenticated || configAction || proactiveAction || updating || !updateState?.available || !updateState.update_available || !updateState.latest_revision || !setupState || ["starting", "configuring"].includes(setupState.stage);
-  $("refresh").disabled = !authenticated || qrAction || updating || !setupState || setupState.qq_logged_in;
+  $("refresh").disabled = !authenticated || qrAction || updating || !setupState || qqHealth(setupState).loggedIn;
   $("admin").disabled = !authenticated || adminAction;
   const proactiveBlocked = !authenticated || !setupState?.qq_logged_in || configAction || updating || proactiveAction || proactiveLoading || !proactiveConfigReady || !proactiveGroupsReady || proactiveConflict || proactiveStatus?.available === false;
   document.querySelectorAll("[data-proactive-edit], .proactive-group").forEach((element) => { element.disabled = proactiveBlocked; });
@@ -195,6 +224,11 @@ function renderProactiveRuntime() {
     const seconds = Math.ceil(group.cooldown_until - status.generated_at);
     if (seconds > 0 && seconds <= 86400) detail += ` 普通插话还需约 ${seconds < 60 ? `${seconds} 秒` : `${Math.ceil(seconds / 60)} 分钟`}。`;
   }
+  const conversations = [group?.active_conversations, group?.queued_conversations, group?.explicit_requests];
+  if (!["off", "unavailable", "disconnected", "storage_error", "unknown"].includes(code)
+      && conversations.every(value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 1000000)) {
+    detail += ` 当前 ${conversations[0]} 路接话处理中、${conversations[1]} 路等待、${conversations[2]} 个明确任务。`;
+  }
   text("proactive-runtime-detail", detail);
   for (const key of ["judgments_hour", "judgments_day", "replies_hour", "replies_day"]) {
     text(`proactive-${key.replaceAll("_", "-")}`, proactiveUsage(group?.[key], group?.[`${key}_limit`]));
@@ -203,7 +237,7 @@ function renderProactiveRuntime() {
   const eventName = event && Object.hasOwn(proactiveEventNames, event.code) ? proactiveEventNames[event.code] : "暂无可识别的处理记录";
   text("proactive-last-event", event ? `${eventName} · ${proactiveTime(event.at)}` : "暂无记录");
   text("proactive-last-sent", proactiveTime(group?.last_sent_at));
-  text("proactive-global-budget", `所有群共用的最近 24 小时判断额度：${proactiveUsage(status?.judgments_day, status?.judgments_day_limit)}。判断额度包含保持安静和调用失败的情况。`);
+  text("proactive-global-budget", `所有群共用的最近 24 小时判断额度：${proactiveUsage(status?.judgments_day, status?.judgments_day_limit)}。判断额度包含保持安静和调用失败的情况，不等于群消息数或回复数；达到上限后随时间恢复。`);
   text("proactive-runtime-updated", `状态采样：${proactiveTime(status?.generated_at)}${proactiveConfigReady ? "" : " · 本次读取失败，以上数据可能已过期"}`);
 }
 function renderProactiveEditor() {
@@ -346,27 +380,28 @@ function summary(name, label, detail, state = "neutral") {
   $("summary-" + name).closest(".summary-card").dataset.tone = state;
 }
 function renderSetup(state) {
-  const ready = state.stage === "ready" && state.configured && state.qq_connected;
+  const qq = qqHealth(state);
+  const ready = state.stage === "ready" && state.configured && qq.connected;
   const failed = state.stage === "error";
-  const label = failed ? "需要处理" : ready ? "运行就绪" : state.stage === "configuring" ? "配置中" : !state.plugins_ready ? "初始化中" : !state.configured ? "等待配置" : "等待 QQ 登录";
+  const label = failed ? "需要处理" : ready ? "运行就绪" : state.stage === "configuring" ? "配置中" : !state.plugins_ready ? "初始化中" : !state.configured ? "等待配置" : qq.label;
   text("global-state", label);
   text("sidebar-status", label);
-  text("status", state.message || "管理服务已连接。");
+  const checkingQQ = !failed && state.configured && state.plugins_ready && state.stage !== "configuring";
+  text("status", checkingQQ && !ready ? qq.detail : state.message || "管理服务已连接。");
   tone("status", failed ? "error" : ready ? "success" : "neutral");
   connectionTone(failed ? "error" : ready ? "success" : "warning");
-  text("last-sync", "同步于 " + new Date().toLocaleTimeString("zh-CN", {hour12: false}));
-  summary("qq", state.qq_connected ? "已连接" : state.qq_logged_in ? "连接中" : "等待登录",
-    state.qq_connected ? "消息通道正常连接" : state.qq_logged_in ? "QQ 已登录，等待机器人连接" : "使用手机 QQ 扫码登录", state.qq_connected ? "success" : "warning");
+  text("last-sync", qq.checkedAt ? "QQ 检查于 " + new Date(qq.checkedAt * 1000).toLocaleString("zh-CN", {timeZone: "Asia/Shanghai", hour12: false}) + (qq.fresh ? "" : " · 状态已过期") : "QQ 状态尚未确认");
+  summary("qq", qq.label, qq.detail, qq.tone);
   summary("ai", state.configured ? "已配置" : "待配置", state.settings?.chat_model || "填写接口地址与模型", state.configured ? "success" : "neutral");
   summary("plugins", state.plugins_ready ? "已就绪" : "初始化中", state.plugins_ready ? "功能组件已完成初始化" : "首次安装可能需要几分钟", state.plugins_ready ? "success" : "warning");
   $("ready").hidden = !ready;
-  const showQR = Boolean(state.qr_image) && !state.qq_logged_in;
+  const showQR = Boolean(state.qr_image) && qq.fresh && ["waiting_login", "offline"].includes(qq.code);
   $("qr").hidden = !showQR;
   $("connection-art").hidden = showQR;
-  $("connection-card").dataset.state = state.qq_connected ? "connected" : state.qq_logged_in ? "pending" : "waiting";
+  $("connection-card").dataset.state = qq.connected ? "connected" : qq.loggedIn ? "pending" : "waiting";
   if (showQR && $("qr").src !== state.qr_image) $("qr").src = state.qr_image;
   if (!showQR) $("qr").removeAttribute("src");
-  text("qq-status", state.qq_connected ? "QQ 已连接，随时可以开始聊" : state.qq_logged_in ? "QQ 已登录，正在等待机器人连接" : showQR ? "使用手机 QQ 扫码，并在手机上确认" : "正在等待登录二维码…");
+  text("qq-status", qq.connected ? "QQ 已连接，随时可以开始聊" : showQR ? qq.code === "offline" ? "QQ 已离线，请重新扫码并在手机上确认" : "使用手机 QQ 扫码，并在手机上确认" : qq.code === "waiting_login" ? "正在等待登录二维码…" : qq.detail);
   if (!loaded && state.settings?.base_url) {
     for (const [key, value] of Object.entries(state.settings)) {
       if (key !== "api_key" && $("settings").elements[key]) {
@@ -447,18 +482,22 @@ async function pollSetup(epoch = authEpoch) {
     const state = await api("/api/status");
     if (epoch !== authEpoch) return;
     setupState = state;
+    qqStatusReceivedAt = Date.now();
     authenticated = true;
     $("unlock").hidden = true;
     $("console-content").hidden = false;
     renderSetup(state);
   } catch (error) {
+    if (epoch !== authEpoch) return;
+    const checkedAt = qqHealth(setupState).checkedAt;
     setupState = null;
     text("status", updateExpected ? "正在等待更新后的管理服务恢复…" : error.message);
     tone("status", "warning");
     text("global-state", "连接中断");
     text("sidebar-status", "等待重连");
     connectionTone("warning");
-    summary("qq", "状态未知", "管理服务恢复后会自动同步", "warning");
+    summary("qq", "状态待确认", "管理服务恢复后会重新检查 QQ 在线状态", "warning");
+    text("last-sync", checkedAt ? "QQ 检查于 " + new Date(checkedAt * 1000).toLocaleString("zh-CN", {timeZone: "Asia/Shanghai", hour12: false}) + " · 本次读取失败" : "QQ 状态尚未确认");
     summary("ai", "等待同步", "正在重新连接管理服务");
     summary("plugins", "等待同步", "正在重新连接管理服务");
     $("ready").hidden = true;
@@ -666,3 +705,4 @@ if (typeof IntersectionObserver !== "undefined") {
 }
 poll();
 setInterval(poll, 4000);
+setInterval(expireQQStatus, 1000);

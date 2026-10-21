@@ -19,7 +19,7 @@ from qunling.proactive import host
 from qunling.proactive.config import ConfigStore, DEFAULT_GROUP, ConfigError
 from langbot.pkg.api.http.authz import PermissionDeniedError
 from langbot.pkg.api.http.context import ExecutionContext
-from langbot_plugin.api.entities.builtin.platform.message import At, Image, MessageChain, Plain
+from langbot_plugin.api.entities.builtin.platform.message import At, Image, MessageChain, Plain, Quote
 from langbot_plugin.api.entities.builtin.provider.message import Message as ModelMessage
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,15 +183,19 @@ async def test_unlisted_groups_and_self_messages_have_no_model_or_buffer(bridge)
 
 
 @pytest.mark.asyncio
-async def test_explicit_image_holds_until_query_removed(bridge):
+async def test_explicit_image_holds_its_participant_but_another_can_chat(bridge):
     request = event(text="", explicit=True)
     host.observe(bridge.bot, request, bridge.bot.adapter)
     host.queued(bridge.bot.adapter, request)
     host.ingress_done(bridge.bot, request)
-    host.observe(bridge.bot, event(message_id="other"), bridge.bot.adapter)
+    host.observe(bridge.bot, event(message_id="same-person"), bridge.bot.adapter)
+    host.observe(bridge.bot, event(message_id="other", sender="20001"), bridge.bot.adapter)
     await bridge.engine.drain()
     assert bridge.engine.status()["groups"]["30000"]["explicit_busy"]
-    bridge.engine._judge.assert_not_called()
+    bridge.engine._judge.assert_awaited_once()
+    context = bridge.engine._judge.await_args.args[0]
+    assert context.participant_id == "20001"
+    assert context.reply_candidate_ids == ("other",)
     host.completed(bridge.bot.adapter, request)
     assert not bridge.engine.status()["groups"]["30000"]["explicit_busy"]
 
@@ -336,7 +340,7 @@ async def test_send_uses_trusted_group_and_plain_component_without_observing_its
 @pytest.mark.asyncio
 async def test_successful_explicit_reply_is_available_for_natural_followup(bridge):
     host.sent(bridge.bot.adapter, "30000", MessageChain([Plain(text="我的观点")]), {"message_id": "real-reply"}, "20000")
-    state = bridge.engine._groups["30000"]
+    state = bridge.engine._groups["30000"].lanes["20000"]
     assert state.last_bot_text == "我的观点"
     assert state.last_bot_id == "real-reply" and state.last_recipient == "20000"
 
@@ -478,7 +482,7 @@ async def test_patched_onebot_send_and_reply_record_actual_success_only(bridge, 
     bridge.bot.adapter.bot.send_group_msg = AsyncMock(return_value={"message_id": 910})
     chain = MessageChain([At(target="20000"), Plain(text="我的具体观点")])
     result = await send(bridge.bot.adapter, "group", "30000", chain)
-    state = bridge.engine._groups["30000"]
+    state = bridge.engine._groups["30000"].lanes["20000"]
     assert result.message_id == 910 and state.last_bot_id == "910"
     assert state.last_recipient == "20000" and state.last_bot_text == "我的具体观点"
     bridge.bot.adapter.bot.send_group_msg.side_effect = RuntimeError("transport failed")
@@ -489,4 +493,93 @@ async def test_patched_onebot_send_and_reply_record_actual_success_only(bridge, 
                                          "user_id": 20001, "message_id": 123, "self_id": 10000})
     bridge.bot.adapter.bot.send = AsyncMock(return_value={"message_id": 911})
     result = await reply(bridge.bot.adapter, NS(source_platform_object=native), MessageChain([Plain(text="接另一个人的话")]))
-    assert result.message_id == 911 and state.last_bot_id == "911" and state.last_recipient == "20001"
+    other = bridge.engine._groups["30000"].lanes["20001"]
+    assert result.message_id == 911 and other.last_bot_id == "911" and other.last_recipient == "20001"
+    assert state.last_bot_id == "910" and state.last_recipient == "20000"
+
+
+@pytest.mark.asyncio
+async def test_directed_send_quotes_only_a_live_target_from_the_authorized_group(bridge):
+    incoming = event("小灵出来聊天", message_id="123")
+    host.observe(bridge.bot, incoming, bridge.bot.adapter)
+    await bridge.send("30000", "[CQ:at,qq=all] 只是普通文字", "123")
+    kind, group, chain = bridge.bot.adapter.send_message.await_args.args
+    assert (kind, group) == ("group", "30000")
+    assert len(chain) == 2 and isinstance(chain[0], Quote) and isinstance(chain[1], Plain)
+    assert str(chain[0].id) == "123" and str(chain[0].group_id) == "30000"
+    assert str(chain[0].sender_id) == "20000"
+    assert chain[1].text == "[CQ:at,qq=all] 只是普通文字"
+    for target in ("unknown", "foreign-target"):
+        with pytest.raises(host.ProactiveUnavailable, match="目标已失效"):
+            await bridge.send("30000", "不能接到错误消息", target)
+    explicit = event("完整工具请求", explicit=True, message_id="explicit")
+    host.observe(bridge.bot, explicit, bridge.bot.adapter)
+    with pytest.raises(host.ProactiveUnavailable, match="目标已失效"):
+        await bridge.send("30000", "不能重复代答工具任务", "explicit")
+    assert bridge.bot.adapter.send_message.await_count == 1
+    await bridge.engine.close()
+
+
+@pytest.mark.asyncio
+async def test_generate_preserves_focus_and_refuses_a_different_participants_target(bridge):
+    from qunling.proactive.engine import ConversationContext, Decision, Message
+
+    first = Message("bot", "30000", "translation", "20001", "翻译这页", time.time(), explicit_request=True, has_media=True)
+    second = Message("bot", "30000", "chat", "20002", "小灵，今天有什么开心事", time.time())
+    context = ConversationContext("bot", "30000", "active", "自然简短", (first, second), (), "", None, None,
+                                  conversation_id="30000:20002", participant_id="20002", focus_message_ids=("chat",),
+                                  reply_candidate_ids=("chat",))
+    bridge._complete = AsyncMock(return_value="说说你的吧")
+    assert await bridge.generate(context, Decision("reply", "chat")) == "说说你的吧"
+    prompt, value = bridge._complete.await_args.args
+    assert value["context"]["participant_id"] == "20002"
+    assert value["context"]["focus_message_ids"] == ("chat",)
+    assert value["target_author"]["sender_id"] == "20002"
+    assert "其他 messages 只作群聊背景" in prompt
+    assert "同一称呼和交流习惯" in prompt
+    with pytest.raises(host.ProactiveUnavailable, match="目标已失效"):
+        await bridge.generate(context, Decision("reply", "translation"))
+    bridge._complete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_explicit_prompt_marks_own_history_and_actual_quoted_evidence(bridge):
+    for incoming in (event("另一人的翻译任务", sender="20001", message_id="other-task"),
+                     event("我想讨论这一句", sender="20000", message_id="own-question")):
+        host.observe(bridge.bot, incoming, bridge.bot.adapter)
+    host.sent(bridge.bot.adapter, "30000", MessageChain([
+        Quote(id="own-question", origin=MessageChain([])), Plain(text="这句可以这样理解")
+    ]), {"message_id": "own-answer"}, "20000")
+    request = event("这句的主语是什么", explicit=True, message_id="followup")
+    request.message_chain.append(Quote(id="own-answer", origin=MessageChain([])))
+    host.observe(bridge.bot, request, bridge.bot.adapter)
+    query = query_for(bridge, request)
+    host.prepare_prompt(query)
+    status = json.loads(query.prompt.messages[1].content.rsplit("\n", 1)[-1])
+    assert status["participant_id"] == "20000"
+    assert set(status["focus_message_ids"]) == {"own-question", "own-answer"}
+    assert "另一人的翻译任务" in query.prompt.messages[2].content  # Background stays attributed, not silently reassigned.
+    assert "同一称呼和交流习惯" in query.prompt.messages[1].content
+    message = next(item for item in bridge.engine.snapshot("30000", before_message_id="followup") if item.message_id == "own-answer")
+    assert message.reply_to == "own-question"
+    await bridge.engine.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_prompt_freezes_known_recipient_answers_without_inventing_reply_targets(bridge):
+    host.sent(bridge.bot.adapter, "30000", MessageChain([Plain(text="给甲的译文")]),
+              {"message_id": "answer-a"}, "20000")
+    host.sent(bridge.bot.adapter, "30000", MessageChain([Plain(text="给乙的游戏建议")]),
+              {"message_id": "answer-b"}, "20001")
+    request = event("刚才那句为什么这样翻译", explicit=True, message_id="question-a")
+    host.observe(bridge.bot, request, bridge.bot.adapter)
+    host.sent(bridge.bot.adapter, "30000", MessageChain([Plain(text="提问之后才出现的答案")]),
+              {"message_id": "future-answer"}, "20000")
+    query = query_for(bridge, request)
+    host.prepare_prompt(query)
+    status = json.loads(query.prompt.messages[1].content.rsplit("\n", 1)[-1])
+    assert status["focus_message_ids"] == ["answer-a"]
+    history = json.loads(query.prompt.messages[2].content.rsplit("\n", 1)[-1])["messages"]
+    assert {item["message_id"] for item in history} == {"answer-a", "answer-b"}
+    assert all(item["reply_to"] is None for item in history)
+    await bridge.engine.close()

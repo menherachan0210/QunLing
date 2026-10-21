@@ -211,7 +211,10 @@ def manager(tmp_path, monkeypatch):
         State(tmp_path / "private"), "http://app:5300", "http://napcat:6099",
         tmp_path, "7zz",
     )
-    manager.update(stage="ready", plugins_ready=True)
+    manager.update(stage="ready", plugins_ready=True, configured=True)
+    # A ready fixture includes a completed, fresh QQ health sample. Historical
+    # connection flags alone must not bypass the production freshness check.
+    manager._record_qq("online", logged_in=True, connected=True)
     manager.updater = UpdateClient("http://updater:5320", "fixture")
     manager.updater.http = HTTP()
     return manager
@@ -306,7 +309,9 @@ def test_inflight_apply_rejects_configuration_without_holding_snapshot_lock(mana
     submitter.start()
     assert submit_done.wait(1), "Configuration should be rejected without waiting for the updater"
     assert errors and manager.pending is None
-    assert manager.snapshot()["stage"] == "ready"
+    snapshot = manager.snapshot()
+    assert snapshot["stage"] == "ready"
+    assert snapshot["qq_status_fresh"] is True and snapshot["qq_state"] == "online"
     release.set()
     updater.join(3)
     submitter.join(3)
@@ -330,7 +335,9 @@ def test_apply_allows_updater_http_callback_while_rejecting_configuration(manage
             callback.trust_env = False
             result = callback.get(url + "/api/status", headers=headers, timeout=2)
             assert result.status_code == 200
-            assert result.json()["stage"] == "ready"
+            snapshot = result.json()
+            assert snapshot["stage"] == "ready"
+            assert snapshot["qq_status_fresh"] is True and snapshot["qq_state"] == "online"
         callback_received.set()
         assert release.wait(3)
         return status(busy=True, phase="queued")
@@ -425,7 +432,8 @@ let remote = {
 let offline = false, disconnectAfterApply = false, unauthorized = false;
 let setup = {
   plugins_ready: true, stage:"ready", configured:true, qq_connected:true,
-  qq_logged_in:true, settings:{}, message:"已连接"
+  qq_logged_in:true, qq_state:"online", qq_status_fresh:true,
+  qq_checked_at:Math.floor(Date.now()/1000), settings:{}, message:"已连接"
 };
 let configureCount = 0, setupCount = 0, releaseConfigure = null;
 let holdConfigure = false, holdSetup = false, releaseSetup = null;
@@ -516,7 +524,7 @@ def test_browser_clears_sensitive_content_after_auth_failure_and_ignores_stale_s
   assert.equal(element("console-content").hidden, false);
   await element("admin").click();
   assert.match(element("admin-info").textContent, /fixture-private/);
-  setup = {...setup, qq_logged_in:false, qq_connected:false, qr_image:"data:image/png;base64,fixture"};
+  setup = {...setup, qq_state:"waiting_login", qq_logged_in:false, qq_connected:false, qr_image:"data:image/png;base64,fixture"};
   await vm.runInContext("poll()", context);
   assert.equal(element("qr").hidden, false);
   unauthorized = true;
@@ -610,7 +618,7 @@ def test_browser_disconnection_clears_stale_qr_and_ready_state():
   assert.equal(element("ready").hidden, true);
   assert.equal(element("save").disabled, true);
   offline = false;
-  setup = {...setup, qq_logged_in:false, qq_connected:false, qr_image:"data:image/png;base64,fixture"};
+  setup = {...setup, qq_state:"waiting_login", qq_logged_in:false, qq_connected:false, qr_image:"data:image/png;base64,fixture"};
   await vm.runInContext("poll()", context);
   assert.equal(element("qr").hidden, false);
   assert.match(element("qr").src, /^data:image/);
@@ -619,7 +627,8 @@ def test_browser_disconnection_clears_stale_qr_and_ready_state():
   assert.equal(element("qr").hidden, true);
   assert.equal(element("qr").src, "");
   assert.equal(element("refresh").disabled, true);
-  assert.equal(element("summary-qq").textContent, "状态未知");
+  assert.equal(element("summary-qq").textContent, "状态待确认");
+  assert.equal(element("summary-qq-card").dataset.tone, "warning");
 """)
 
 

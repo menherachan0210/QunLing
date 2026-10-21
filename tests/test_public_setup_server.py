@@ -3,6 +3,7 @@
 from copy import deepcopy
 import socket
 import threading
+import time
 from urllib.parse import urlsplit
 
 import pytest
@@ -261,7 +262,10 @@ def test_qq_heartbeat_cannot_hide_configuration_progress_or_error(
     manager.napcat = SimpleNamespace(call=lambda *_: {"isLogin": True})
     manager.api = SimpleNamespace(
         call=lambda *_: {
-            "bot": {"adapter_runtime_values": {"bot_account_id": "synthetic"}}
+            "bot": {"adapter_runtime_values": {"bot_account_id": "synthetic", "qq_status": {
+                "state": "online", "online": True, "transport_connected": True,
+                "checked_at": time.time(),
+            }}}
         }
     )
     monkeypatch.setattr(module, "link_napcat", lambda *_: False)

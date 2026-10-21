@@ -267,23 +267,40 @@ def test_runtime_uses_saved_authorization_and_never_presents_draft_as_active():
 def test_runtime_displays_budgets_and_cooldown_using_server_clock():
     run_browser(r"""
   select('123');change('proactive-enabled',true);change('proactive-mode','active');await save();
-  status={available:true,enabled:true,generated_at:1000,judgments_day:45,judgments_day_limit:240,groups:{'123':{
+  status={available:true,enabled:true,generated_at:1000,judgments_day:45,judgments_day_limit:4800,groups:{'123':{
     status_code:'cooldown',cooldown_until:1090,
-    judgments_hour:8,judgments_hour_limit:40,judgments_day:20,judgments_day_limit:240,
-    replies_hour:2,replies_hour_limit:12,replies_day:9,replies_day_limit:60,
+    judgments_hour:8,judgments_hour_limit:240,judgments_day:20,judgments_day_limit:2400,
+    replies_hour:2,replies_hour_limit:60,replies_day:9,replies_day_limit:600,
     last_event:{code:'stale',at:990},last_sent_at:980
   }}};
   await refresh();
   assert.equal(element('proactive-runtime-state').textContent,'控制发言频率');
   assert.match(element('proactive-runtime-detail').textContent,/普通插话还需约 2 分钟/);
   assert.match(element('proactive-runtime-detail').textContent,/点名或引用/);
-  assert.equal(element('proactive-judgments-hour').textContent,'8 / 40');
-  assert.equal(element('proactive-judgments-day').textContent,'20 / 240');
-  assert.equal(element('proactive-replies-hour').textContent,'2 / 12');
-  assert.equal(element('proactive-replies-day').textContent,'9 / 60');
-  assert.match(element('proactive-global-budget').textContent,/45 \/ 240/);
-  assert.match(element('proactive-last-event').textContent,/已取消过期回复/);
+  assert.equal(element('proactive-judgments-hour').textContent,'8 / 240');
+  assert.equal(element('proactive-judgments-day').textContent,'20 / 2400');
+  assert.equal(element('proactive-replies-hour').textContent,'2 / 60');
+  assert.equal(element('proactive-replies-day').textContent,'9 / 600');
+  assert.match(element('proactive-global-budget').textContent,/45 \/ 4800/);
+  assert.match(element('proactive-last-event').textContent,/本次回复已过期/);
   assert.match(element('proactive-last-sent').textContent,/1970/);
+""")
+
+
+def test_runtime_explains_queued_messages_and_non_interrupting_media_events():
+    run_browser(r"""
+  select('123');change('proactive-enabled',true);change('proactive-mode','active');await save();
+  for(const [code,label] of [
+    ['queued','后续消息已合并等待'],
+    ['media_observed','已收到非文字消息，不打断当前回复'],
+    ['cancelled','任务已取消'],
+    ['batch_expired','本批次已过期，未继续回复']
+  ]){
+    status={available:true,enabled:true,groups:{'123':{status_code:'pending',last_event:{code,at:1000}}}};
+    await refresh();
+    assert.ok(element('proactive-last-event').textContent.startsWith(label));
+    assert.match(element('proactive-runtime-detail').textContent,/不打断当前回复/);
+  }
 """)
 
 
@@ -291,7 +308,7 @@ def test_runtime_updates_during_edit_without_overwriting_persona():
     run_browser(r"""
   select('123');change('proactive-enabled',true);change('proactive-mode','natural');await save();
   input('proactive-persona','尚未保存的人设');
-  for(const [code,label] of [['ready','已就绪'],['explicit_busy','优先处理提问'],['quiet_hours','安静时段'],['budget_exhausted','已达参与限额'],['pending','正在处理']]){
+  for(const [code,label] of [['ready','已就绪'],['explicit_busy','有明确任务进行中'],['quiet_hours','安静时段'],['budget_exhausted','已达参与限额'],['pending','正在接话']]){
     status={available:true,enabled:true,groups:{'123':{status_code:code}}};
     await refresh();
     assert.equal(element('proactive-runtime-state').textContent,label);

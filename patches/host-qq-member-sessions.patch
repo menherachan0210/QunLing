@@ -1,0 +1,95 @@
+diff --git a/src/langbot/pkg/agent/runner/query_entry_adapter.py b/src/langbot/pkg/agent/runner/query_entry_adapter.py
+--- a/src/langbot/pkg/agent/runner/query_entry_adapter.py
++++ b/src/langbot/pkg/agent/runner/query_entry_adapter.py
+@@ -357,6 +357,12 @@
+ 
+         if not conversation_id:
+             conversation_id = session_id
++
++        # QQ group ingress must never fall back to another member's runner
++        # state, even when preprocessing has not yet attached a conversation.
++        from qunling.qq_sessions import runner_conversation_id
++
++        conversation_id = runner_conversation_id(query) or conversation_id
+ 
+         # Handle sender_id
+         sender_id = getattr(query, 'sender_id', None)
+diff --git a/src/langbot/pkg/api/http/service/monitoring.py b/src/langbot/pkg/api/http/service/monitoring.py
+--- a/src/langbot/pkg/api/http/service/monitoring.py
++++ b/src/langbot/pkg/api/http/service/monitoring.py
+@@ -2271,6 +2271,9 @@
+             raise LookupError('Session not found')
+         # Legacy sessions use uppercase PERSON/GROUP; envelope IDs use lowercase.
+         conversation = re.sub(r'^(PERSON|GROUP)_', lambda match: match[1].lower() + '_', session_id)
++        from qunling.qq_sessions import assert_group_reset_idle
++
++        assert_group_reset_idle(self.ap, workspace, bot_id, conversation)
+         run = persistence_agent_run.AgentRun
+         busy = (
+             await execute(
+diff --git a/src/langbot/pkg/pipeline/preproc/preproc.py b/src/langbot/pkg/pipeline/preproc/preproc.py
+--- a/src/langbot/pkg/pipeline/preproc/preproc.py
++++ b/src/langbot/pkg/pipeline/preproc/preproc.py
+@@ -187,9 +187,11 @@
+         bot_id: str | None = None,
+         workspace_id: str | None = None,
+     ) -> list[provider_message.Message]:
++        from qunling.qq_sessions import history_conversation_id
++
+         transcript_messages = await self._load_runner_history_messages(
+             runner_id,
+-            getattr(conversation, 'uuid', None),
++            history_conversation_id(conversation),
+             bot_id=bot_id,
+             workspace_id=workspace_id,
+             thread_id=getattr(conversation, 'thread_id', None),
+@@ -254,6 +256,9 @@
+                         f'Conversation({query.query_id}) is expired (idle: {conversation_idle_time}s), create new conversation'
+                     )
+                     conversation.uuid = None
++                    from qunling.qq_sessions import bind_conversation
++
++                    bind_conversation(query, session, conversation, renew=True)
+ 
+         # Treat every preprocess pass as a conversation activity update. This
+         # makes future expiry checks use the latest incoming message/preprocess
+diff --git a/src/langbot/pkg/provider/session/sessionmgr.py b/src/langbot/pkg/provider/session/sessionmgr.py
+--- a/src/langbot/pkg/provider/session/sessionmgr.py
++++ b/src/langbot/pkg/provider/session/sessionmgr.py
+@@ -4,6 +4,8 @@
+ import dataclasses
+ import heapq
+ import time
++
++from qunling.qq_sessions import member_key, session_key_id, bind_conversation
+ 
+ from langbot_plugin.api.entities.builtin.provider import message as provider_message, prompt as provider_prompt
+ import langbot_plugin.api.entities.builtin.provider.session as provider_session
+@@ -45,7 +47,7 @@
+         execution_context.placement_generation,
+         bot_uuid,
+         query.launcher_type.value,
+-        query.launcher_id,
++        session_key_id(query),
+     )
+     return key, execution_context
+ 
+@@ -305,7 +307,9 @@
+         if len(self._session_index) >= max_entries:
+             raise RuntimeError(f'Session cache capacity reached ({max_entries})')
+ 
+-        session_concurrency = self.ap.instance_config.data['concurrency']['session']
++        # Never concurrently mutate one QQ member's conversation, even if the
++        # administrator increases the default concurrency for other platforms.
++        session_concurrency = 1 if member_key(query) is not None else self.ap.instance_config.data['concurrency']['session']
+ 
+         session = provider_session.Session(
+             instance_uuid=execution_context.instance_uuid,
+@@ -396,6 +400,7 @@
+                 del session.conversations[:-max_conversations]
+             session.using_conversation = conversation
+ 
++        bind_conversation(query, session, session.using_conversation)
+         return session.using_conversation
+ 
+     def trim_conversation_messages(

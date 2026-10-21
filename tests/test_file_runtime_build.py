@@ -1,6 +1,7 @@
 """Shared-package build and worker lifecycle checks without a live QQ service."""
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -112,7 +113,8 @@ def test_posix_cleanup_signals_group_after_host_leader_exits(monkeypatch):
     kill_group.assert_called_once_with(12345, supervisor.signal.SIGTERM)
 
 
-def test_real_native_supervisor_in_isolated_project(tmp_path):
+@pytest.mark.parametrize("pipeline_override", [None, "4"])
+def test_real_native_supervisor_in_isolated_project(tmp_path, pipeline_override):
     """Exercise Windows Job setup/POSIX process groups without importing LangBot."""
     root = tmp_path / "isolated project"
     (root / "scripts").mkdir(parents=True)
@@ -125,13 +127,19 @@ def test_real_native_supervisor_in_isolated_project(tmp_path):
         "Path('worker.pid').write_text(str(os.getpid()))\ntime.sleep(30)\n"
     )
     (root / "langbot/main.py").write_text(
-        "import time\nfrom pathlib import Path\n"
+        "import time,os,json\nfrom pathlib import Path\n"
+        "Path('concurrency.json').write_text(json.dumps({k:v for k,v in os.environ.items() if k.startswith('CONCURRENCY__')}))\n"
         "for _ in range(100):\n"
         "    if Path('worker.pid').exists(): break\n"
         "    time.sleep(.02)\n"
         "else: raise SystemExit(9)\n"
     )
     env = os.environ.copy()
+    for key in tuple(env):
+        if key.startswith("CONCURRENCY__"):
+            env.pop(key)
+    if pipeline_override is not None:
+        env["CONCURRENCY__PIPELINE"] = pipeline_override
     env["QUNLING_DATA_DIR"] = str(root / "langbot/data/qunling")
     options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
     result = subprocess.run(
@@ -140,6 +148,10 @@ def test_real_native_supervisor_in_isolated_project(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert (root / "langbot/worker.pid").is_file()
+    limits = json.loads((root / "langbot/concurrency.json").read_text())
+    assert limits["CONCURRENCY__PIPELINE"] == (pipeline_override or "2")
+    assert limits["CONCURRENCY__PENDING_QUERIES"] == "64"
+    assert limits["CONCURRENCY__PENDING_QUERIES_PER_WORKSPACE"] == "32"
 
 
 def test_sdk_provenance_patch_accepts_canonical_sdk_paths(tmp_path):

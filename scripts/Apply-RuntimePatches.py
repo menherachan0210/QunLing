@@ -28,6 +28,8 @@ PATCHES = (
     ("host-tool-password-redaction.patch", "host", False),
     ("host-proactive-chat.patch", "host", False),
     ("host-proactive-context.patch", "host", False),
+    ("host-qq-status.patch", "host", False),
+    ("host-qq-member-sessions.patch", "host", False),
     ("onebot-group-trigger.patch", "host", False),
     ("chroma-delete-count.patch", "host", False),
     ("onebot-image-vision.patch", "host", False),

@@ -115,6 +115,12 @@ def main():
     app = root / "langbot"
     env = os.environ.copy()
     env.setdefault("QUNLING_DATA_DIR", str(app / "data/qunling"))
+    # Independent group members use independent sessions. Bound foreground
+    # work and its queue so a busy group cannot start one pipeline per person.
+    # Lightweight participation retains its own bounded model slots.
+    env.setdefault("CONCURRENCY__PIPELINE", "2")
+    env.setdefault("CONCURRENCY__PENDING_QUERIES", "64")
+    env.setdefault("CONCURRENCY__PENDING_QUERIES_PER_WORKSPACE", "32")
     if not Path(env["QUNLING_DATA_DIR"]).is_absolute():
         raise SystemExit("QUNLING_DATA_DIR must be an absolute private data directory")
     env["PYTHONPATH"] = str(root) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")

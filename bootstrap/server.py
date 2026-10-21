@@ -27,6 +27,7 @@ from bootstrap.state import State
 from bootstrap.update_client import REVISION, UpdateClient, UpdateError
 
 ROOT = Path(__file__).resolve().parents[1]
+QQ_STATUS_TTL = 30
 
 
 class SetupManager:
@@ -47,6 +48,7 @@ class SetupManager:
         self.update_inflight = False
         self.pending = None
         self.stopping = threading.Event()
+        self.qq_sampled_at = None
         self.status = {
             "stage": "starting",
             "message": "正在启动服务，首次安装依赖可能需要数分钟。",
@@ -54,6 +56,9 @@ class SetupManager:
             "configured": False,
             "qq_logged_in": False,
             "qq_connected": False,
+            "qq_state": "unknown",
+            "qq_checked_at": None,
+            "qq_status_fresh": False,
             "qr_image": "",
             "settings": {},
         }
@@ -64,7 +69,36 @@ class SetupManager:
 
     def snapshot(self):
         with self.lock:
-            return dict(self.status)
+            result = dict(self.status)
+            fresh = (self.qq_sampled_at is not None
+                     and 0 <= time.monotonic() - self.qq_sampled_at <= QQ_STATUS_TTL)
+            result["qq_status_fresh"] = fresh
+            if not fresh:
+                result.update(qq_state="unknown", qq_logged_in=False,
+                              qq_connected=False, qr_image="")
+                if result["stage"] == "ready":
+                    result.update(stage="waiting_qq", message="QQ 状态检查已过期，正在重新确认连接。")
+            return result
+
+    def _record_qq(self, state, logged_in=False, connected=False, image="", *, sampled_at=None):
+        messages = {
+            "online": "机器人已连接。群聊 @ 机器人或输入 /ai，私聊可直接发送。",
+            "offline": "QQ 已离线，请检查 QQ 登录状态并重新登录。",
+            "disconnected": "QQ 消息通道已断开，正在等待重新连接。",
+            "unknown": "暂时无法确认 QQ 在线状态，正在自动重试。",
+            "connecting": "QQ 登录已确认，正在等待消息通道连接。",
+            "waiting_login": "等待 QQ 登录并连接；二维码失效时可以刷新。",
+        }
+        with self.lock:
+            self.qq_sampled_at = time.monotonic() if sampled_at is None else sampled_at
+            self.status.update(qq_state=state, qq_logged_in=logged_in,
+                               qq_connected=connected, qr_image=image,
+                               qq_checked_at=time.time(), qq_status_fresh=True)
+            if self.status["stage"] in {"ready", "waiting_qq"}:
+                self.status.update(
+                    stage="ready" if connected and self.status["configured"] else "waiting_qq",
+                    message=messages[state],
+                )
 
     def submit(self, values):
         config = settings_from_input(values, self.state.read("ai.json", {}))
@@ -156,11 +190,14 @@ class SetupManager:
             return value
 
     def refresh_qr(self):
-        with self.lock:
-            if self.status["qq_logged_in"]:
-                return
-            self.napcat.call("/QQLogin/RefreshQRcode")
-            self.status["qr_image"] = ""
+        # Recheck the login service, not a possibly stale dashboard snapshot.
+        # Network I/O must not hold the snapshot lock and block its TTL check.
+        status = self.napcat.call("/QQLogin/CheckLoginStatus")
+        if (isinstance(status, dict) and status.get("isLogin") is True
+                and status.get("isOffline") is not True):
+            return
+        self.napcat.call("/QQLogin/RefreshQRcode")
+        self._record_qq("waiting_login")
 
     def _apply(self, config):
         record = self.state.read(default={})
@@ -185,11 +222,18 @@ class SetupManager:
     def _qq_status(self, record):
         import qrcode
 
+        sampled_at = time.monotonic()
         status = self.napcat.call("/QQLogin/CheckLoginStatus")
-        logged_in = status.get("isLogin") is True
+        if not isinstance(status, dict) or not isinstance(status.get("isLogin"), bool):
+            raise SetupError("QQ 登录状态无效。")
+        offline = status.get("isOffline") is True
+        logged_in = status["isLogin"] and not offline
+        state = "offline" if offline else "connecting" if logged_in else "waiting_login"
+        if status.get("qrLoginAccepted") is True and not offline:
+            state = "connecting"
         image = ""
         if (
-            not logged_in
+            state == "waiting_login"
             and isinstance(status.get("qrcodeurl"), str)
             and len(status["qrcodeurl"]) <= 4096
         ):
@@ -206,24 +250,22 @@ class SetupManager:
             bot = self.api.call("GET", "/api/v1/platform/bots/" + record["bot_uuid"])[
                 "bot"
             ]
-            connected = bool(
-                bot.get("adapter_runtime_values", {}).get("bot_account_id")
-            )
-        self.update(qq_logged_in=logged_in, qq_connected=connected, qr_image=image)
-        current = self.snapshot()
-        if (
-            connected
-            and current["configured"]
-            and current["stage"] in {"ready", "waiting_qq"}
-        ):
-            self.update(
-                stage="ready",
-                message="机器人已连接。群聊 @ 机器人或输入 /ai，私聊可直接发送。",
-            )
-        elif current["stage"] in {"ready", "waiting_qq"}:
-            self.update(
-                stage="waiting_qq", message="等待 QQ 登录并连接；二维码失效时可以刷新。"
-            )
+            probe = bot.get("adapter_runtime_values", {}).get("qq_status", {})
+            checked = probe.get("checked_at") if isinstance(probe, dict) else None
+            # Account IDs survive disconnects. Only a fresh, successful OneBot
+            # round trip proves the transport and QQ account are both online.
+            if (not isinstance(checked, (int, float)) or isinstance(checked, bool)
+                    or not -5 <= time.time() - checked <= QQ_STATUS_TTL):
+                state, logged_in = "unknown", False
+            elif probe.get("state") == "online" and probe.get("online") is True and probe.get("transport_connected") is True:
+                state, connected = "online", True
+            elif probe.get("state") == "offline" and probe.get("online") is False:
+                state, logged_in = "offline", False
+            elif probe.get("state") == "disconnected" and probe.get("transport_connected") is False:
+                state = "disconnected"
+            else:
+                state, logged_in = "unknown", False
+        self._record_qq(state, logged_in, connected, image, sampled_at=sampled_at)
 
     def run(self):
         # Retrying readiness is safe; API/model requests that cost money are not
@@ -284,14 +326,8 @@ class SetupManager:
                     )
             try:
                 self._qq_status(self.state.read(default={}))
-            except SetupError:
-                self.update(qq_logged_in=False, qq_connected=False)
-                if self.snapshot()["stage"] == "ready":
-                    self.update(
-                        stage="waiting_qq", message="QQ 连接暂不可用，正在等待恢复。"
-                    )
             except Exception:
-                self.update(qq_connected=False)
+                self._record_qq("unknown")
             self.stopping.wait(4)
 
 
