@@ -69,6 +69,109 @@ def admin_context(role="admin", workspace="workspace"):
     return NS(workspace_uuid=workspace, workspace=NS(permissions=frozenset({"resource.manage"}) if role == "admin" else frozenset()))
 
 
+def query_for(bridge, incoming):
+    return NS(adapter=bridge.bot.adapter, message_event=incoming,
+              _execution_context=bridge.bot.execution_context,
+              prompt=NS(messages=[ModelMessage(role="system", content="保留的原始系统提示")]),
+              messages=[ModelMessage(role="user", content="原本的用户消息")])
+
+
+@pytest.mark.asyncio
+async def test_explicit_prompt_gets_frozen_same_group_context_and_actual_capabilities(bridge):
+    first = event("我打算明天搬家", sender="20001", message_id="history")
+    first.timestamp -= 1
+    host.observe(bridge.bot, first, bridge.bot.adapter)
+    request = event("你觉得这个时间合适吗", explicit=True, message_id="question")
+    host.observe(bridge.bot, request, bridge.bot.adapter)
+    host.observe(bridge.bot, event("之后发的这句绝不能混入", message_id="future"), bridge.bot.adapter)
+    host.observe(bridge.bot, event("另一个群的秘密", group="90000", message_id="foreign"), bridge.bot.adapter)
+    query = query_for(bridge, request)
+    original_messages = query.messages
+    host.prepare_prompt(query)
+    assert query.messages is original_messages
+    assert query.prompt.messages[0].content == "保留的原始系统提示"
+    status, history = query.prompt.messages[1:]
+    assert status.role == "system" and history.role == "user"
+    assert '"free_chat_enabled": true' in status.content
+    assert '"questioner_id": "20000"' in status.content
+    assert "我打算明天搬家" in history.content and '"sender_id": "20001"' in history.content
+    assert "之后发的这句绝不能混入" not in history.content
+    assert "另一个群的秘密" not in history.content
+    host.prepare_prompt(query)
+    assert len(query.prompt.messages) == 3  # Per-run update cannot duplicate evidence.
+    await bridge.engine.close()
+
+
+@pytest.mark.asyncio
+async def test_prompt_snapshot_revoked_on_config_change_and_does_not_leak_to_other_sender(bridge):
+    host.observe(bridge.bot, event("过去的讨论", message_id="earlier"), bridge.bot.adapter)
+    request = event("当前问题", explicit=True, message_id="request")
+    host.observe(bridge.bot, request, bridge.bot.adapter)
+    wrong_sender = event("当前问题", sender="20003", explicit=True, message_id="request")
+    query = query_for(bridge, wrong_sender)
+    host.prepare_prompt(query)
+    assert len(query.prompt.messages) == 2
+    config = bridge.store.read()
+    config["enabled"] = False
+    bridge.store.save(config, known_group_ids={"30000"})
+    query = query_for(bridge, request)
+    host.prepare_prompt(query)
+    assert len(query.prompt.messages) == 2
+    assert '"free_chat_enabled": false' in query.prompt.messages[-1].content
+    assert not bridge._request_contexts
+    await bridge.engine.close()
+
+
+@pytest.mark.asyncio
+async def test_prompt_cannot_cross_workspace_or_private_message(bridge):
+    request = event(explicit=True)
+    host.observe(bridge.bot, request, bridge.bot.adapter)
+    query = query_for(bridge, request)
+    query._execution_context = ExecutionContext(instance_uuid="instance", workspace_uuid="other", placement_generation=1, bot_uuid="bot")
+    host.prepare_prompt(query)
+    assert len(query.prompt.messages) == 1
+    private = event(explicit=True)
+    private.group = None
+    query = query_for(bridge, private)
+    host.prepare_prompt(query)
+    assert len(query.prompt.messages) == 1
+    await bridge.engine.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_query_discards_its_snapshot(bridge):
+    request = event(explicit=True)
+    host.observe(bridge.bot, request, bridge.bot.adapter)
+    assert bridge._request_contexts
+    host.completed(bridge.bot.adapter, request)
+    assert not bridge._request_contexts
+    await bridge.engine.close()
+
+
+@pytest.mark.asyncio
+async def test_generate_reuses_shared_style_target_author_and_dynamic_character_limit(bridge):
+    from qunling.proactive.engine import ConversationContext, Decision, Message
+
+    request = Message("bot", "30000", "m1", "20002", "写一段400字的介绍", time.time(), sender_name="另一位群友")
+    context = ConversationContext("bot", "30000", "active", "", (request,), ("m1",), "我刚才的观点", "b1", time.time())
+    bridge._complete = AsyncMock(return_value="完整介绍")
+    assert await bridge.generate(context, Decision("followup", "m1")) == "完整介绍"
+    system, payload = bridge._complete.await_args.args
+    assert "不因为对方语气强、人数多或要求道歉就改口" in system
+    assert payload["target_author"] == {"sender_id": "20002", "sender_name": "另一位群友"}
+    assert payload["reply_character_limit"] == 2000
+    assert payload["runtime"]["tools_available"] is False
+    assert "最多 240" not in system
+
+
+@pytest.mark.asyncio
+async def test_send_supports_complete_directed_text_with_hard_limit(bridge):
+    await bridge.send("30000", "字" * 1600)
+    with pytest.raises(host.ProactiveUnavailable):
+        await bridge.send("30000", "字" * 2001)
+    assert bridge.bot.adapter.send_message.await_count == 1
+
+
 @pytest.mark.asyncio
 async def test_unlisted_groups_and_self_messages_have_no_model_or_buffer(bridge):
     for item in (event(group="90000"), event(sender="10000")):
@@ -289,6 +392,17 @@ def patched_host(tmp_path):
     for path in paths:
         ast.parse((tmp_path / path).read_text(encoding="utf-8"))
     assert patcher.build_plan("host-proactive-chat.patch", tmp_path, source, "host").state == "already-applied"
+    context_source = (ROOT / "patches/host-proactive-context.patch").read_text(encoding="utf-8")
+    _, context_paths = patcher.runtime_payload(context_source, "host")
+    for path in context_paths:
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((LANGBOT_ROOT / path).read_bytes())
+    context_plan = patcher.build_plan("host-proactive-context.patch", tmp_path, context_source, "host")
+    patcher.execute_plans([context_plan], apply=True)
+    assert patcher.build_plan("host-proactive-context.patch", tmp_path, context_source, "host").state == "already-applied"
+    for path in context_paths:
+        ast.parse((tmp_path / path).read_text(encoding="utf-8"))
     return tmp_path
 
 
@@ -301,6 +415,12 @@ def test_patch_applies_only_to_private_copy_and_contains_authenticated_routes(pa
         options = {keyword.arg: ast.unparse(keyword.value) for keyword in route.keywords}
         assert options["permission"] == "Permission.RESOURCE_MANAGE"
         assert options["auth_type"] == "group.AuthType.USER_TOKEN_OR_API_KEY"
+
+
+def test_context_bridge_runs_after_plugin_preprocessing(patched_host):
+    source = (patched_host / "src/langbot/pkg/pipeline/preproc/preproc.py").read_text(encoding="utf-8")
+    assert source.index("query.messages = event_ctx.event.prompt") < source.index("prepare_proactive_prompt(query)")
+    assert "if os.environ.get('QUNLING_DATA_DIR')" in source
 
 
 def patched_method(base, path, class_name, name, namespace):

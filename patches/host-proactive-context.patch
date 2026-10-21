@@ -1,0 +1,22 @@
+diff --git a/src/langbot/pkg/pipeline/preproc/preproc.py b/src/langbot/pkg/pipeline/preproc/preproc.py
+--- a/src/langbot/pkg/pipeline/preproc/preproc.py
++++ b/src/langbot/pkg/pipeline/preproc/preproc.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+ import datetime
++import os
+ import typing
+ 
+ from .. import stage, entities
+@@ -425,6 +426,10 @@
+ 
+         query.prompt.messages = event_ctx.event.default_prompt
+         query.messages = event_ctx.event.prompt
++        if os.environ.get('QUNLING_DATA_DIR'):
++            from qunling.proactive.host import prepare_prompt as prepare_proactive_prompt
++
++            prepare_proactive_prompt(query)
+ 
+         if getattr(self.ap, 'skill_mgr', None) is not None:
+             skill_execution_context = get_query_execution_context(query)

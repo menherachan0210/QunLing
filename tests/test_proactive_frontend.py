@@ -243,3 +243,93 @@ def test_reset_removes_only_selected_policy_and_returns_to_default_off():
   assert.deepEqual(Object.keys(posts[1].groups),['123']);
   assert.equal(posts[1].groups['123'].mode,'natural');
 """)
+
+
+def test_runtime_uses_saved_authorization_and_never_presents_draft_as_active():
+    run_browser(r"""
+  select('123');
+  assert.equal(element('proactive-runtime-state').textContent,'未开启');
+  change('proactive-enabled',true);change('proactive-mode','active');
+  assert.equal(element('proactive-runtime-state').textContent,'未开启');
+  assert.match(element('proactive-runtime-note').textContent,/尚未生效/);
+  await save();
+  status={available:true,enabled:true,generated_at:1000,groups:{'123':{status_code:'ready'}}};
+  await refresh();
+  assert.equal(element('proactive-runtime-state').textContent,'已就绪');
+  change('proactive-mode','off');
+  assert.equal(element('proactive-runtime-state').textContent,'已就绪');
+  assert.match(element('proactive-runtime-note').textContent,/已保存/);
+  await save();
+  assert.equal(element('proactive-runtime-state').textContent,'未开启');
+""")
+
+
+def test_runtime_displays_budgets_and_cooldown_using_server_clock():
+    run_browser(r"""
+  select('123');change('proactive-enabled',true);change('proactive-mode','active');await save();
+  status={available:true,enabled:true,generated_at:1000,judgments_day:45,judgments_day_limit:240,groups:{'123':{
+    status_code:'cooldown',cooldown_until:1090,
+    judgments_hour:8,judgments_hour_limit:40,judgments_day:20,judgments_day_limit:240,
+    replies_hour:2,replies_hour_limit:12,replies_day:9,replies_day_limit:60,
+    last_event:{code:'stale',at:990},last_sent_at:980
+  }}};
+  await refresh();
+  assert.equal(element('proactive-runtime-state').textContent,'控制发言频率');
+  assert.match(element('proactive-runtime-detail').textContent,/普通插话还需约 2 分钟/);
+  assert.match(element('proactive-runtime-detail').textContent,/点名或引用/);
+  assert.equal(element('proactive-judgments-hour').textContent,'8 / 40');
+  assert.equal(element('proactive-judgments-day').textContent,'20 / 240');
+  assert.equal(element('proactive-replies-hour').textContent,'2 / 12');
+  assert.equal(element('proactive-replies-day').textContent,'9 / 60');
+  assert.match(element('proactive-global-budget').textContent,/45 \/ 240/);
+  assert.match(element('proactive-last-event').textContent,/已取消过期回复/);
+  assert.match(element('proactive-last-sent').textContent,/1970/);
+""")
+
+
+def test_runtime_updates_during_edit_without_overwriting_persona():
+    run_browser(r"""
+  select('123');change('proactive-enabled',true);change('proactive-mode','natural');await save();
+  input('proactive-persona','尚未保存的人设');
+  for(const [code,label] of [['ready','已就绪'],['explicit_busy','优先处理提问'],['quiet_hours','安静时段'],['budget_exhausted','已达参与限额'],['pending','正在处理']]){
+    status={available:true,enabled:true,groups:{'123':{status_code:code}}};
+    await refresh();
+    assert.equal(element('proactive-runtime-state').textContent,label);
+    assert.equal(element('proactive-persona').value,'尚未保存的人设');
+    assert.match(element('proactive-runtime-note').textContent,/尚未生效/);
+  }
+""")
+
+
+def test_runtime_failure_is_visible_and_cached_values_are_marked_stale():
+    run_browser(r"""
+  select('123');change('proactive-enabled',true);change('proactive-mode','natural');await save();
+  status={available:true,enabled:true,generated_at:1000,groups:{'123':{status_code:'ready'}}};
+  await refresh();
+  configFailure=true;await refresh();
+  assert.equal(element('proactive-runtime-state').textContent,'等待服务');
+  assert.match(element('proactive-runtime-updated').textContent,/可能已过期/);
+  configFailure=false;await refresh();
+  assert.equal(element('proactive-runtime-state').textContent,'已就绪');
+  status.storage_healthy=false;status.available=false;await refresh();
+  assert.equal(element('proactive-runtime-state').textContent,'已暂停');
+  status.storage_healthy=true;status.available=true;setup.qq_connected=false;
+  await evaluate('poll()');await refresh();
+  assert.equal(element('proactive-runtime-state').textContent,'QQ 未连接');
+""")
+
+
+def test_diagnostics_only_display_known_codes_and_valid_counters():
+    run_browser(r"""
+  select('123');change('proactive-enabled',true);change('proactive-mode','natural');await save();
+  const secret='<img src=x onerror=alert(1)> private-chat-and-api-key';
+  status={available:true,enabled:true,generated_at:secret,judgments_day:secret,judgments_day_limit:-1,
+    groups:{'123':{status_code:'__proto__',judgments_hour:secret,judgments_hour_limit:9999999999,
+      last_event:{code:secret,at:secret},last_sent_at:secret,error:secret,reason:secret}}};
+  await refresh();
+  assert.equal(element('proactive-runtime-state').textContent,'状态待确认');
+  assert.equal(element('proactive-judgments-hour').textContent,'— / —');
+  assert.equal(element('proactive-last-sent').textContent,'暂无记录');
+  assert.match(element('proactive-last-event').textContent,/暂无可识别/);
+  for(const node of allNodes)assert.ok(!String(node.textContent).includes('private-chat-and-api-key'));
+""")

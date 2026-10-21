@@ -114,6 +114,14 @@
                 <p class="note proactive-editor-note">只控制主动发言，@ 请求仍可正常回复。各参与方式均有限频和每日预算，没人接话时会停下来。</p>
                 <button id="proactive-reset-group" type="button" class="secondary small" disabled>恢复此群默认设置</button>
               </fieldset>
+              <section id="proactive-runtime" class="proactive-runtime" aria-labelledby="proactive-runtime-heading" hidden>
+                <div class="proactive-runtime-heading"><h3 id="proactive-runtime-heading">当前运行状态</h3><span id="proactive-runtime-state" class="phase" data-tone="neutral">等待状态</span></div>
+                <p id="proactive-runtime-note" class="note"></p>
+                <p id="proactive-runtime-detail" class="proactive-runtime-detail" role="status" aria-live="polite"></p>
+                <dl class="proactive-runtime-usage"><div><dt>最近 1 小时判断</dt><dd id="proactive-judgments-hour">—</dd></div><div><dt>最近 24 小时判断</dt><dd id="proactive-judgments-day">—</dd></div><div><dt>最近 1 小时回复</dt><dd id="proactive-replies-hour">—</dd></div><div><dt>最近 24 小时回复</dt><dd id="proactive-replies-day">—</dd></div></dl>
+                <dl class="proactive-runtime-events"><div><dt>最近处理</dt><dd id="proactive-last-event">暂无记录</dd></div><div><dt>发送尝试</dt><dd id="proactive-last-sent">暂无记录</dd></div></dl>
+                <p id="proactive-global-budget" class="note"></p><p id="proactive-runtime-updated" class="note"></p>
+              </section>
             </div>
           </div>
           <div class="form-actions"><button id="proactive-save" type="submit" disabled><svg class="icon"><use href="#i-check"/></svg><span id="proactive-save-label">保存自由对话设置</span></button><button id="proactive-reload" type="button" class="secondary" hidden disabled>重新载入已保存设置</button><span id="proactive-dirty" class="save-note">设置独立保存，不影响 AI 接口配置</span></div>

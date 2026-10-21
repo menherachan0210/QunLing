@@ -31,6 +31,7 @@ class GroupPolicy:
     judgments_per_hour: int | None = None
     judgments_per_day: int | None = None
     display_name: str = "群灵"
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ class ConversationContext:
     last_bot_message_id: str | None
     last_bot_at: float | None
     display_name: str = "群灵"
+    addressed_candidate_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -106,9 +108,17 @@ class _Group:
     last_bot_at: float | None = None
     last_recipient: str | None = None
     last_proactive_at: float | None = None
+    last_interjection_at: float | None = None
     followup_streak: int = 0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     after_bot_ids: set[str] = field(default_factory=set)
+    last_event: dict | None = None
+
+
+def reply_character_limit(context: ConversationContext, decision: Decision) -> int:
+    """Explicitly addressed text and genuine followups may need a complete answer."""
+    return 2000 if (decision.action == "followup"
+                    or decision.target_message_id in context.addressed_candidate_ids) else 400
 
 
 def validate_decision(value: object, context: ConversationContext) -> Decision | None:
@@ -122,13 +132,14 @@ def validate_decision(value: object, context: ConversationContext) -> Decision |
         return Decision(action, None) if target is None else None
     if not isinstance(target, str) or not target:
         return None
-    eligible = {m.message_id for m in context.messages if not m.explicit_request
+    eligible = {m.message_id for m in context.messages if not m.is_bot and not m.explicit_request
                 and not any(item != context.bot_id for item in m.mentions)}
     if target not in eligible or not context.messages or target != context.messages[-1].message_id:
         return None
     if action == "followup" and target not in context.followup_candidate_ids:
         return None
-    if action == "reply" and context.mode == "quiet":
+    if (action == "reply" and context.mode == "quiet"
+            and target not in context.addressed_candidate_ids):
         return None
     return Decision(action, target)
 
@@ -191,6 +202,9 @@ class ProactiveEngine:
                     "sends": self._timestamps(row["sends"], now),
                     "seen": {str(key): at for key, at in row["seen"].items()
                              if isinstance(at, (int, float)) and math.isfinite(at) and 0 <= now - at < 1200},
+                    # Old ledgers cannot distinguish an ignored interjection from a
+                    # direct answer. Apply a conservative backoff only on that upgrade.
+                    "last_interjection_at": row.get("last_interjection_at", max(row["sends"], default=None)),
                 }
         except Exception:
             self._state_ok = False
@@ -203,14 +217,21 @@ class ProactiveEngine:
             raise ValueError("invalid budget time")
         return sorted(at for at in values if -30 <= now - at < 86400)
 
+    def _restored_state(self, group_id: str) -> _Group:
+        row = self._history.get(group_id, {})
+        state = _Group(judgments=deque(row.get("judgments", [])),
+                       sends=deque(row.get("sends", [])), seen=dict(row.get("seen", {})))
+        if state.sends:
+            state.last_proactive_at = state.sends[-1]
+        last_interjection = row.get("last_interjection_at")
+        if (isinstance(last_interjection, (int, float)) and math.isfinite(last_interjection)
+                and 0 <= self._clock() - last_interjection < 600):
+            state.last_interjection_at = last_interjection
+        return state
+
     def _state(self, group_id: str) -> _Group:
         if group_id not in self._groups:
-            row = self._history.get(group_id, {})
-            state = _Group(judgments=deque(row.get("judgments", [])),
-                           sends=deque(row.get("sends", [])), seen=dict(row.get("seen", {})))
-            if state.sends:
-                state.last_proactive_at = state.sends[-1]
-            self._groups[group_id] = state
+            self._groups[group_id] = self._restored_state(group_id)
         return self._groups[group_id]
 
     def _persist(self) -> bool:
@@ -223,10 +244,12 @@ class ProactiveEngine:
             self._prune(state, now)
             self._history[group_id] = {"judgments": list(state.judgments),
                                        "sends": list(state.sends),
+                                       "last_interjection_at": state.last_interjection_at,
                                        "seen": dict(list(state.seen.items())[-256:])}
         self._history = {
             group_id: {"judgments": self._timestamps(row["judgments"], now),
                        "sends": self._timestamps(row["sends"], now),
+                       "last_interjection_at": row.get("last_interjection_at"),
                        "seen": {key: at for key, at in row["seen"].items() if now - at < 1200}}
             for group_id, row in self._history.items()
             if row["judgments"] or row["sends"] or row["seen"]
@@ -304,6 +327,37 @@ class ProactiveEngine:
             while events and now - events[0] >= 86400:
                 events.popleft()
 
+    def _record(self, state: _Group, code: str) -> None:
+        # Never put model output, message text, user names or raw exceptions here.
+        state.last_event = {"code": code, "at": self._clock()}
+
+    def snapshot(self, group_id: str, *, before_message_id: str | None = None,
+                 before_timestamp: float | None = None) -> tuple[Message, ...]:
+        """Freeze preceding, scoped short-term context for an explicit request.
+
+        The ingress caller captures this immediately after observing the request.
+        A known message ID preserves arrival order even when OneBot timestamps
+        have only second precision. With no known ID, the strict time boundary
+        deliberately omits ambiguous simultaneous messages.
+        """
+        self.refresh_configuration()
+        if self._policy(self._snapshot, group_id) is None:
+            return ()
+        state = self._groups.get(group_id)
+        if state is None:
+            return ()
+        self._prune(state, self._clock())
+        messages = tuple(state.messages)
+        has_timestamp = isinstance(before_timestamp, (int, float)) and math.isfinite(before_timestamp)
+        if before_message_id is not None:
+            for index, message in enumerate(messages):
+                if message.message_id == before_message_id:
+                    return tuple(item for item in messages[:index]
+                                 if not has_timestamp or item.timestamp <= before_timestamp)
+        if not has_timestamp:
+            return ()
+        return tuple(message for message in messages if message.timestamp < before_timestamp)
+
     def on_message(self, message: Message) -> bool:
         """Observe a trusted incoming event without waiting for model execution."""
         if (self._closed or message.bot_id != self.bot_id or message.sender_id == self.bot_id
@@ -326,6 +380,7 @@ class ProactiveEngine:
         if message_key in state.seen:
             return False
         state.seen[message_key] = now
+        self._record(state, "observed")
         if not message.text.strip():
             # An image/sticker can change the topic too, even though this text-only
             # path cannot inspect it. Never send an answer prepared before it arrived.
@@ -333,6 +388,7 @@ class ProactiveEngine:
             self._pending.pop(message.group_id, None)
             if message.explicit_request:
                 state.explicit.add(message.message_id)
+                self._record(state, "explicit_started")
             return True
         # Event inputs are normalized, but an individual message must not defeat the window cap.
         message = Message(message.bot_id, message.group_id, message.message_id,
@@ -347,9 +403,12 @@ class ProactiveEngine:
         self._pending.pop(message.group_id, None)
         if message.explicit_request:
             state.explicit.add(message.message_id)
+            self._record(state, "explicit_started")
             return True
         if (state.explicit or self._quiet(policy, now)
                 or any(item != self.bot_id for item in message.mentions)):
+            if self._quiet(policy, now):
+                self._record(state, "quiet_hours")
             return True
         if len(self._pending) < 32:
             self._pending[message.group_id] = (state.generation, self._snapshot.revision)
@@ -387,11 +446,13 @@ class ProactiveEngine:
         self._invalidate(state)
         self._pending.pop(group_id, None)
         state.explicit.add(str(message_id))
+        self._record(state, "explicit_started")
 
     def explicit_done(self, group_id: str, message_id: str) -> None:
         state = self._groups.get(group_id)
         if state is not None:
             state.explicit.discard(str(message_id))
+            self._record(state, "explicit_finished")
         # Do not resurrect messages received while an explicit request was being answered.
 
     def on_bot_message(self, group_id: str, text: str, *, message_id: str | None = None,
@@ -403,13 +464,31 @@ class ProactiveEngine:
         if not proactive:
             self._invalidate(state)
             self._pending.pop(group_id, None)
-        state.last_bot_text = str(text)[:400]
+        state.last_bot_text = str(text)[:2000]
         state.last_bot_id = str(message_id) if message_id is not None else None
         state.last_bot_at = self._clock()
         state.last_recipient = str(recipient_id) if recipient_id is not None else None
         state.after_bot_ids.clear()
         if not proactive:
             state.followup_streak = 0
+            # A requested exchange is engagement; the previous uninvited remark
+            # must not impose an unrelated ten-minute embargo on this discussion.
+            state.last_interjection_at = None
+        self._append_bot_message(group_id, state, text, message_id)
+
+    def _append_bot_message(self, group_id: str, state: _Group, text: str,
+                            message_id: str | None) -> None:
+        text = str(text).strip()[:2000]
+        if not text:
+            return
+        key = str(message_id) if message_id is not None else f"bot-observed-{state.generation}-{self._clock()}"
+        if any(item.is_bot and item.message_id == key for item in state.messages):
+            return
+        policy = self._policy(self._snapshot, group_id)
+        state.messages.append(Message(self.bot_id, group_id, key, self.bot_id,
+                                      text, self._clock(), sender_name=policy.display_name if policy else "",
+                                      is_bot=True))
+        self._prune(state, self._clock())
 
     @staticmethod
     def _quiet(policy: GroupPolicy, now: float) -> bool:
@@ -430,13 +509,35 @@ class ProactiveEngine:
         recent_bot = state.last_bot_at is not None and 0 <= now - state.last_bot_at <= 120
         followups = tuple(
             m.message_id for m in state.messages
-            if recent_bot and m.message_id in state.after_bot_ids and not m.explicit_request
+            if recent_bot and m.message_id in state.after_bot_ids and not m.explicit_request and not m.is_bot
             and ((state.last_bot_id is not None and m.reply_to == state.last_bot_id)
                  or (state.last_recipient is not None and m.sender_id == state.last_recipient))
         )
+        names = {name.strip().casefold() for name in (policy.display_name, *policy.aliases)
+                 if isinstance(name, str) and 1 <= len(name.strip()) <= 80}
+
+        def mentions_name(text: str) -> bool:
+            folded = text.casefold().lstrip()
+            for name in names:
+                if len(name) > 1 and name in folded:
+                    return True
+                # A one-character configured name is valid, but matching it as a
+                # substring would turn ordinary words into direct calls.
+                if (len(name) == 1 and folded.startswith(name)
+                        and (len(folded) == 1 or folded[1].isspace() or folded[1] in ",，:：!！?？、")):
+                    return True
+            return False
+
+        bot_message_ids = {m.message_id for m in state.messages if m.is_bot}
+        if state.last_bot_id is not None:
+            bot_message_ids.add(state.last_bot_id)
+        addressed = tuple(m.message_id for m in state.messages if not m.is_bot and not m.explicit_request
+                          and not any(item != self.bot_id for item in m.mentions)
+                          and (m.reply_to in bot_message_ids
+                               or mentions_name(m.text)))
         return ConversationContext(self.bot_id, group_id, policy.mode, policy.persona,
                                    tuple(state.messages), followups, state.last_bot_text,
-                                   state.last_bot_id, state.last_bot_at, policy.display_name)
+                                   state.last_bot_id, state.last_bot_at, policy.display_name, addressed)
 
     def _current(self, group_id: str, generation: int, revision: str):
         self.refresh_configuration()
@@ -447,7 +548,8 @@ class ProactiveEngine:
                 or self._quiet(policy, self._clock())):
             return None
         self._prune(state, self._clock())
-        if not state.messages or self._clock() - state.messages[-1].timestamp > 90:
+        if (not state.messages or state.messages[-1].is_bot
+                or self._clock() - state.messages[-1].timestamp > 90):
             return None
         return state, policy
 
@@ -464,27 +566,36 @@ class ProactiveEngine:
         global_ok = sending or sum(now - at < 86400 for at in self._global_judgments) < 240
         return global_ok and len(events) < daily and sum(now - at < 3600 for at in events) < hourly
 
-    def _can_speak(self, state: _Group, policy: GroupPolicy, action: str, *, quoted: bool = False) -> bool:
-        now, mode = self._clock(), _MODES[policy.mode]
+    def _cooldown_until(self, state: _Group, policy: GroupPolicy, action: str, *, addressed: bool = False) -> float:
+        if addressed:
+            return state.sends[-1] + 5 if state.sends else 0
+        if action == "followup":
+            return state.sends[-1] + 30 if state.sends else 0
+        mode = _MODES[policy.mode]
+        cooldown = max(mode.cooldown, policy.cooldown_seconds or 0)
+        return max(state.sends[-1] + cooldown if state.sends else 0,
+                   state.last_interjection_at + 600 if state.last_interjection_at is not None else 0)
+
+    def _can_speak(self, state: _Group, policy: GroupPolicy, action: str, *, addressed: bool = False) -> bool:
+        now = self._clock()
         if not self._budget(state, policy, sending=True):
             return False
-        if action == "followup":
-            return ((quoted or state.followup_streak < 2)
-                    and (not state.sends or now - state.sends[-1] >= 30))
-        cooldown = max(mode.cooldown, policy.cooldown_seconds or 0)
-        # An ignored interjection should not be followed by another uninvited interjection.
-        if state.last_proactive_at is not None and now - state.last_proactive_at < 600:
+        if action == "followup" and not addressed and state.followup_streak >= 2:
             return False
-        return not state.sends or now - state.sends[-1] >= cooldown
+        return now >= self._cooldown_until(state, policy, action, addressed=addressed)
 
     async def _run(self, group_id: str, generation: int, revision: str) -> None:
+        state = None
+        stage = "judging"
         try:
             current = self._current(group_id, generation, revision)
             if current is None:
                 return
             state, policy = current
             context = self._context(group_id, state, policy)
-            delay = 2 if context.followup_candidate_ids else _MODES[policy.mode].debounce
+            target = context.messages[-1].message_id
+            delay = 2 if (target in context.followup_candidate_ids
+                          or target in context.addressed_candidate_ids) else _MODES[policy.mode].debounce
             await asyncio.sleep(delay * self._debounce_scale)
             async with state.lock, self._semaphore:
                 current = self._current(group_id, generation, revision)
@@ -492,44 +603,67 @@ class ProactiveEngine:
                     return
                 state, policy = current
                 context = self._context(group_id, state, policy)
-                followup = bool(context.followup_candidate_ids)
-                quoted = state.last_bot_id is not None and context.messages[-1].reply_to == state.last_bot_id
-                if ((policy.mode == "quiet" and not followup)
-                        or not self._budget(state, policy)
-                        or not self._can_speak(state, policy, "followup" if followup else "reply", quoted=quoted)):
+                target = context.messages[-1].message_id
+                followup = target in context.followup_candidate_ids
+                addressed = target in context.addressed_candidate_ids
+                if policy.mode == "quiet" and not followup and not addressed:
+                    self._record(state, "silence")
+                    return
+                if not self._budget(state, policy) or not self._budget(state, policy, sending=True):
+                    self._record(state, "budget_exhausted")
+                    return
+                if not self._can_speak(state, policy, "followup" if followup else "reply", addressed=addressed):
+                    self._record(state, "cooldown")
                     return
                 state.judgments.append(self._clock())  # Failed judgement still consumes budget.
                 self._global_judgments.append(self._clock())
                 if not self._persist():
                     return
+                self._record(state, "judging")
                 value = await asyncio.wait_for(self._judge(context), self._model_timeout)
                 decision = validate_decision(value, context)
                 current = self._current(group_id, generation, revision)
-                if (current is None or decision is None or decision.action in ("silence", "wait")):
+                if current is None:
+                    self._record(state, "stale")
+                    return
+                if decision is None:
+                    self._record(state, "invalid_decision")
+                    return
+                if decision.action in ("silence", "wait"):
+                    self._record(state, decision.action)
                     return
                 state, policy = current
-                if not self._can_speak(state, policy, decision.action, quoted=quoted):
+                if not self._can_speak(state, policy, decision.action, addressed=addressed):
+                    self._record(state, "cooldown")
                     return
+                stage = "generating"
+                self._record(state, "generating")
                 text = await asyncio.wait_for(self._generate(context, decision), self._model_timeout)
-                if (not isinstance(text, str) or not text.strip() or len(text.strip()) > 400
+                if (not isinstance(text, str) or not text.strip()
+                        or len(text.strip()) > reply_character_limit(context, decision)
                         or any((ord(char) < 32 and char not in "\n\t")
                                or 0xD800 <= ord(char) <= 0xDFFF for char in text)):
+                    self._record(state, "invalid_generation")
                     return
                 current = self._current(group_id, generation, revision)
                 if current is None:
+                    self._record(state, "stale")
                     return
                 state, policy = current
-                if not self._can_speak(state, policy, decision.action, quoted=quoted):
+                if not self._can_speak(state, policy, decision.action, addressed=addressed):
+                    self._record(state, "cooldown")
                     return
                 # Reserve before the network call: an ambiguous delivery cannot trigger a resend.
                 sent_at = self._clock()
                 state.sends.append(sent_at)
                 state.last_proactive_at = sent_at
-                state.followup_streak = state.followup_streak + 1 if decision.action == "followup" and not quoted else 0
+                state.last_interjection_at = None if addressed or decision.action == "followup" else sent_at
+                state.followup_streak = state.followup_streak + 1 if decision.action == "followup" and not addressed else 0
                 if not self._persist():
                     return
                 recipient = next(m.sender_id for m in context.messages
                                  if m.message_id == decision.target_message_id)
+                stage = "sending"
                 message_id = await asyncio.wait_for(
                     self._send(group_id, text.strip(), decision.target_message_id), self._send_timeout)
                 # The adapter may have already called on_bot_message; do not invalidate its observation.
@@ -538,10 +672,14 @@ class ProactiveEngine:
                 state.last_bot_at = sent_at
                 state.last_recipient = recipient
                 state.after_bot_ids.clear()
+                self._append_bot_message(group_id, state, text, message_id)
+                self._record(state, "sent")
         except asyncio.CancelledError:
             raise
         except Exception:
             # Passive participation must never disrupt the explicit request pipeline or reveal context.
+            if state is not None:
+                self._record(state, "delivery_failed" if stage == "sending" else "model_error")
             return
 
     async def drain(self) -> None:
@@ -561,18 +699,51 @@ class ProactiveEngine:
         self.refresh_configuration()
         now = self._clock()
         groups = {}
-        for group_id, state in self._groups.items():
+        policies = self._snapshot.groups if self._snapshot is not None else {}
+        for group_id, policy in policies.items():
+            if not isinstance(policy, GroupPolicy) or policy.mode not in _MODES:
+                continue
+            state = self._groups.get(group_id)
+            if state is None:
+                state = self._restored_state(group_id)
             self._prune(state, now)
+            mode = _MODES[policy.mode]
+            pending = group_id in self._pending or (state.task is not None and not state.task.done())
+            cooldown_until = self._cooldown_until(state, policy, "reply")
+            if self._policy(self._snapshot, group_id) is None:
+                code = "off"
+            elif not self._state_ok:
+                code = "storage_error"
+            elif state.explicit:
+                code = "explicit_busy"
+            elif pending:
+                code = "pending"
+            elif self._quiet(policy, now):
+                code = "quiet_hours"
+            elif not self._budget(state, policy) or not self._budget(state, policy, sending=True):
+                code = "budget_exhausted"
+            elif cooldown_until > now:
+                code = "cooldown"
+            else:
+                code = "ready"
             groups[group_id] = {
-                "pending": group_id in self._pending or (state.task is not None and not state.task.done()),
+                "status_code": code,
+                "pending": pending,
                 "explicit_busy": bool(state.explicit),
                 "judgments_hour": sum(now - at < 3600 for at in state.judgments),
                 "judgments_day": len(state.judgments),
+                "judgments_hour_limit": self._limit(policy.judgments_per_hour, mode.hourly),
+                "judgments_day_limit": self._limit(policy.judgments_per_day, mode.daily),
                 "replies_hour": sum(now - at < 3600 for at in state.sends),
                 "replies_day": len(state.sends),
+                "replies_hour_limit": mode.reply_hourly,
+                "replies_day_limit": mode.reply_daily,
                 "last_sent_at": state.sends[-1] if state.sends else None,
+                "cooldown_until": cooldown_until if cooldown_until > now else None,
+                "last_event": state.last_event or {"code": "initial", "at": now},
             }
         return {"enabled": self._snapshot is not None and self._snapshot.enabled is True,
+                "generated_at": now,
                 "storage_healthy": self._state_ok,
                 "judgments_day": sum(now - at < 86400 for at in self._global_judgments),
                 "judgments_day_limit": 240, "groups": groups}

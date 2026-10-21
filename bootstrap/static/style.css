@@ -220,6 +220,17 @@ button.proactive-group.is-selected:not(.icon-button, .input-action) { border-col
 .proactive-editor-note { padding-top: 12px; margin: 7px 0 0; border-top: 1px solid #edf0f5; }
 #proactive-reset-group { margin-top: 13px; }
 .proactive-editor .form-row .field { margin-bottom: 8px; }
+.proactive-runtime { margin-top: 23px; padding: 17px; background: #f8f9fc; border: 1px solid #e6eaf3; border-radius: 8px; }
+.proactive-runtime-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.proactive-runtime h3 { margin: 0; color: #4b5772; font-size: 14px; font-weight: 600; }
+.proactive-runtime .note { margin: 7px 0; font-size: 11px; }
+.proactive-runtime-detail { margin: 13px 0; color: #566178; font-size: 12px; line-height: 1.8; }
+.proactive-runtime-usage { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; margin: 15px 0; }
+.proactive-runtime-usage dt, .proactive-runtime-events dt { color: #79859c; font-size: 11px; }
+.proactive-runtime-usage dd { margin: 4px 0 0; color: #46536d; font-size: 15px; font-variant-numeric: tabular-nums; }
+.proactive-runtime-events { display: grid; gap: 9px; margin: 13px 0; padding-top: 12px; border-top: 1px solid #e6eaf3; }
+.proactive-runtime-events > div { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 8px; }
+.proactive-runtime-events dd { margin: 0; color: #617087; font-size: 11px; overflow-wrap: anywhere; line-height: 1.7; }
 @media (max-width: 940px) { .proactive-workspace { grid-template-columns: minmax(190px, .9fr) minmax(0, 1.4fr); } }
 @media (max-width: 700px) {
   .proactive-master { padding: 15px; }

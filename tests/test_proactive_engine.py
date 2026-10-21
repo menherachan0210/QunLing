@@ -8,7 +8,7 @@ import pytest
 
 from qunling.proactive.engine import (
     ConversationContext, EngineConfig, GroupPolicy, Message, ProactiveEngine,
-    validate_decision,
+    reply_character_limit, validate_decision,
 )
 
 
@@ -641,4 +641,219 @@ def test_bot_reply_expires_with_short_context_without_resetting_budgets():
         assert context.followup_candidate_ids == ()
         assert [item.message_id for item in context.messages] == ["new-topic"]
         assert list(state.sends) == [sent_at]
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["quiet", "natural", "active"])
+def test_configured_name_or_alias_can_be_considered_without_recent_bot_reply(mode):
+    async def scenario():
+        h = Harness()
+        h.config = replace(h.config, groups={"100": GroupPolicy(mode=mode, display_name="小群", aliases=("阿群",))})
+        h.engine.on_message(h.message(text="阿群你觉得这个方案如何？"))
+        await h.engine.drain()
+        assert h.checked[0].addressed_candidate_ids == ("m1",)
+        assert h.checked[0].followup_candidate_ids == ()
+        assert len(h.sent) == 1
+    asyncio.run(scenario())
+
+
+def test_name_mention_is_only_a_candidate_and_still_allows_semantic_silence():
+    async def scenario():
+        h = Harness()
+        h.action = "silence"
+        h.engine.on_message(h.message(text="我和小李刚才聊过群灵的设计了"))
+        await h.engine.drain()
+        assert h.checked[0].addressed_candidate_ids == ("m1",)
+        assert not h.generated and not h.sent
+        assert h.engine.status()["groups"]["100"]["last_event"]["code"] == "silence"
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("text, called", [("灵，你怎么看？", True), ("灵", True), ("灵宝，你怎么看？", True), ("灵敏度应该降低", False), ("这个挺灵的", False)])
+def test_single_character_name_requires_clear_calling_boundary(text, called):
+    async def scenario():
+        h = Harness()
+        h.config = replace(h.config, groups={"100": GroupPolicy(mode="quiet", display_name="灵", aliases=("灵宝",))})
+        h.engine.on_message(h.message(text=text))
+        await h.engine.drain()
+        assert bool(h.checked) is called
+        assert bool(h.sent) is called
+    asyncio.run(scenario())
+
+
+def test_addressed_reply_bypasses_ignored_interjection_backoff_but_not_send_spacing():
+    async def scenario():
+        h = Harness()
+        h.config = replace(h.config, groups={"100": GroupPolicy(mode="active")})
+        h.engine.on_message(h.message())
+        await h.engine.drain()
+        h.now += 1
+        h.engine.on_message(h.message("too-early", sender_id="other", text="群灵，你怎么看？"))
+        await h.engine.drain()
+        assert len(h.sent) == 1
+        h.now += 4
+        h.engine.on_message(h.message("called", sender_id="other", text="群灵，你怎么看？"))
+        await h.engine.drain()
+        assert [item[2] for item in h.sent] == ["m1", "called"]
+        assert h.engine._groups["100"].last_interjection_at is None
+        # A genuine engaged exchange is not treated as ten minutes of being ignored.
+        h.now += 45
+        h.engine.on_message(h.message("later-topic", sender_id="third", text="这个细节也值得讨论"))
+        await h.engine.drain()
+        assert h.sent[-1][2] == "later-topic"
+    asyncio.run(scenario())
+
+
+def test_followup_clears_ignored_backoff_only_after_judge_accepts_engagement():
+    async def scenario():
+        h = Harness()
+        h.config = replace(h.config, groups={"100": GroupPolicy(mode="active")})
+        h.engine.on_message(h.message())
+        await h.engine.drain()
+        h.now += 31
+        h.action = "followup"
+        h.engine.on_message(h.message("replying", text="你刚才这个观点有意思，再说说？"))
+        await h.engine.drain()
+        assert len(h.sent) == 2 and h.engine._groups["100"].last_interjection_at is None
+        h.now += 45
+        h.action = "reply"
+        h.engine.on_message(h.message("topic", sender_id="another", text="还有这个细节"))
+        await h.engine.drain()
+        assert len(h.sent) == 3
+    asyncio.run(scenario())
+
+
+def test_old_followup_candidate_does_not_override_latest_unrelated_message_gate():
+    async def scenario():
+        h = Harness()
+        h.engine.on_message(h.message())
+        await h.engine.drain()
+        h.now += 31
+        h.engine.on_message(h.message("potential-followup", text="你刚才这个意思？"))
+        h.engine.on_message(h.message("unrelated", sender_id="other", text="我们继续自己的话题"))
+        await h.engine.drain()
+        assert len(h.checked) == len(h.sent) == 1
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("kind", ["name", "followup", "quote"])
+def test_requested_long_text_can_be_complete_while_unsolicited_text_stays_bounded(kind):
+    async def scenario():
+        h = Harness()
+        h.engine.on_bot_message("100", "可以讨论", message_id="answer", recipient_id="user")
+        h.now += 31
+        kwargs = {}
+        if kind == "name":
+            kwargs["text"] = "群灵，写一篇 400 字的说明"
+        elif kind == "quote":
+            kwargs.update(text="写一篇 400 字的说明", reply_to="answer", sender_id="other")
+        else:
+            h.action = "followup"
+            kwargs["text"] = "那你给我写一篇 400 字的说明"
+        h.text = "字" * 500
+        h.engine.on_message(h.message(**kwargs))
+        await h.engine.drain()
+        assert len(h.sent) == 1 and len(h.sent[0][1]) == 500
+        context, decision = h.generated[0]
+        assert reply_character_limit(context, decision) == 2000
+        h.now += 31
+        h.text = "字" * 2001
+        h.engine.on_message(h.message("too-long", text="群灵，继续说"))
+        await h.engine.drain()
+        assert len(h.sent) == 1
+        assert h.engine.status()["groups"]["100"]["last_event"]["code"] == "invalid_generation"
+    asyncio.run(scenario())
+
+
+def test_snapshot_preserves_ordered_bot_turns_speakers_and_request_boundary():
+    async def scenario():
+        h = Harness()
+        h.action = "silence"
+        h.engine.on_message(h.message("user-one", sender_name="甲", text="第一句话"))
+        await h.engine.drain()
+        h.engine.on_bot_message("100", "第一条回复" * 100, message_id="bot-one", recipient_id="user")
+        h.engine.on_message(h.message("user-two", sender_id="other", sender_name="乙", text="另一人的话"))
+        await h.engine.drain()
+        h.engine.on_bot_message("100", "第二条回复", message_id="bot-two", recipient_id="other")
+        h.engine.on_message(h.message("explicit", explicit_request=True, text="看一下刚才的上下文"))
+        snapshot = h.engine.snapshot("100", before_message_id="explicit", before_timestamp=h.now)
+        assert [item.message_id for item in snapshot] == ["user-one", "bot-one", "user-two", "bot-two"]
+        assert [item.is_bot for item in snapshot] == [False, True, False, True]
+        assert snapshot[0].sender_name == "甲" and snapshot[2].sender_id == "other"
+        assert len(snapshot[1].text) > 400  # Do not keep only a fragment of the answer.
+        h.engine.on_message(h.message("future", text="等待期间的新话"))
+        assert snapshot == h.engine.snapshot("100", before_message_id="explicit", before_timestamp=h.now)
+        assert not h.engine.snapshot("100")
+        assert not h.engine.snapshot("other-group", before_message_id="explicit", before_timestamp=h.now + 1)
+        assert not h.engine.snapshot("100", before_message_id="missing", before_timestamp=h.now)
+        h.config = replace(h.config, revision="2", enabled=False)
+        assert not h.engine.snapshot("100", before_message_id="explicit", before_timestamp=h.now + 1)
+        assert not h.engine._groups
+        await h.engine.drain()
+    asyncio.run(scenario())
+
+
+def test_quote_to_earlier_visible_bot_turn_is_direct_but_bot_turn_cannot_be_target():
+    async def scenario():
+        h = Harness()
+        h.config = replace(h.config, groups={"100": GroupPolicy(mode="quiet")})
+        h.engine.on_bot_message("100", "前一个观点", message_id="earlier", recipient_id="someone")
+        h.engine.on_bot_message("100", "补充一个观点", message_id="later", recipient_id="someone")
+        h.engine.on_message(h.message(reply_to="earlier", text="前一个观点我有个疑问"))
+        await h.engine.drain()
+        assert len(h.sent) == 1
+        assert h.checked[0].addressed_candidate_ids == ("m1",)
+        context = h.checked[0]
+        assert validate_decision({"action": "reply", "target_message_id": "earlier"}, context) is None
+    asyncio.run(scenario())
+
+
+def test_delayed_explicit_request_snapshot_excludes_newer_timestamp_received_before_it():
+    async def scenario():
+        h = Harness()
+        h.action = "silence"
+        h.engine.on_message(h.message("older", timestamp=h.now - 10))
+        h.engine.on_message(h.message("newer", timestamp=h.now))
+        h.engine.on_message(h.message("delayed", timestamp=h.now - 5, explicit_request=True))
+        snapshot = h.engine.snapshot("100", before_message_id="delayed", before_timestamp=h.now - 5)
+        assert [item.message_id for item in snapshot] == ["older"]
+        await h.engine.drain()
+    asyncio.run(scenario())
+
+
+def test_direct_address_still_obeys_daily_and_hourly_budgets():
+    async def scenario():
+        h = Harness()
+        h.config = replace(h.config, groups={"100": GroupPolicy(mode="active", judgments_per_hour=1)})
+        h.engine.on_message(h.message(text="群灵，在吗？"))
+        await h.engine.drain()
+        h.now += 10
+        h.engine.on_message(h.message("another", text="群灵，在吗？"))
+        await h.engine.drain()
+        assert len(h.checked) == len(h.sent) == 1
+        row = h.engine.status()["groups"]["100"]
+        assert row["status_code"] == "budget_exhausted"
+        assert row["last_event"]["code"] == "budget_exhausted"
+    asyncio.run(scenario())
+
+
+def test_diagnostics_include_idle_groups_and_surviving_budget_without_chat_text(tmp_path):
+    async def scenario():
+        h = Harness(state_dir=tmp_path)
+        status = h.engine.status()
+        assert status["groups"]["100"]["status_code"] == "ready"
+        assert not h.engine._groups
+        h.engine.on_message(h.message(text="绝不出现在诊断中的内容"))
+        await h.engine.drain()
+        row = h.engine.status()["groups"]["100"]
+        assert row["status_code"] == "cooldown" and row["cooldown_until"] == h.now + 600
+        assert row["last_event"] == {"code": "sent", "at": h.now}
+        assert row["replies_hour_limit"] == 6 and row["judgments_day_limit"] == 160
+        assert "诊断中的内容" not in json.dumps(h.engine.status(), ensure_ascii=False)
+        await h.engine.close()
+        restored = Harness(state_dir=tmp_path)
+        row = restored.engine.status()["groups"]["100"]
+        assert row["replies_day"] == 1 and row["judgments_day"] == 1
+        assert row["cooldown_until"] == restored.now + 600
+        assert not restored.engine._groups
     asyncio.run(scenario())

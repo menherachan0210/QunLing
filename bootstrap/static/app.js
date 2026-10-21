@@ -22,13 +22,37 @@ let proactiveGroupsReady = false;
 let proactiveAction = false;
 let proactiveLoading = false;
 let proactiveStatus = null;
+let proactiveSavedConfig = null;
 let proactiveLastPoll = 0;
 const proactiveModes = {off: "仅 @ 回复", quiet: "安静参与", natural: "自然参与", active: "活跃参与"};
 const proactiveModeNotes = {
   off: "保留原来的 @ 和 /ai 回复方式，不判断是否主动插话。",
-  quiet: "只自然接住对自己的追问，不主动加入其他人的话题。",
+  quiet: "回应直接称呼、引用或对自己的追问，不主动加入其他人的话题。",
   natural: "结合讨论和上下文选择参与时机，适合先在少量群中尝试。",
   active: "更愿意参与相关讨论，仍会控制频率，避免连续插话。"
+};
+const proactiveRuntimeStates = {
+  off: ["未开启", "neutral", "此群当前不参与自由对话，@ 和 /ai 仍可正常使用。"],
+  quiet_hours: ["安静时段", "neutral", "正在执行已保存的安静时段，暂不主动发言。"],
+  explicit_busy: ["优先处理提问", "neutral", "正在处理明确提问，自由对话暂时让路。"],
+  pending: ["正在处理", "neutral", "正在等待消息合并或判断是否接话。新消息到来时可能重新判断。"],
+  cooldown: ["控制发言频率", "neutral", "普通主动插话正在冷却；点名或引用等接话可能采用更短的间隔。"],
+  budget_exhausted: ["已达参与限额", "warning", "本群或机器人的自由对话限额已用完，额度随时间恢复。@ 提问不受此预算影响。"],
+  ready: ["已就绪", "success", "正在接收本群新消息，并按上下文选择是否接话；开启不代表每条都会回复。"],
+  storage_error: ["已暂停", "error", "运行状态存储异常，已暂停自由对话。请检查服务日志。"],
+  unavailable: ["等待服务", "warning", "暂时无法读取自由对话状态，请刷新重试。"],
+  disconnected: ["QQ 未连接", "warning", "QQ 尚未连接，登录并恢复连接后才能接收群消息。"],
+  unknown: ["状态待确认", "neutral", "当前服务未提供详细运行状态，请刷新或更新服务后再检查。"]
+};
+const proactiveEventNames = {
+  initial: "等待新消息", observed: "已接收新消息", explicit_started: "开始处理明确提问",
+  explicit_finished: "明确提问处理结束", quiet_hours: "安静时段，保持安静",
+  wait: "判断暂缓接话", silence: "判断无需接话", cooldown: "发言间隔未到，保持安静",
+  budget_exhausted: "达到调用限额", judging: "正在判断是否接话", generating: "正在组织回复",
+  sent: "回复已发送", stale: "上下文变化，已取消过期回复", invalid_decision: "判断结果无效，未发言",
+  invalid_generation: "回复内容未通过格式检查，未发言",
+  model_error: "模型调用失败，未发言", delivery_failed: "发送未确认，未自动重发",
+  config_changed: "设置已变化，旧任务已取消"
 };
 let updateExpected = sessionStorage.getItem("qunling-update-pending") || "";
 let polling = false;
@@ -61,6 +85,9 @@ function locked(message) {
   proactiveConfigReady = false;
   proactiveGroupsReady = false;
   proactiveLastPoll = 0;
+  proactiveStatus = null;
+  proactiveSavedConfig = null;
+  $("proactive-runtime").hidden = true;
   $("console-content").hidden = true;
   $("unlock").hidden = false;
   $("qr").hidden = true;
@@ -136,11 +163,54 @@ function proactiveSummary() {
   text("proactive-dirty", proactiveDirty ? "有未保存的修改，保存后才会生效" : "设置独立保存，不影响 AI 接口配置");
   text("proactive-state", proactiveDirty ? "待保存" : paused ? "已暂停" : count ? `${count} 个群已开放` : "尚未选群");
   tone("proactive-state", proactiveDirty ? "warning" : !paused && count ? "success" : "neutral");
+  renderProactiveRuntime();
+}
+function proactiveCount(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 1000000 ? String(value) : "—";
+}
+function proactiveUsage(used, limit) { return `${proactiveCount(used)} / ${proactiveCount(limit)}`; }
+function proactiveTime(value) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > 253402300799) return "暂无记录";
+  return new Date(value * 1000).toLocaleString("zh-CN", {timeZone: "Asia/Shanghai", hour12: false});
+}
+function renderProactiveRuntime() {
+  $("proactive-runtime").hidden = !authenticated || !proactiveSelected;
+  if (!authenticated || !proactiveSelected) return;
+  const saved = proactiveSavedConfig;
+  const status = proactiveStatus;
+  const group = status?.groups?.[proactiveSelected];
+  const mode = saved?.groups?.[proactiveSelected]?.mode || "off";
+  let code = group?.status_code || "unknown";
+  if (!proactiveConfigReady || !status) code = "unavailable";
+  else if (status.storage_healthy === false) code = "storage_error";
+  else if (status.available === false) code = "unavailable";
+  else if (!saved?.enabled || mode === "off") code = "off";
+  else if (!setupState?.qq_logged_in || !setupState?.qq_connected) code = "disconnected";
+  const [label, stateTone, description] = Object.hasOwn(proactiveRuntimeStates, code) ? proactiveRuntimeStates[code] : proactiveRuntimeStates.unknown;
+  text("proactive-runtime-state", label);
+  tone("proactive-runtime-state", stateTone);
+  text("proactive-runtime-note", proactiveDirty ? "以下是服务器已保存设置的状态；当前修改尚未生效。" : "按服务器已保存的设置运行，约每 15 秒刷新。时间为北京时间。");
+  let detail = description;
+  if (code === "cooldown" && Number.isFinite(group?.cooldown_until) && Number.isFinite(status?.generated_at)) {
+    const seconds = Math.ceil(group.cooldown_until - status.generated_at);
+    if (seconds > 0 && seconds <= 86400) detail += ` 普通插话还需约 ${seconds < 60 ? `${seconds} 秒` : `${Math.ceil(seconds / 60)} 分钟`}。`;
+  }
+  text("proactive-runtime-detail", detail);
+  for (const key of ["judgments_hour", "judgments_day", "replies_hour", "replies_day"]) {
+    text(`proactive-${key.replaceAll("_", "-")}`, proactiveUsage(group?.[key], group?.[`${key}_limit`]));
+  }
+  const event = group?.last_event;
+  const eventName = event && Object.hasOwn(proactiveEventNames, event.code) ? proactiveEventNames[event.code] : "暂无可识别的处理记录";
+  text("proactive-last-event", event ? `${eventName} · ${proactiveTime(event.at)}` : "暂无记录");
+  text("proactive-last-sent", proactiveTime(group?.last_sent_at));
+  text("proactive-global-budget", `所有群共用的最近 24 小时判断额度：${proactiveUsage(status?.judgments_day, status?.judgments_day_limit)}。判断额度包含保持安静和调用失败的情况。`);
+  text("proactive-runtime-updated", `状态采样：${proactiveTime(status?.generated_at)}${proactiveConfigReady ? "" : " · 本次读取失败，以上数据可能已过期"}`);
 }
 function renderProactiveEditor() {
   const selected = proactiveSelected;
   $("proactive-empty").hidden = Boolean(selected);
   $("proactive-group-settings").hidden = !selected;
+  renderProactiveRuntime();
   if (!selected || !proactiveDraft) return;
   const member = proactiveGroups.find((group) => group.group_id === selected);
   const group = proactiveDraft.groups[selected] || proactiveDefaultGroup();
@@ -202,6 +272,7 @@ function applyProactive(value, replace = false) {
   if (!validProactiveConfig(value.config)) throw new Error("自由对话设置格式无法识别，请更新管理服务后重试。");
   proactiveConfigReady = true;
   proactiveStatus = value.status || {};
+  proactiveSavedConfig = JSON.parse(JSON.stringify(value.config));
   if (replace || !proactiveDraft || !proactiveDirty) {
     proactiveDraft = JSON.parse(JSON.stringify(value.config));
     proactiveDirty = false;
@@ -245,6 +316,7 @@ async function pollProactive(epoch = authEpoch, force = false, replace = false) 
     if (proactiveDraft) renderProactiveGroups();
   } finally {
     proactiveLoading = false;
+    renderProactiveRuntime();
     controls();
   }
 }
@@ -556,6 +628,8 @@ async function unlock() {
   $("token").value = "";
   loaded = false;
   proactiveDraft = null;
+  proactiveSavedConfig = null;
+  proactiveStatus = null;
   proactiveGroups = [];
   proactiveSelected = "";
   proactiveDirty = false;
