@@ -1,0 +1,32 @@
+--- a/src/langbot/pkg/plugin/connector.py
++++ b/src/langbot/pkg/plugin/connector.py
+@@ -1255,7 +1255,9 @@
+             self.ap.logger.warning(f'Failed to refresh agent runner registry: {e}')
+ 
+     async def ping_plugin_runtime(self):
+-        return await self._runtime_handler().ping()
++        from qunling.runtime_health import ping
++
++        return await ping(self)
+ 
+     async def require_workspace_context(self, context: TenantContext) -> ExecutionContext:
+         """Validate and select one Workspace for this asyncio request task."""
+--- a/src/langbot/pkg/api/http/controller/main.py
++++ b/src/langbot/pkg/api/http/controller/main.py
+@@ -155,6 +155,8 @@
+     async def register_routes(self) -> None:
+         @self.quart_app.route('/healthz')
+         async def healthz():
++            from qunling.runtime_health import snapshot as plugin_health
++
+             get_resource_stats = getattr(
+                 self.ap,
+                 'get_runtime_resource_stats',
+@@ -163,6 +165,7 @@
+             return {
+                 'code': 0,
+                 'msg': 'ok',
++                'plugin_runtime': plugin_health(getattr(self.ap, 'plugin_connector', None)),
+                 'resources': (get_resource_stats() if callable(get_resource_stats) else {}),
+             }
+ 

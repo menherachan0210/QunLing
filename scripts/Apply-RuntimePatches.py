@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 
 
@@ -258,6 +259,42 @@ def proactive_reply_upgrade(name: str, root: Path, payload: bytes, component: st
     return PatchPlan(name, root, delta, "ready", upgrade_from=previous, verify_payload=payload)
 
 
+def recovery_patch_upgrade(name: str, root: Path, payload: bytes, component: str) -> PatchPlan | None:
+    """Upgrade only the complete, pinned previous recovery patch in a scratch tree."""
+    versions = {
+        ('sdk-transport-recovery.patch', 'sdk'): '3a7ae8c346d3abe3ddd0df2c40157133c787c0c5142034e9207c9fa5f47804b0',
+        ('host-plugin-health.patch', 'host'): '55cfdf7b4d4a7f47716046a12286c882a3161e54818f743d76bf921ba54b7074',
+    }
+    expected = versions.get((name, component))
+    if expected is None:
+        return None
+    previous, paths = runtime_payload(
+        (BASE_DIR / 'scripts/runtime-patch-versions' / name).read_text(encoding='utf-8'), component)
+    if hashlib.sha256(previous).hexdigest() != expected:
+        raise PatchError('Previous recovery patch failed integrity verification.')
+    if git_apply(root, previous, '--reverse', '--check').returncode != 0:
+        return None
+    with tempfile.TemporaryDirectory() as directory:
+        scratch = Path(directory)
+        originals = {}
+        for path in paths:
+            target = scratch / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(root / path, target)
+            originals[path] = target.read_text(encoding='utf-8')
+        if (git_apply(scratch, previous, '--reverse').returncode != 0
+                or git_apply(scratch, payload, '--check').returncode != 0
+                or git_apply(scratch, payload).returncode != 0):
+            return None
+        delta = ''.join(''.join(unified_diff(
+            originals[path].splitlines(keepends=True),
+            (scratch / path).read_text(encoding='utf-8').splitlines(keepends=True),
+            fromfile=f'a/{path}', tofile=f'b/{path}')) for path in paths).encode('utf-8')
+    if not delta or git_apply(root, delta, '--check').returncode != 0:
+        return None
+    return PatchPlan(name, root, delta, 'ready', upgrade_from=previous, verify_payload=payload)
+
+
 def build_plan(name: str, root: Path, source: str, component: str) -> PatchPlan:
     payload, paths = runtime_payload(source, component)
     check_targets(root, paths)
@@ -266,7 +303,8 @@ def build_plan(name: str, root: Path, source: str, component: str) -> PatchPlan:
     elif git_apply(root, payload, "--check").returncode == 0:
         state = "ready"
     else:
-        upgrade = proactive_reply_upgrade(name, root, payload, component)
+        upgrade = (proactive_reply_upgrade(name, root, payload, component)
+                   or recovery_patch_upgrade(name, root, payload, component))
         if upgrade is not None:
             return upgrade
         raise PatchError(

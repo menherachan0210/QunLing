@@ -121,7 +121,7 @@ async def test_ping_deadline_includes_blocked_send_and_health_expires(monkeypatc
     connected = asyncio.Event()
     connected.set()
     connector = NS(handler=handler, _runtime_handler=lambda: handler,
-                   _connected=connected, is_enable_plugin=True)
+                   _connected=connected, is_enable_plugin=True, _qunling_workers_ready=handler)
     with pytest.raises(TimeoutError):
         await runtime_health.ping(connector)
     assert runtime_health.snapshot(connector) == {'state':'recovering','healthy':False}
@@ -224,6 +224,7 @@ async def test_blocked_send_cannot_prevent_heartbeat_reconnect(monkeypatch):
         assert not connector._connected.is_set()
         reconnected.append(True)
         connector.handler = NS(ping=healthy)
+        connector._qunling_workers_ready = connector.handler
         connector._connected.set()
     connector.schedule_reconnect = reconnect
     await asyncio.wait_for(namespace['heartbeat_loop'](connector), .5)
@@ -246,3 +247,127 @@ def test_recovery_card_does_not_claim_ready_with_online_qq():
       assert.equal(element('ready').hidden,false);
       assert.equal(element('summary-plugins').textContent,'已就绪');
     """)
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_writing_preserves_shared_connection(patched, monkeypatch):
+    async def blocked(*args):
+        await asyncio.Event().wait()
+    monkeypatch.setattr(patched.stdio, 'run_blocking_with_backpressure', blocked)
+    output = writer()
+    conn = patched.stdio.StdioConnection(asyncio.StreamReader(), output)
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(.01):
+            await conn.send('hello')
+    output.write.assert_not_called()
+    output.transport.abort.assert_not_called()
+    conn._first_message_send_inline = True
+    await conn.send('next request')
+    assert not conn._closed
+
+
+@pytest.mark.asyncio
+async def test_invalid_unsent_message_preserves_shared_connection(patched, monkeypatch):
+    monkeypatch.setattr(patched.stdio, 'MAX_MESSAGE_BYTES', 8)
+    output = writer()
+    conn = patched.stdio.StdioConnection(asyncio.StreamReader(), output, reserve_first_message_send=True)
+    with pytest.raises(ValueError):
+        await conn.send('x'*9)
+    assert not conn._closed
+    output.transport.abort.assert_not_called()
+    await conn.send('ok')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('chunked', [False, True])
+async def test_cancel_after_complete_frame_does_not_abort_shared_pipe(patched, chunked):
+    output = writer()
+    reached = asyncio.Event()
+    async def drain():
+        if not chunked or b'chunk_end' in output.write.call_args.args[0]:
+            reached.set()
+            await asyncio.Event().wait()
+    output.drain.side_effect = drain
+    conn = patched.stdio.StdioConnection(asyncio.StreamReader(), output, chunk_size=20,
+                                         reserve_first_message_send=True)
+    task = asyncio.create_task(conn.send('x'*(100 if chunked else 4)))
+    await asyncio.wait_for(reached.wait(), 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not conn._closed
+    output.transport.abort.assert_not_called()
+    output.drain.side_effect = None
+    await conn.send('ok')
+
+
+@pytest.mark.asyncio
+async def test_closed_channel_recovers_on_first_failed_ping():
+    from langbot_plugin.entities.io.errors import ConnectionClosedError
+    handler = NS(ping=AsyncMock(side_effect=ConnectionClosedError('closed')))
+    connector = NS(handler=handler, _runtime_handler=lambda: handler,
+                   _connected=asyncio.Event(), _closing=False, schedule_reconnect=Mock(),
+                   _qunling_workers_ready=handler)
+    connector._connected.set()
+    with pytest.raises(ConnectionClosedError):
+        await runtime_health.ping(connector)
+    connector.schedule_reconnect.assert_called_once()
+    assert not connector._connected.is_set() and connector._qunling_workers_ready is None
+
+
+@pytest.mark.asyncio
+async def test_events_wait_for_enabled_workers_and_current_handler(monkeypatch):
+    from contextlib import nullcontext
+    handler = NS(list_plugins=AsyncMock(return_value=[]), installation_scope=Mock(return_value=nullcontext()))
+    binding = object()
+    connector = NS(handler=handler, _closing=False, _transport_task=object(),
+                   _connected=asyncio.Event(), is_enable_plugin=True,
+                   _known_desired_states={'on':NS(enabled=True,binding=binding),
+                                          'off':NS(enabled=False,binding=object())})
+    monkeypatch.setattr(runtime_health, 'WORKER_READY_TIMEOUT', .02)
+    with pytest.raises(TimeoutError):
+        await runtime_health.wait_workers_ready(connector, handler)
+    assert connector._qunling_workers_ready is None
+    monkeypatch.setattr(runtime_health, 'AVAILABILITY_TIMEOUT', .02)
+    connector._connected.set()
+    with pytest.raises(TimeoutError):
+        await runtime_health.wait_available(connector)
+    handler.list_plugins.return_value = [{'status':'initialized'}]
+    await runtime_health.wait_workers_ready(connector, handler)
+    handler.installation_scope.assert_called_with(binding)
+    await runtime_health.wait_available(connector)
+    connector.handler = object()
+    with pytest.raises(TimeoutError):
+        await runtime_health.wait_available(connector)
+
+
+@pytest.mark.parametrize('name,component', [
+    ('sdk-transport-recovery.patch', 'sdk'), ('host-plugin-health.patch', 'host')])
+def test_upgrade_previous_complete_recovery_patch(tmp_path, name, component):
+    import langbot_plugin
+    patcher = load('recovery_upgrade_patcher', ROOT/'scripts/Apply-RuntimePatches.py')
+    current = (ROOT/'patches'/name).read_text(encoding='utf-8')
+    previous = (ROOT/'scripts/runtime-patch-versions'/name).read_text(encoding='utf-8')
+    payload, paths = patcher.runtime_payload(current, component)
+    if component == 'sdk':
+        base = Path(langbot_plugin.__file__).parent.parent
+    else:
+        base = ROOT/'langbot'
+        if not base.exists():
+            base = Path(importlib.util.find_spec('langbot').origin).parent.parent.parent
+    for path in paths:
+        destination = tmp_path/path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(base/path, destination)
+    # Normalize the installed candidate (Linux) or pinned base (Windows).
+    if patcher.git_apply(tmp_path, payload, '--reverse', '--check').returncode == 0:
+        assert patcher.git_apply(tmp_path, payload, '--reverse').returncode == 0
+    else:
+        old_payload, _ = patcher.runtime_payload(previous, component)
+        if patcher.git_apply(tmp_path, old_payload, '--reverse', '--check').returncode == 0:
+            assert patcher.git_apply(tmp_path, old_payload, '--reverse').returncode == 0
+    patcher.execute_plans([patcher.build_plan(name,tmp_path,previous,component)], apply=True)
+    plan = patcher.build_plan(name,tmp_path,current,component)
+    assert plan.upgrade_from is not None
+    patcher.execute_plans([plan], apply=True)
+    assert patcher.build_plan(name,tmp_path,current,component).state == 'already-applied'

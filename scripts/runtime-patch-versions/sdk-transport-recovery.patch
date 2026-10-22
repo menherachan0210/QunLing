@@ -1,0 +1,262 @@
+--- a/.venv/Lib/site-packages/langbot_plugin/runtime/io/connections/stdio.py
++++ b/.venv/Lib/site-packages/langbot_plugin/runtime/io/connections/stdio.py
+@@ -41,80 +41,91 @@
+         self._send_lock = asyncio.Lock()  # 发送锁，防止并发发送冲突
+ 
+         self._process_exit_task = None
++        self._closed = False
+ 
+     async def send(self, message: str) -> None:
+         """Send message with chunking support for large data."""
+         async with self._send_lock:  # 确保同一时间只有一个send操作
+-            inline = self._first_message_send_inline
+-            self._first_message_send_inline = False
+-            if inline:
+-                message_bytes = message.encode("utf-8")
+-            else:
+-                message_bytes = await run_blocking_with_backpressure(
+-                    message.encode,
+-                    "utf-8",
+-                )
+-            message_size = len(message_bytes)
+-            if message_size > MAX_MESSAGE_BYTES:
+-                raise ValueError(
+-                    f"Runtime message exceeds {MAX_MESSAGE_BYTES} byte limit"
+-                )
+-            if message_size > self.chunk_size * MAX_MESSAGE_FRAGMENTS:
+-                raise ValueError(
+-                    "Runtime message would require too many stdio fragments"
+-                )
+-
+-            # For small messages, send directly
+-            if message_size <= self.chunk_size:
++            if self._closed:
++                raise ConnectionClosedError("Connection closed")
++            try:
++                inline = self._first_message_send_inline
++                self._first_message_send_inline = False
++                if inline:
++                    message_bytes = message.encode("utf-8")
++                else:
++                    message_bytes = await run_blocking_with_backpressure(
++                        message.encode,
++                        "utf-8",
++                    )
++                message_size = len(message_bytes)
++                if message_size > MAX_MESSAGE_BYTES:
++                    raise ValueError(
++                        f"Runtime message exceeds {MAX_MESSAGE_BYTES} byte limit"
++                    )
++                if message_size > self.chunk_size * MAX_MESSAGE_FRAGMENTS:
++                    raise ValueError(
++                        "Runtime message would require too many stdio fragments"
++                    )
++    
++                # For small messages, send directly
++                if message_size <= self.chunk_size:
++                    try:
++                        self.stdin.write(message_bytes + b"\n")
++                        await self.stdin.drain()
++                    except Exception:
++                        raise ConnectionClosedError("Connection closed during send")
++                    return
++    
++                # For large messages, send in chunks
+                 try:
+-                    self.stdin.write(message_bytes + b"\n")
++                    del message_bytes
++                    if inline:
++                        chunks = split_utf8_chunks(message, self.chunk_size)
++                    else:
++                        chunks = await run_blocking_with_backpressure(
++                            split_utf8_chunks,
++                            message,
++                            self.chunk_size,
++                        )
++                    # Send start marker for chunked message
++                    chunk_header = json.dumps(
++                        {"type": "chunk_start", "total_size": message_size}
++                    )
++                    self.stdin.write(chunk_header.encode("utf-8") + b"\n")
+                     await self.stdin.drain()
++    
++                    # Send message in chunks
++                    offset = 0
++                    for chunk_text in chunks:
++                        chunk_size = len(chunk_text.encode("utf-8"))
++                        chunk_msg = json.dumps(
++                            {
++                                "type": "chunk_data",
++                                "data": chunk_text,
++                                "offset": offset,
++                            }
++                        )
++                        self.stdin.write(chunk_msg.encode("utf-8") + b"\n")
++                        await self.stdin.drain()
++                        offset += chunk_size
++                        # Small delay to prevent overwhelming the connection
++                        await asyncio.sleep(0.001)
++    
++                    # Send end marker
++                    chunk_end = json.dumps({"type": "chunk_end"})
++                    self.stdin.write(chunk_end.encode("utf-8") + b"\n")
++                    await self.stdin.drain()
++    
+                 except Exception:
+                     raise ConnectionClosedError("Connection closed during send")
+-                return
+-
+-            # For large messages, send in chunks
+-            try:
+-                del message_bytes
+-                if inline:
+-                    chunks = split_utf8_chunks(message, self.chunk_size)
+-                else:
+-                    chunks = await run_blocking_with_backpressure(
+-                        split_utf8_chunks,
+-                        message,
+-                        self.chunk_size,
+-                    )
+-                # Send start marker for chunked message
+-                chunk_header = json.dumps(
+-                    {"type": "chunk_start", "total_size": message_size}
+-                )
+-                self.stdin.write(chunk_header.encode("utf-8") + b"\n")
+-                await self.stdin.drain()
+-
+-                # Send message in chunks
+-                offset = 0
+-                for chunk_text in chunks:
+-                    chunk_size = len(chunk_text.encode("utf-8"))
+-                    chunk_msg = json.dumps(
+-                        {
+-                            "type": "chunk_data",
+-                            "data": chunk_text,
+-                            "offset": offset,
+-                        }
+-                    )
+-                    self.stdin.write(chunk_msg.encode("utf-8") + b"\n")
+-                    await self.stdin.drain()
+-                    offset += chunk_size
+-                    # Small delay to prevent overwhelming the connection
+-                    await asyncio.sleep(0.001)
+-
+-                # Send end marker
+-                chunk_end = json.dumps({"type": "chunk_end"})
+-                self.stdin.write(chunk_end.encode("utf-8") + b"\n")
+-                await self.stdin.drain()
+-
+-            except Exception:
+-                raise ConnectionClosedError("Connection closed during send")
++            except BaseException:
++                # Cancellation halfway through a chunked frame poisons the wire.
++                # Abort it so the peer sees EOF instead of consuming later pings
++                # as fragments of the abandoned request. Never replay the request.
++                self._closed = True
++                self.stdin.transport.abort()
++                raise
+ 
+     def _is_valid_json(self, message: str) -> bool:
+         """Check if message is valid JSON."""
+@@ -250,6 +261,11 @@
+                                                 chunks,
+                                             )
+ 
++                                        else:
++                                            raise ConnectionClosedError(
++                                                "Unexpected frame in chunked message"
++                                            )
++
+                                         # Yield control periodically
+                                         if len(chunks) % 50 == 0:
+                                             await asyncio.sleep(0)
+@@ -280,11 +296,16 @@
+             raise ConnectionClosedError("Connection closed")
+ 
+     async def close(self) -> None:
++        self._closed = True
+         self.stdin.close()
+         wait_closed = getattr(self.stdin, "wait_closed", None)
+         if wait_closed is not None:
+-            with contextlib.suppress(Exception):
+-                await wait_closed()
++            try:
++                async with asyncio.timeout(2.0):
++                    await wait_closed()
++            except BaseException:
++                self.stdin.transport.abort()
++                raise
+         if self._process_exit_task is not None:
+             if not self._process_exit_task.done():
+                 self._process_exit_task.cancel()
+--- a/.venv/Lib/site-packages/langbot_plugin/runtime/io/controllers/stdio/client.py
++++ b/.venv/Lib/site-packages/langbot_plugin/runtime/io/controllers/stdio/client.py
+@@ -106,17 +106,15 @@
+ 
+     async def close(self) -> None:
+         """Close pipes and reap the owned subprocess."""
+-        if self.connection is not None:
+-            with contextlib.suppress(Exception):
+-                await self.connection.close()
+-            self.connection = None
+-
+-        process = self.process
+-        if process is None:
+-            return
+-        self.process = None
+-        if process.returncode is not None:
+-            return
+-
+-        if not await stop_process(process):
+-            raise RuntimeError("Stdio subprocess did not exit after SIGKILL")
++        connection, self.connection = self.connection, None
++        process, self.process = self.process, None
++        try:
++            if connection is not None:
++                with contextlib.suppress(Exception):
++                    async with asyncio.timeout(3.0):
++                        await connection.close()
++        finally:
++            # Reap even when shutdown itself is cancelled or pipe flush stalls.
++            if process is not None and process.returncode is None:
++                if not await stop_process(process):
++                    raise RuntimeError("Stdio subprocess did not exit after SIGKILL")
+--- a/.venv/Lib/site-packages/langbot_plugin/runtime/io/handler.py
++++ b/.venv/Lib/site-packages/langbot_plugin/runtime/io/handler.py
+@@ -1364,11 +1364,12 @@
+         try:
+             if invocation is not None:
+                 invocation.require_active()
+-            await self._send_message(
+-                request,
+-                action_context=resolved_context,
+-            )
+-            response = await asyncio.wait_for(future, timeout)
++            async with asyncio.timeout(timeout):
++                await self._send_message(
++                    request,
++                    action_context=resolved_context,
++                )
++                response = await future
+             if invocation is not None:
+                 invocation.require_active()
+             if response.code != 0:
+@@ -1451,10 +1452,14 @@
+         try:
+             if invocation is not None:
+                 invocation.require_active()
+-            await self._send_message(
+-                request,
+-                action_context=resolved_context,
+-            )
++            try:
++                async with asyncio.timeout(timeout):
++                    await self._send_message(
++                        request,
++                        action_context=resolved_context,
++                    )
++            except asyncio.TimeoutError:
++                raise ActionCallTimeoutError(f"Action {action.value} send timed out")
+             while True:
+                 try:
+                     response = await asyncio.wait_for(queue.get(), timeout)

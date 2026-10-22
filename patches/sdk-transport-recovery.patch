@@ -1,6 +1,6 @@
 --- a/.venv/Lib/site-packages/langbot_plugin/runtime/io/connections/stdio.py
 +++ b/.venv/Lib/site-packages/langbot_plugin/runtime/io/connections/stdio.py
-@@ -41,80 +41,91 @@
+@@ -41,80 +41,95 @@
          self._send_lock = asyncio.Lock()  # 发送锁，防止并发发送冲突
  
          self._process_exit_task = None
@@ -32,6 +32,7 @@
 -            if message_size <= self.chunk_size:
 +            if self._closed:
 +                raise ConnectionClosedError("Connection closed")
++            partial_frame = False
 +            try:
 +                inline = self._first_message_send_inline
 +                self._first_message_send_inline = False
@@ -77,6 +78,7 @@
 +                    chunk_header = json.dumps(
 +                        {"type": "chunk_start", "total_size": message_size}
 +                    )
++                    partial_frame = True
 +                    self.stdin.write(chunk_header.encode("utf-8") + b"\n")
                      await self.stdin.drain()
 +    
@@ -100,6 +102,7 @@
 +                    # Send end marker
 +                    chunk_end = json.dumps({"type": "chunk_end"})
 +                    self.stdin.write(chunk_end.encode("utf-8") + b"\n")
++                    partial_frame = False
 +                    await self.stdin.drain()
 +    
                  except Exception:
@@ -148,17 +151,18 @@
 -
 -            except Exception:
 -                raise ConnectionClosedError("Connection closed during send")
-+            except BaseException:
-+                # Cancellation halfway through a chunked frame poisons the wire.
-+                # Abort it so the peer sees EOF instead of consuming later pings
-+                # as fragments of the abandoned request. Never replay the request.
-+                self._closed = True
-+                self.stdin.transport.abort()
++            except BaseException as exc:
++                # Unsent work and complete frames are safe to cancel. Only an
++                # incomplete multi-frame message or a transport error poisons
++                # the shared channel; never replay a possibly executed request.
++                if partial_frame or isinstance(exc, ConnectionClosedError):
++                    self._closed = True
++                    self.stdin.transport.abort()
 +                raise
  
      def _is_valid_json(self, message: str) -> bool:
          """Check if message is valid JSON."""
-@@ -250,6 +261,11 @@
+@@ -250,6 +265,11 @@
                                                  chunks,
                                              )
  
@@ -170,7 +174,7 @@
                                          # Yield control periodically
                                          if len(chunks) % 50 == 0:
                                              await asyncio.sleep(0)
-@@ -280,11 +296,16 @@
+@@ -280,11 +300,16 @@
              raise ConnectionClosedError("Connection closed")
  
      async def close(self) -> None:

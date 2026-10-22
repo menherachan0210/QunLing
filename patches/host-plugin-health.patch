@@ -1,6 +1,16 @@
 --- a/src/langbot/pkg/plugin/connector.py
 +++ b/src/langbot/pkg/plugin/connector.py
-@@ -1255,7 +1255,9 @@
+@@ -1068,6 +1068,9 @@
+                     if space_url:
+                         self.ap.logger.info(f'Pushed marketplace URL to plugin runtime: {space_url}')
+                     await self._prepare_connected_runtime()
++                    from qunling.runtime_health import wait_workers_ready
++
++                    await wait_workers_ready(self, runtime_handler)
+                     if generation == self._generation and not self._closing:
+                         connection_ready = True
+                         self._connected.set()
+@@ -1255,7 +1258,9 @@
              self.ap.logger.warning(f'Failed to refresh agent runner registry: {e}')
  
      async def ping_plugin_runtime(self):
@@ -11,6 +21,16 @@
  
      async def require_workspace_context(self, context: TenantContext) -> ExecutionContext:
          """Validate and select one Workspace for this asyncio request task."""
+@@ -2351,6 +2356,9 @@
+         event: events.BaseEventModel,
+         bound_plugins: list[str] | None = None,
+     ) -> context.EventContext:
++        from qunling.runtime_health import wait_available
++
++        await wait_available(self)
+         query = getattr(event, 'query', None)
+         if query is not None:
+             from ..pipeline.pool import get_query_execution_context
 --- a/src/langbot/pkg/api/http/controller/main.py
 +++ b/src/langbot/pkg/api/http/controller/main.py
 @@ -155,6 +155,8 @@
