@@ -91,6 +91,7 @@ class ConversationContext:
     topic_message_ids: tuple[str, ...] = ()
     participant_ids: tuple[str, ...] = ()
     covered_message_ids: tuple[str, ...] = ()
+    continuation_anchors: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -164,6 +165,7 @@ class _Lane:
     wakeup: asyncio.Event = field(default_factory=asyncio.Event)
     sending: bool = False
     batch_participants: set[str] = field(default_factory=set)
+    handoff_target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +182,7 @@ class _Group:
     seen: dict[str, float] = field(default_factory=dict)
     judgments: deque = field(default_factory=deque)
     sends: deque = field(default_factory=deque)
+    handoffs: deque = field(default_factory=deque)
     last_proactive_at: float | None = None
     last_interjection_at: float | None = None
     last_event: dict | None = None
@@ -208,7 +211,7 @@ def validate_decision(value: object, context: ConversationContext) -> Decision |
     if (not isinstance(covered, list) or len(covered) > MAX_MESSAGES
             or any(not isinstance(key, str) for key in covered) or len(set(covered)) != len(covered)):
         return None
-    if action not in ("silence", "wait", "reply", "followup"):
+    if action not in ("silence", "wait", "reply", "followup", "tool_followup"):
         return None
     if action in ("silence", "wait"):
         return Decision(action, None) if target is None and not covered else None
@@ -224,6 +227,18 @@ def validate_decision(value: object, context: ConversationContext) -> Decision |
         return None
     if action == "followup" and target not in context.followup_candidate_ids:
         return None
+    if action == "tool_followup":
+        anchor_id = dict(context.continuation_anchors).get(target)
+        anchor = next((message for message in context.messages if message.message_id == anchor_id), None)
+        candidate = next((message for message in context.messages if message.message_id == target), None)
+        if (not context.reply_candidate_ids or anchor is None or not anchor.is_bot
+                or anchor.bot_id != context.bot_id or anchor.group_id != context.group_id
+                or str(anchor.message_id).startswith("bot-observed-")
+                or not (anchor.text.strip() or anchor.has_media)
+                or candidate.bot_id != context.bot_id or candidate.group_id != context.group_id
+                or context.messages.index(anchor) >= context.messages.index(candidate)
+                or covered not in ([], [target])):
+            return None
     if (action == "reply" and context.mode == "quiet"
             and target not in context.addressed_candidate_ids):
         return None
@@ -238,6 +253,7 @@ class ProactiveEngine:
         judge: Callable[[ConversationContext], Awaitable[object]],
         generate: Callable[[ConversationContext, Decision], Awaitable[str]],
         send: Callable[[str, str, str], Awaitable[str | None]],
+        handoff: Callable[[ConversationContext, Decision], Awaitable[bool]] | None = None,
         clock: Callable[[], float] = time.time,
         semaphore: asyncio.Semaphore | None = None,
         debounce_scale: float = 1.0,
@@ -250,6 +266,7 @@ class ProactiveEngine:
         self._judge = judge
         self._generate = generate
         self._send = send
+        self._handoff = handoff
         self._clock = clock
         self._semaphore = semaphore if semaphore is not None else asyncio.Semaphore(2)
         self._debounce_scale = max(0.0, debounce_scale)
@@ -286,6 +303,7 @@ class ProactiveEngine:
                 self._history[group_id] = {
                     "judgments": self._timestamps(row["judgments"], now),
                     "sends": self._timestamps(row["sends"], now),
+                    "handoffs": self._timestamps(row.get("handoffs", []), now),
                     "seen": {str(key): at for key, at in row["seen"].items()
                              if isinstance(at, (int, float)) and math.isfinite(at) and 0 <= now - at < 1200},
                     # Old ledgers cannot distinguish an ignored interjection from a
@@ -306,9 +324,9 @@ class ProactiveEngine:
     def _restored_state(self, group_id: str) -> _Group:
         row = self._history.get(group_id, {})
         state = _Group(judgments=deque(row.get("judgments", [])),
-                       sends=deque(row.get("sends", [])), seen=dict(row.get("seen", {})))
-        if state.sends:
-            state.last_proactive_at = state.sends[-1]
+                       sends=deque(row.get("sends", [])), handoffs=deque(row.get("handoffs", [])),
+                       seen=dict(row.get("seen", {})))
+        state.last_proactive_at = self._last_attempt(state)
         last_interjection = row.get("last_interjection_at")
         if (isinstance(last_interjection, (int, float)) and math.isfinite(last_interjection)
                 and 0 <= self._clock() - last_interjection < 600):
@@ -330,15 +348,17 @@ class ProactiveEngine:
             self._prune(state, now)
             self._history[group_id] = {"judgments": list(state.judgments),
                                        "sends": list(state.sends),
+                                       "handoffs": list(state.handoffs),
                                        "last_interjection_at": state.last_interjection_at,
                                        "seen": dict(list(state.seen.items())[-256:])}
         self._history = {
             group_id: {"judgments": self._timestamps(row["judgments"], now),
                        "sends": self._timestamps(row["sends"], now),
+                       "handoffs": self._timestamps(row.get("handoffs", []), now),
                        "last_interjection_at": row.get("last_interjection_at"),
                        "seen": {key: at for key, at in row["seen"].items() if now - at < 1200}}
             for group_id, row in self._history.items()
-            if row["judgments"] or row["sends"] or row["seen"]
+            if row["judgments"] or row["sends"] or row.get("handoffs") or row["seen"]
         }
         if self._state_path is None:
             return self._state_ok
@@ -444,13 +464,31 @@ class ProactiveEngine:
         state.seen = {key: at for key, at in state.seen.items() if now - at < 1200}
         while len(state.seen) > 2000:
             state.seen.pop(next(iter(state.seen)))
-        for events in (state.judgments, state.sends):
+        for events in (state.judgments, state.sends, state.handoffs):
             while events and now - events[0] >= 86400:
                 events.popleft()
 
     def _record(self, state: _Group, code: str) -> None:
         # Never put model output, message text, user names or raw exceptions here.
         state.last_event = {"code": code, "at": self._clock()}
+
+    def get_observed_message(self, group_id: str, message_id: str) -> Message | None:
+        """Read an actual scoped event, including already-claimed continuations.
+
+        This is evidence lookup, not permission to dispatch it again. Unlike
+        resolve_target, it deliberately preserves explicit/claimed events so
+        trusted ingress can bind its native event to the observed message.
+        """
+        self.refresh_configuration()
+        if self._closed or self._policy(self._snapshot, group_id) is None:
+            return None
+        state = self._groups.get(group_id)
+        if state is None:
+            return None
+        self._prune(state, self._clock())
+        return next((message for message in state.messages
+                     if message.message_id == message_id
+                     and message.bot_id == self.bot_id and message.group_id == group_id), None)
 
     def snapshot(self, group_id: str, *, before_message_id: str | None = None,
                  before_timestamp: float | None = None) -> tuple[Message, ...]:
@@ -602,7 +640,14 @@ class ProactiveEngine:
             return
         state.invalid_targets.update(m.message_id for m in state.messages
                                      if m.sender_id == sender_id and not m.is_bot and not m.explicit_request)
-        if lane.batch_participants - {sender_id}:
+        if lane.handoff_target == str(message_id) and lane.task is asyncio.current_task():
+            # The trusted handoff callback promotes its own target to a normal
+            # request. Invalidate old candidates without cancelling this very
+            # admission call; unrelated/revoked tasks still cancel normally.
+            lane.generation += 1
+            lane.candidates.clear()
+            lane.wakeup.set()
+        elif lane.batch_participants - {sender_id}:
             # The shared discussion may already be answering another member.
             # Supersede this owner's old candidates without cancelling others.
             lane.candidates.clear()
@@ -732,6 +777,8 @@ class ProactiveEngine:
         return start <= current < end if start < end else current >= start or current < end
 
     def _context(self, group_id: str, state: _Group, lane: _Lane, policy: GroupPolicy) -> ConversationContext:
+        from qunling.group_context import continuation_anchors
+
         now = self._clock()
         recent_bot = lane.last_bot_at is not None and 0 <= now - lane.last_bot_at <= 120
         candidates = tuple(m.message_id for m in state.messages if m.message_id in lane.candidates)
@@ -776,10 +823,20 @@ class ProactiveEngine:
             candidates = tuple(m.message_id for m in state.messages
                                if m.message_id in set(candidates) | extras)
         candidates = tuple(key for key in candidates if key not in state.covered and key not in state.invalid_targets)
+        continuations = continuation_anchors(tuple(state.messages),
+                                             ignored_terms=(policy.display_name, *policy.aliases))
+        continuations = {key: anchor for key, anchor in continuations.items() if key in candidates}
+        participant_anchor = lane.last_bot_id if candidates and candidates[-1] in followups else None
+        # A public continuation belongs to the shared discussion even when a
+        # different member asks it. Both text-only replies and tool handoffs
+        # must use the same grounded candidates and real bot receipt.
+        followup_ids = set(followups) | set(continuations)
+        followups = tuple(m.message_id for m in state.messages if m.message_id in followup_ids)
         # An exact quote wins over the most recent reply to this participant.
         quoted = next((m.reply_to for m in reversed(state.messages)
                        if m.message_id in candidates and m.reply_to in state.reply_index), None)
-        anchor_id = quoted or lane.last_bot_id
+        shared_anchor = next((continuations[key] for key in reversed(candidates) if key in continuations), None)
+        anchor_id = quoted or participant_anchor or shared_anchor or lane.last_bot_id
         anchor = state.reply_index.get(anchor_id)
         shared = self.context_metadata(group_id, tuple(state.messages), lane.sender_id,
                                        candidates[-1] if candidates else anchor_id)
@@ -790,7 +847,8 @@ class ProactiveEngine:
                                    anchor_id, anchor.at if anchor else lane.last_bot_at,
                                    policy.display_name, addressed, candidates, conversation_id,
                                    lane.sender_id, shared["focus_message_ids"], shared["topic_id"],
-                                   shared["topic_message_ids"], shared["participant_ids"], shared["covered_message_ids"])
+                                   shared["topic_message_ids"], shared["participant_ids"], shared["covered_message_ids"],
+                                   tuple(continuations.items()))
 
     def _current(self, group_id: str, sender_id: str, generation: int, revision: str):
         self.refresh_configuration()
@@ -812,21 +870,26 @@ class ProactiveEngine:
 
     def _budget(self, state: _Group, policy: GroupPolicy, *, sending: bool = False) -> bool:
         now, mode = self._clock(), _MODES[policy.mode]
-        events = state.sends if sending else state.judgments
+        events = (*state.sends, *state.handoffs) if sending else state.judgments
         hourly = mode.reply_hourly if sending else self._limit(policy.judgments_per_hour, mode.hourly)
         daily = mode.reply_daily if sending else self._limit(policy.judgments_per_day, mode.daily)
         global_ok = sending or sum(now - at < 86400 for at in self._global_judgments) < GLOBAL_JUDGMENTS_PER_DAY
         return global_ok and len(events) < daily and sum(now - at < 3600 for at in events) < hourly
 
+    @staticmethod
+    def _last_attempt(state: _Group) -> float | None:
+        return max((events[-1] for events in (state.sends, state.handoffs) if events), default=None)
+
     def _cooldown_until(self, state: _Group, policy: GroupPolicy, action: str, *, addressed: bool = False,
                         lane: _Lane | None = None) -> float:
+        last = self._last_attempt(state)
         if addressed:
-            return state.sends[-1] + 5 if state.sends else 0
+            return last + 5 if last is not None else 0
         if action == "followup":
-            return state.sends[-1] + _MODES[policy.mode].followup_interval if state.sends else 0
+            return last + _MODES[policy.mode].followup_interval if last is not None else 0
         mode = _MODES[policy.mode]
         cooldown = max(mode.cooldown, policy.cooldown_seconds or 0)
-        return max(state.sends[-1] + cooldown if state.sends else 0,
+        return max(last + cooldown if last is not None else 0,
                    lane.last_interjection_at + mode.unanswered_backoff
                    if lane is not None and lane.last_interjection_at is not None else 0)
 
@@ -840,7 +903,7 @@ class ProactiveEngine:
 
     @staticmethod
     def _candidate_timing(context, target):
-        return ("followup" if target in context.followup_candidate_ids else "reply",
+        return ("followup" if target in context.followup_candidate_ids or target in dict(context.continuation_anchors) else "reply",
                 target in context.addressed_candidate_ids)
 
     def _consume(self, group_id, lane, context):
@@ -872,7 +935,7 @@ class ProactiveEngine:
                 return None
             eligible = [target for target in context.reply_candidate_ids
                         if policy.mode != "quiet" or target in context.addressed_candidate_ids
-                        or target in context.followup_candidate_ids]
+                        or target in context.followup_candidate_ids or target in dict(context.continuation_anchors)]
             if not eligible:
                 self._consume(group_id, lane, context)
                 self._record(state, "silence")
@@ -898,6 +961,73 @@ class ProactiveEngine:
                 return None
             self._record(state, "cooldown")
             await self._wait_delay(lane, delay)
+
+    async def _handoff_once(self, group_id, sender, generation, revision, context, decision):
+        """Claim a genuine continuation once, then admit it to the normal chain.
+
+        Admission is not delivery: it consumes a participation attempt but never
+        creates a receipt or marks a question answered. An uncertain acceptance
+        is not retried, even if the callback fails after submitting the request.
+        """
+        addressed = decision.target_message_id in context.addressed_candidate_ids
+        while True:
+            current = self._current(group_id, sender, generation, revision)
+            if current is None:
+                return
+            state, lane, policy = current
+            async with state.send_lock:
+                current = self._current(group_id, sender, generation, revision)
+                if current is None:
+                    return
+                state, lane, policy = current
+                if not self._fresh(context, decision.target_message_id):
+                    self._record(state, "batch_expired")
+                    return
+                target = self.resolve_target(group_id, decision.target_message_id)
+                if target is None:
+                    self._record(state, "stale")
+                    return
+                if not self._budget(state, policy, sending=True):
+                    self._record(state, "budget_exhausted")
+                    return
+                pacing_lane = state.lanes.get(target.sender_id, lane)
+                if self._can_speak(state, pacing_lane, policy, "followup", addressed=addressed):
+                    # Claim before yielding to the callback. Neither a second
+                    # lane nor a failed/uncertain callback can claim this again.
+                    state.invalid_targets.add(decision.target_message_id)
+                    state.handoffs.append(self._clock())
+                    state.last_proactive_at = self._clock()
+                    pacing_lane.followup_streak += 1
+                    if not self._persist():
+                        self._record(state, "handoff_failed")
+                        return
+                    lane.handoff_target = decision.target_message_id
+                    break
+                delay = self._cooldown_until(state, policy, "followup", addressed=addressed, lane=pacing_lane) - self._clock()
+                if delay <= 0 or self._debounce_scale == 0:
+                    self._record(state, "cooldown")
+                    return
+                if self._clock() + delay >= target.timestamp + 90:
+                    self._record(state, "batch_expired")
+                    return
+                self._record(state, "cooldown")
+            await self._wait_delay(lane, delay)
+        try:
+            self._record(state, "handing_off")
+            # timeout(), unlike wait_for(), keeps admission on this exact task
+            # so mark_explicit can recognize its own controlled promotion.
+            async with asyncio.timeout(self._model_timeout):
+                accepted = self._handoff is not None and await self._handoff(context, decision) is True
+            self._record(state, "handed_off" if accepted else "handoff_failed")
+        except asyncio.CancelledError:
+            self._record(state, "handoff_failed")
+            raise
+        except Exception:
+            self._record(state, "handoff_failed")
+        finally:
+            lane.handoff_target = None
+            for other in state.lanes.values():
+                other.wakeup.set()
 
     @staticmethod
     def _new_duplicate_reply(state, policy, target_id, text, previous_receipts):
@@ -1022,6 +1152,7 @@ class ProactiveEngine:
         state = None
         lane = None
         borrowed = ()
+        handing_off = False
         try:
             current = self._current(group_id, sender, generation, revision)
             if current is None:
@@ -1029,7 +1160,8 @@ class ProactiveEngine:
             state, lane, policy = current
             context = self._context(group_id, state, lane, policy)
             delay = 1 if (set(context.reply_candidate_ids) &
-                          (set(context.followup_candidate_ids) | set(context.addressed_candidate_ids))) else _MODES[policy.mode].debounce
+                          (set(context.followup_candidate_ids) | set(context.addressed_candidate_ids)
+                           | set(dict(context.continuation_anchors)))) else _MODES[policy.mode].debounce
             await asyncio.sleep(delay * self._debounce_scale)
             if await self._wait_for_turn(group_id, sender, generation, revision) is None:
                 return
@@ -1075,19 +1207,25 @@ class ProactiveEngine:
                 if not self._fresh(context, decision.target_message_id):
                     self._record(state, "batch_expired")
                     return
-                self._record(state, "generating")
-                previous_receipts = frozenset(state.reply_index)
-                text = await asyncio.wait_for(self._generate(context, decision), self._model_timeout)
-                if (not isinstance(text, str) or not text.strip()
-                        or len(text.strip()) > reply_character_limit(context, decision)
-                        or any((ord(char) < 32 and char not in "\n\t")
-                               or 0xD800 <= ord(char) <= 0xDFFF for char in text)):
-                    self._record(state, "invalid_generation")
-                    return
+                if decision.action != "tool_followup":
+                    self._record(state, "generating")
+                    previous_receipts = frozenset(state.reply_index)
+                    text = await asyncio.wait_for(self._generate(context, decision), self._model_timeout)
+                    if (not isinstance(text, str) or not text.strip()
+                            or len(text.strip()) > reply_character_limit(context, decision)
+                            or any((ord(char) < 32 and char not in "\n\t")
+                                   or 0xD800 <= ord(char) <= 0xDFFF for char in text)):
+                        self._record(state, "invalid_generation")
+                        return
+            if decision.action == "tool_followup":
+                handing_off = True
+                await self._handoff_once(group_id, sender, generation, revision, context, decision)
+                return
             await self._deliver(group_id, sender, generation, revision, context, decision, text.strip(),
                                 previous_receipts)
         except asyncio.CancelledError:
-            if state is not None and lane is not None and self._groups.get(group_id) is state and not lane.explicit:
+            if (not handing_off and state is not None and lane is not None
+                    and self._groups.get(group_id) is state and not lane.explicit):
                 self._record(state, "cancelled")
             raise
         except Exception:
@@ -1162,9 +1300,12 @@ class ProactiveEngine:
                 "judgments_day_limit": self._limit(policy.judgments_per_day, mode.daily),
                 "replies_hour": sum(now - at < 3600 for at in state.sends),
                 "replies_day": len(state.sends),
+                "handoff_attempts_hour": sum(now - at < 3600 for at in state.handoffs),
+                "handoff_attempts_day": len(state.handoffs),
                 "replies_hour_limit": mode.reply_hourly,
                 "replies_day_limit": mode.reply_daily,
                 "last_sent_at": state.sends[-1] if state.sends else None,
+                "last_handoff_at": state.handoffs[-1] if state.handoffs else None,
                 "cooldown_until": cooldown_until if cooldown_until > now else None,
                 "last_event": state.last_event or {"code": "initial", "at": now},
             }

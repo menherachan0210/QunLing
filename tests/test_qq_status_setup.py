@@ -15,6 +15,8 @@ def manager(tmp_path, monkeypatch):
     value = SetupManager(State(tmp_path / "private"), "http://app:5300",
                          "http://napcat:6099", tmp_path, "7zz")
     value.update(configured=True, plugins_ready=True, stage="waiting_qq")
+    value.update(plugin_runtime_state="ready")
+    value.plugin_sampled_at = time.monotonic()
     value.napcat = SimpleNamespace(call=lambda *_: {"isLogin": True})
     monkeypatch.setattr("bootstrap.server.link_napcat", lambda *_: False)
     return value
@@ -83,7 +85,7 @@ def test_stale_snapshot_withdraws_ready_even_when_poll_thread_is_blocked(manager
     status = manager.snapshot()
     assert not status["qq_status_fresh"] and not status["qq_connected"]
     assert not status["qq_logged_in"] and status["qq_state"] == "unknown"
-    assert status["stage"] == "waiting_qq" and status["qq_checked_at"] == checked
+    assert status["stage"] == "recovering" and status["qq_checked_at"] == checked
 
 
 def test_online_offline_unknown_and_recovery(manager):

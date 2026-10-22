@@ -44,7 +44,7 @@ element('settings').elements.api_key={value:'',type:'password'};
 const stored=new Map([['qqbot-setup','test-token']]);
 let config={version:1,revision:'r0',enabled:false,groups:{}};
 let groups=[{group_id:'123',name:'测试群'},{group_id:'456',name:'<img src=x onerror=alert(1)>'}];
-let setup={plugins_ready:true,stage:'ready',configured:true,qq_connected:true,qq_logged_in:true,settings:{}};
+let setup={plugins_ready:true,plugin_runtime_healthy:true,stage:'ready',configured:true,qq_connected:true,qq_logged_in:true,settings:{}};
 let update={available:true,busy:false,phase:'idle'};
 let status={available:true};
 let groupsFailure=false,configFailure=false,conflict=false,unauthorized=false,holdPost=false,releasePost=null;

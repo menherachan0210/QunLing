@@ -197,7 +197,7 @@ diff --git a/src/langbot/pkg/provider/tools/toolmgr.py b/src/langbot/pkg/provide
 -            result = await invoke()
 +            from qunling.qq_dispatch import invoke_tool
 +
-+            result = await invoke_tool(self.ap, query, invoke, name)
++            result = await invoke_tool(self.ap, query, invoke, name, source=source)
          except asyncio.CancelledError:
              duration_ms = int((time.perf_counter() - start_time) * 1000)
              await self._record_tool_call(

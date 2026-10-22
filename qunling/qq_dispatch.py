@@ -9,12 +9,141 @@ import asyncio
 from collections import deque, OrderedDict
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+import hashlib
+import inspect
+import json
 import os
 import time
 import uuid
 
 _bypass = ContextVar("qq_admission_bypass", default=False)
 _notice = ContextVar("qq_control_notice", default=False)
+_continuation = ContextVar("qq_continuation_admission", default=None)
+_ARGUMENT_NAMES = ("bot_uuid", "launcher_type", "launcher_id", "sender_id", "message_event", "message_chain",
+                   "adapter", "pipeline_uuid", "routed_by_rule", "variables", "execution_context")
+# Reviewed plugin tools with no message/file delivery, editing, job management,
+# arbitrary execution or persistent memory mutation. Mixed-action tools are
+# deliberately absent; an unknown tool or source is denied by default.
+CONTINUATION_READ_TOOLS = frozenset({
+    "read_recent_group_context", "read_group_context_images", "read_forwarded_messages",
+    "query_group_members", "read_qq_avatar", "read_text_attachment", "recall_memory",
+    "search_web", "read_web_page", "search_web_images", "list_web_files", "list_edit_image_references",
+})
+
+
+def _content_fingerprint(arguments):
+    payload = (arguments["message_event"].model_dump_json() + "\0"
+               + arguments["message_chain"].model_dump_json())
+    return hashlib.sha256(payload.encode()).digest()
+
+
+def _argument_identity(arguments):
+    context = arguments.get("execution_context")
+    placement = None if context is None else (
+        context.instance_uuid, context.workspace_uuid, context.placement_generation)
+    return (arguments["bot_uuid"], getattr(arguments["launcher_type"], "value", None),
+            str(arguments["launcher_id"]), str(arguments["sender_id"]),
+            arguments.get("pipeline_uuid"), arguments.get("routed_by_rule", False), placement)
+
+
+@dataclass(eq=False)
+class _ObservedIngress:
+    arguments: dict
+    owner: tuple
+    identity: tuple
+    fingerprint: bytes
+    completion: asyncio.Event
+    created: float = field(default_factory=time.monotonic)
+    observed: bool = False
+    claimed: bool = False
+
+    def matches(self, arguments):
+        try:
+            return (all(arguments[key] is self.arguments[key]
+                        for key in ("adapter", "message_event", "message_chain"))
+                    and _argument_identity(arguments) == self.identity
+                    and _content_fingerprint(arguments) == self.fingerprint)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return False
+
+
+@dataclass(eq=False)
+class _ContinuationGrant:
+    ap: object
+    ingress: _ObservedIngress
+    validate: object
+    created: float = field(default_factory=time.monotonic)
+    consumed: bool = False
+    admission_task: object = field(default_factory=asyncio.current_task)
+
+
+def _grant_bound(grant, query=None):
+    if not isinstance(grant, _ContinuationGrant):
+        return False
+    record = grant.ingress
+    arguments = record.arguments
+    adapter = arguments["adapter"]
+    runtime = getattr(adapter, "_runtime", None)
+    context = getattr(runtime, "execution_context", None)
+    entity = getattr(runtime, "bot_entity", None)
+    if (not record.observed or not record.matches(arguments) or runtime is None or context is None
+            or _managed_app(grant.ap.query_pool, arguments) is not grant.ap
+            or getattr(runtime, "ap", None) is not grant.ap or getattr(runtime, "adapter", None) is not adapter
+            or getattr(runtime, "enable", None) is not True or getattr(entity, "enable", None) is not True
+            or getattr(entity, "adapter", None) != "onebot-v11"
+            or getattr(entity, "uuid", None) != arguments["bot_uuid"]
+            or (context.instance_uuid, context.workspace_uuid, context.placement_generation) != record.owner[:3]):
+        return False
+    if query is not None:
+        return (query.adapter is adapter and query.message_event is arguments["message_event"]
+                and _scope(query) == record.owner and query.pipeline_uuid == arguments["pipeline_uuid"])
+    return True
+
+
+async def _validate_grant(grant, query=None):
+    if not _grant_bound(grant, query):
+        return False
+    try:
+        async with asyncio.timeout(5):
+            result = grant.validate()
+            if inspect.isawaitable(result):
+                result = await result
+        return result is True and _grant_bound(grant, query)
+    except Exception:
+        return False
+
+
+async def admit_continuation(ap, arguments, *, validate):
+    """Re-admit one successfully observed ingress using a host-only grant.
+
+    ``validate`` is a zero-argument sync/async predicate returning exactly True.
+    It must recheck the host's independent authorization grant, including the
+    original participant, revision and placement, after its ingress cache entry
+    has been consumed. It is retained for queued/preflight/tool revalidation.
+    """
+    if not callable(validate) or not isinstance(arguments, dict):
+        return None
+    service = getattr(ap, "_qq_dispatch", None)
+    record = None if service is None else service.continuations.get(id(arguments.get("message_event")))
+    if (record is None or record.claimed or time.monotonic() - record.created > 180
+            or not record.matches(arguments)):
+        return None
+    try:
+        async with asyncio.timeout(service.observation_barrier_timeout):
+            await record.completion.wait()
+    except TimeoutError:
+        return None
+    if record.claimed or not record.observed or not record.matches(arguments):
+        return None
+    record.claimed = True  # no await before this one-shot claim
+    grant = _ContinuationGrant(ap, record, validate)
+    if not await _validate_grant(grant):
+        return None
+    token = _continuation.set(grant)
+    try:
+        return await ap.query_pool.add_query(**record.arguments)
+    finally:
+        _continuation.reset(token)
 
 
 def is_control_notice():
@@ -125,6 +254,7 @@ class Task:
     tool_tasks: set = field(default_factory=set)
     terminal: str = ""
     notices: set = field(default_factory=set)
+    continuation: _ContinuationGrant | None = None
 
 
 class Dispatch:
@@ -153,6 +283,7 @@ class Dispatch:
         self.sequence = 0
         self.retired = OrderedDict()
         self.preparing = {}
+        self.continuations = OrderedDict()
 
     def retire(self, task):
         self.tasks.pop(task.query.query_uuid, None)
@@ -190,6 +321,22 @@ class Dispatch:
         self.observation_changed.set()
         if self.observer is None or self.observer.done():
             self.observer = asyncio.create_task(self._observe(), name="qq-receive-observer")
+        return completion
+
+    def remember_continuation(self, query, arguments, completion):
+        if _explicit_raw(query):
+            return
+        arguments = {key: arguments[key] for key in _ARGUMENT_NAMES}
+        arguments["variables"] = dict(arguments.get("variables") or {})
+        record = _ObservedIngress(arguments, _scope(query), _argument_identity(arguments),
+                                  _content_fingerprint(arguments), completion)
+        self.continuations[id(query.message_event)] = record
+        now = time.monotonic()
+        for key, item in list(self.continuations.items()):
+            if now - item.created > 180:
+                self.continuations.pop(key, None)
+        while len(self.continuations) > 256:
+            self.continuations.popitem(last=False)
 
     async def _observe(self):
         from langbot_plugin.api.entities import events
@@ -225,6 +372,9 @@ class Dispatch:
                 async with asyncio.timeout(self.observation_timeout):
                     await pipeline._assert_execution_active(query)
                     await self.ap.plugin_connector.emit_event(event, pipeline.bound_plugins)
+                    record = self.continuations.get(id(query.message_event))
+                    if record is not None:
+                        record.observed = True
             except Exception:
                 self.observation_failed += 1
             finally:
@@ -325,18 +475,28 @@ class Dispatch:
 
 async def intercept_add(pool, arguments):
     """Called before any foreground queue admission; returns handled/result."""
+    continuation = _continuation.get()
+    if continuation is not None and (
+            not isinstance(continuation, _ContinuationGrant)
+            or continuation.admission_task is not asyncio.current_task()
+            or _managed_app(pool, arguments) is not continuation.ap):
+        return True, None
     if _bypass.get() or not os.environ.get("QUNLING_DATA_DIR"):
         return False, None
     ap = _managed_app(pool, arguments)
     if ap is None:
         return False, None
+    if continuation is not None:
+        if (not isinstance(continuation, _ContinuationGrant) or continuation.ap is not ap
+                or continuation.consumed or time.monotonic() - continuation.created > 15
+                or not continuation.ingress.matches(arguments) or not _grant_bound(continuation)):
+            return True, None
+        continuation.consumed = True
     from langbot_plugin.api.entities.builtin.pipeline.query import Query
     from langbot.pkg.pipeline.entities import ResultType
     from langbot.pkg.pipeline.resprule.resprule import GroupRespondRuleCheckStage
 
-    names = ("bot_uuid", "launcher_type", "launcher_id", "sender_id", "message_event", "message_chain",
-             "adapter", "pipeline_uuid", "routed_by_rule", "variables", "execution_context")
-    kwargs = {key: arguments[key] for key in names}
+    kwargs = {key: arguments[key] for key in _ARGUMENT_NAMES}
     kwargs["variables"] = dict(kwargs.get("variables") or {})
     received_at = time.monotonic()
     service = _service(ap)
@@ -373,12 +533,16 @@ async def intercept_add(pool, arguments):
                           if isinstance(c.inst, GroupRespondRuleCheckStage)), None)
             matched = True
             replacement = query.message_chain.model_copy(deep=True)
-            if check is not None:
+            if check is not None and continuation is None:
                 original = query.message_chain
                 query.message_chain = replacement
                 matched = (await check.process(query, "qq-admission")).result_type == ResultType.CONTINUE
                 replacement = query.message_chain
                 query.message_chain = original
+            if continuation is not None:
+                await _authorized_notice(ap, query)
+                if not await _validate_grant(continuation, query):
+                    raise RuntimeError("QQ continuation authorization changed")
     except Exception:
         # Do not turn an ingress/config failure into silent loss of a mention.
         service.preparing.pop(sequence, None)
@@ -394,11 +558,14 @@ async def intercept_add(pool, arguments):
         raise
     if not matched:
         service.preparing.pop(sequence, None)
-        service.observe(query, pipeline)
+        completion = service.observe(query, pipeline)
         _complete(query)
+        service.remember_continuation(query, kwargs, completion)
+        from qunling.proactive.host import remember_ingress
+        remember_ingress(kwargs["adapter"], kwargs["message_event"], kwargs)
         return True, None
     command = str(replacement).strip()
-    if command in {"任务状态", "取消任务"}:
+    if continuation is None and command in {"任务状态", "取消任务"}:
         try:
             await service.control(query, command)
             _complete(query)
@@ -406,17 +573,21 @@ async def intercept_add(pool, arguments):
             service.preparing.pop(sequence, None)
             service.observation_changed.set()
         return True, None
-    task = Task(query=query, owner=_scope(query), created=received_at, sequence=sequence)
+    task = Task(query=query, owner=_scope(query), created=received_at, sequence=sequence,
+                continuation=continuation)
     token = _bypass.set(True)
     try:
         # Admission and registration contain no await after pool.add_query
         # returns: consumer cannot see a half-registered explicit request.
         admitted = await pool.add_query(**kwargs)
         _attr(admitted, "_qq_trigger_replacement", replacement)
+        if continuation is not None:
+            _attr(admitted, "_qq_continuation", continuation)
         service.register(admitted, task)
         return True, admitted
     except Exception:
-        await service.notice(query, "当前请求已排满，这次尚未开始执行，请稍后再试。")
+        if continuation is None:
+            await service.notice(query, "当前请求已排满，这次尚未开始执行，请稍后再试。")
         _complete(query)
         return True, None
     finally:
@@ -482,6 +653,11 @@ def begin_processing(query):
 
 
 async def preflight(query, operation):
+    grant = getattr(query, "_qq_continuation", None)
+    if grant is not None and not await _validate_grant(grant, query):
+        if inspect.iscoroutine(operation):
+            operation.close()
+        raise RuntimeError("QQ continuation authorization was revoked")
     if protected(query):
         return await asyncio.wait_for(operation, 5)
     return await operation
@@ -498,7 +674,13 @@ async def run_pipeline(ap, query, pipeline):
         if task.done.is_set():
             return
         async with asyncio.timeout(service.run_timeout):
+            if task.continuation is not None and not await _validate_grant(task.continuation, query):
+                await service.stop(task, "cancelled", notify=False)
+                return
             await service.barrier(query)
+            if task.continuation is not None and not await _validate_grant(task.continuation, query):
+                await service.stop(task, "cancelled", notify=False)
+                return
             await pipeline.run(query)
         if query.variables.get("_monitoring_has_error") and not getattr(query, "_qq_delivery_confirmed", False):
             message = ("这次回复未能确认发送成功，已停止；不会自动重发。" if
@@ -549,11 +731,21 @@ async def fail_cleanup(ap, query):
     _complete(query)
 
 
-async def invoke_tool(ap, query, invoke, name=""):
+def _continuation_tool_denied(code):
+    return json.dumps({
+        "status": "blocked", "error": code, "executed": False,
+        "instruction": "本次普通群聊续问只允许读取和查询；该工具未执行。可继续使用已有证据回答，"
+        "不要声称生成、修改或发送了内容。需要创建、编辑、上传、删除或管理任务时，需用户明确 @ 发起该操作。",
+    }, ensure_ascii=False)
+
+
+async def invoke_tool(ap, query, invoke, name="", *, source=""):
     """Wrap authorized host tool execution (plugin, MCP, skill, native)."""
     service = getattr(ap, "_qq_dispatch", None)
     task = None if service is None else service.tasks.get(getattr(query, "query_uuid", ""))
     if task is None:
+        if getattr(query, "_qq_continuation", None) is not None:
+            return _continuation_tool_denied("continuation_inactive")
         if protected(query) or (service and getattr(query, "query_uuid", "") in service.retired):
             raise RuntimeError("The owning QQ request has finished or was cancelled")
         return await invoke()
@@ -562,6 +754,11 @@ async def invoke_tool(ap, query, invoke, name=""):
         raise RuntimeError("QQ task identity does not match the active request")
     if _scope(query) != task.owner or task.done.is_set():
         raise RuntimeError("The owning QQ request is no longer active")
+    if task.continuation is not None:
+        if source != "plugin" or name not in CONTINUATION_READ_TOOLS:
+            return _continuation_tool_denied("continuation_read_only")
+        if not await _validate_grant(task.continuation, task.query):
+            return _continuation_tool_denied("continuation_revoked")
     # Serial per request, including SDK parallel tool calls. A run must never
     # resume its model while one of its other tools still holds the lease.
     async with task.tool_lock:
@@ -580,6 +777,8 @@ async def invoke_tool(ap, query, invoke, name=""):
             async with asyncio.timeout(service.tool_queue_timeout):
                 await service.tools.acquire()
             try:
+                if task.continuation is not None and not await _validate_grant(task.continuation, task.query):
+                    return _continuation_tool_denied("continuation_revoked")
                 task.phase, task.changed = "tool", time.monotonic()
                 timeout = 420 if name in {"generate_image", "edit_image"} else service.tool_timeout
                 async with asyncio.timeout(timeout):

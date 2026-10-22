@@ -49,10 +49,12 @@ class SetupManager:
         self.pending = None
         self.stopping = threading.Event()
         self.qq_sampled_at = None
+        self.plugin_sampled_at = None
         self.status = {
             "stage": "starting",
             "message": "正在启动服务，首次安装依赖可能需要数分钟。",
             "plugins_ready": False,
+            "plugin_runtime_state": "unknown",
             "configured": False,
             "qq_logged_in": False,
             "qq_connected": False,
@@ -70,6 +72,12 @@ class SetupManager:
     def snapshot(self):
         with self.lock:
             result = dict(self.status)
+            plugin_sampled_at = getattr(self, "plugin_sampled_at", None)
+            plugin_fresh = (plugin_sampled_at is not None
+                            and 0 <= time.monotonic() - plugin_sampled_at <= QQ_STATUS_TTL)
+            if not plugin_fresh:
+                result["plugin_runtime_state"] = "unknown"
+            result["plugin_runtime_healthy"] = (plugin_fresh and result.get("plugin_runtime_state") == "ready")
             fresh = (self.qq_sampled_at is not None
                      and 0 <= time.monotonic() - self.qq_sampled_at <= QQ_STATUS_TTL)
             result["qq_status_fresh"] = fresh
@@ -78,6 +86,10 @@ class SetupManager:
                               qq_connected=False, qr_image="")
                 if result["stage"] == "ready":
                     result.update(stage="waiting_qq", message="QQ 状态检查已过期，正在重新确认连接。")
+            if (result["configured"] and result["plugins_ready"]
+                    and result["stage"] in {"ready", "waiting_qq"}
+                    and not result["plugin_runtime_healthy"]):
+                result.update(stage="recovering", message="功能组件暂时没有响应，正在检测并自动恢复；QQ 登录状态单独显示。")
             return result
 
     def _record_qq(self, state, logged_in=False, connected=False, image="", *, sampled_at=None):
@@ -328,6 +340,10 @@ class SetupManager:
                 self._qq_status(self.state.read(default={}))
             except Exception:
                 self._record_qq("unknown")
+            runtime_state = self.api.runtime_health()
+            with self.lock:
+                self.status["plugin_runtime_state"] = runtime_state
+                self.plugin_sampled_at = time.monotonic()
             self.stopping.wait(4)
 
 

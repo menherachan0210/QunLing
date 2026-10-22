@@ -27,6 +27,19 @@ class LangBotAPI:
         self.http = requests.Session()
         self.http.trust_env = False
 
+    def runtime_health(self):
+        """Read the cached probe without waiting on plugin RPC or Workspace locks."""
+        try:
+            response = self.http.get(self.url + "/healthz", timeout=(2, 3))
+            response.raise_for_status()
+            value = response.json().get("plugin_runtime", {})
+            if (isinstance(value, dict) and value.get("healthy") is True
+                    and value.get("state") == "ready"):
+                return "ready"
+            return "recovering" if isinstance(value, dict) and value.get("state") == "recovering" else "unknown"
+        except (requests.RequestException, ValueError, TypeError, AttributeError):
+            return "unknown"
+
     def call(self, method, path, data=None, _refresh=True):
         if not path.startswith("/api/v1/"):
             raise SetupError("无效的管理接口。")

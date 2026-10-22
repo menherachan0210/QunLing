@@ -26,6 +26,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 SDK_PREFIX = ".venv/Lib/site-packages/"
 PATCHES = (
     ("host-managed-runtime-transport.patch", "host", False),
+    ("host-plugin-health.patch", "host", False),
     ("host-persisted-plugin-installations.patch", "host", False),
     ("host-tool-password-redaction.patch", "host", False),
     ("host-proactive-chat.patch", "host", False),
@@ -50,6 +51,7 @@ PATCHES = (
     ("sdk-attachment-message-budget.patch", "sdk", False),
     ("sdk-tool-provenance.patch", "sdk", False),
     ("sdk-qunling-worker-storage.patch", "sdk", False),
+    ("sdk-transport-recovery.patch", "sdk", False),
 )
 
 
@@ -223,16 +225,25 @@ def proactive_reply_upgrade(name: str, root: Path, payload: bytes, component: st
     known payload and every legacy hunk must match before a one-line delta is
     even proposed. Other patch names/versions retain the normal strict checks.
     """
-    if name != "host-proactive-chat.patch" or component != "host":
+    if component != "host":
         return None
-    path = "src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py"
-    old = "            proactive_sent(self, native.group_id, message, raw, str(native.user_id))\n"
-    new = old[:-2] + ", reply_to=str(native.message_id) if getattr(native, 'message_id', None) is not None else None)\n"
+    if name == "host-proactive-chat.patch":
+        path = "src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py"
+        old = "            proactive_sent(self, native.group_id, message, raw, str(native.user_id))\n"
+        new = old[:-2] + ", reply_to=str(native.message_id) if getattr(native, 'message_id', None) is not None else None)\n"
+        previous_hash = "730713902613a135d25330a71ac54e5ba80e044f6bd20a399804f099b5043f0c"
+    elif name == "host-qq-dispatch.patch":
+        path = "src/langbot/pkg/provider/tools/toolmgr.py"
+        old = "            result = await invoke_tool(self.ap, query, invoke, name)\n"
+        new = "            result = await invoke_tool(self.ap, query, invoke, name, source=source)\n"
+        previous_hash = "eb9ae5e935be58d3e2804d6f61007203756dd21849646d89bbe524f88c28e0da"
+    else:
+        return None
     new_added = ("+" + new).encode("utf-8")
     if payload.count(new_added) != 1:
         return None
     previous = payload.replace(new_added, ("+" + old).encode("utf-8"), 1)
-    if hashlib.sha256(previous).hexdigest() != "730713902613a135d25330a71ac54e5ba80e044f6bd20a399804f099b5043f0c":
+    if hashlib.sha256(previous).hexdigest() != previous_hash:
         return None
     if git_apply(root, previous, "--reverse", "--check").returncode != 0:
         return None

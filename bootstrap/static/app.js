@@ -53,6 +53,9 @@ const proactiveEventNames = {
   budget_exhausted: "达到调用限额", judging: "正在判断是否接话", generating: "正在组织回复",
   sent: "回复已发送", stale: "本次回复已过期，未发送", cancelled: "任务已取消",
   duplicate_reply: "同话题已回复，省略重复内容",
+    handing_off: "续聊需要资料，正在转入查询",
+    handed_off: "续聊已进入查询流程，等待实际答复",
+    handoff_failed: "续聊转入查询失败，未自动重试",
   batch_expired: "本批次已过期，未继续回复", invalid_decision: "判断结果无效，未发言",
   invalid_generation: "回复内容未通过格式检查，未发言",
   model_error: "模型调用失败，未发言", delivery_failed: "发送未确认，未自动重发",
@@ -230,6 +233,9 @@ function renderProactiveRuntime() {
       && conversations.every(value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 1000000)) {
     detail += ` 当前 ${conversations[0]} 路接话处理中、${conversations[1]} 路等待、${conversations[2]} 个明确任务。`;
   }
+  if (Number.isSafeInteger(group?.handoff_attempts_day) && group.handoff_attempts_day > 0) {
+    detail += ` 最近 24 小时有 ${group.handoff_attempts_day} 次续聊转入查询，共用参与额度；入队不代表已回复。`;
+  }
   text("proactive-runtime-detail", detail);
   for (const key of ["judgments_hour", "judgments_day", "replies_hour", "replies_day"]) {
     text(`proactive-${key.replaceAll("_", "-")}`, proactiveUsage(group?.[key], group?.[`${key}_limit`]));
@@ -382,19 +388,21 @@ function summary(name, label, detail, state = "neutral") {
 }
 function renderSetup(state) {
   const qq = qqHealth(state);
-  const ready = state.stage === "ready" && state.configured && qq.connected;
+  const runtimeReady = state.plugin_runtime_healthy === true;
+  const recovering = state.configured && state.plugins_ready && !runtimeReady;
+  const ready = state.stage === "ready" && state.configured && qq.connected && runtimeReady;
   const failed = state.stage === "error";
-  const label = failed ? "需要处理" : ready ? "运行就绪" : state.stage === "configuring" ? "配置中" : !state.plugins_ready ? "初始化中" : !state.configured ? "等待配置" : qq.label;
+  const label = failed ? "需要处理" : ready ? "运行就绪" : state.stage === "configuring" ? "配置中" : recovering ? "组件恢复中" : !state.plugins_ready ? "初始化中" : !state.configured ? "等待配置" : qq.label;
   text("global-state", label);
   text("sidebar-status", label);
   const checkingQQ = !failed && state.configured && state.plugins_ready && state.stage !== "configuring";
-  text("status", checkingQQ && !ready ? qq.detail : state.message || "管理服务已连接。");
+  text("status", recovering ? "功能组件暂未确认可用，正在检测并自动恢复。" : checkingQQ && !ready ? qq.detail : state.message || "管理服务已连接。");
   tone("status", failed ? "error" : ready ? "success" : "neutral");
   connectionTone(failed ? "error" : ready ? "success" : "warning");
   text("last-sync", qq.checkedAt ? "QQ 检查于 " + new Date(qq.checkedAt * 1000).toLocaleString("zh-CN", {timeZone: "Asia/Shanghai", hour12: false}) + (qq.fresh ? "" : " · 状态已过期") : "QQ 状态尚未确认");
   summary("qq", qq.label, qq.detail, qq.tone);
   summary("ai", state.configured ? "已配置" : "待配置", state.settings?.chat_model || "填写接口地址与模型", state.configured ? "success" : "neutral");
-  summary("plugins", state.plugins_ready ? "已就绪" : "初始化中", state.plugins_ready ? "功能组件已完成初始化" : "首次安装可能需要几分钟", state.plugins_ready ? "success" : "warning");
+  summary("plugins", state.plugins_ready && runtimeReady ? "已就绪" : state.plugins_ready ? "恢复中" : "初始化中", state.plugins_ready && runtimeReady ? "功能组件心跳正常" : state.plugins_ready ? "组件已安装，正在确认通信是否恢复" : "首次安装可能需要几分钟", state.plugins_ready && runtimeReady ? "success" : "warning");
   $("ready").hidden = !ready;
   const showQR = Boolean(state.qr_image) && qq.fresh && ["waiting_login", "offline"].includes(qq.code);
   $("qr").hidden = !showQR;
@@ -402,7 +410,7 @@ function renderSetup(state) {
   $("connection-card").dataset.state = qq.connected ? "connected" : qq.loggedIn ? "pending" : "waiting";
   if (showQR && $("qr").src !== state.qr_image) $("qr").src = state.qr_image;
   if (!showQR) $("qr").removeAttribute("src");
-  text("qq-status", qq.connected ? "QQ 已连接，随时可以开始聊" : showQR ? qq.code === "offline" ? "QQ 已离线，请重新扫码并在手机上确认" : "使用手机 QQ 扫码，并在手机上确认" : qq.code === "waiting_login" ? "正在等待登录二维码…" : qq.detail);
+  text("qq-status", qq.connected ? runtimeReady ? "QQ 已连接，随时可以开始聊" : "QQ 已连接，功能组件正在恢复" : showQR ? qq.code === "offline" ? "QQ 已离线，请重新扫码并在手机上确认" : "使用手机 QQ 扫码，并在手机上确认" : qq.code === "waiting_login" ? "正在等待登录二维码…" : qq.detail);
   if (!loaded && state.settings?.base_url) {
     for (const [key, value] of Object.entries(state.settings)) {
       if (key !== "api_key" && $("settings").elements[key]) {
