@@ -15,6 +15,7 @@ import json
 import os
 import time
 import uuid
+from qunling import request_journal as journal
 
 _bypass = ContextVar("qq_admission_bypass", default=False)
 _notice = ContextVar("qq_control_notice", default=False)
@@ -406,6 +407,8 @@ class Dispatch:
         task.query = query
         _attr(query, "_qq_task", task)
         self.tasks[query.query_uuid] = task
+        journal.attach(self.ap, query, task.owner, origin='continuation' if task.continuation else 'mention')
+        journal.record(query, 'queued')
         task.watcher = asyncio.create_task(self.watch(task), name="qq-task-watch")
 
     async def watch(self, task):
@@ -430,6 +433,7 @@ class Dispatch:
         if task.done.is_set():
             return
         task.terminal = reason
+        journal.record(task.query, 'ended', status='cancelled' if reason == 'cancelled' else 'failed', reason=reason)
         task.done.set()
         for child in tuple(task.tool_tasks):
             if child is not asyncio.current_task():
@@ -465,6 +469,8 @@ class Dispatch:
             await self.notice(query, "你的请求：" + "；".join(descriptions) if descriptions else "你在这个群里没有尚未完成的请求。")
 
     async def close(self):
+        for pending in tuple(self.tasks.values()):
+            journal.record(pending.query, 'ended', status='interrupted', reason='shutdown')
         tasks = [t.watcher for t in self.tasks.values() if t.watcher]
         if self.observer:
             tasks.append(self.observer)
@@ -507,14 +513,20 @@ async def intercept_add(pool, arguments):
     _attr(query, "_qq_received_at", received_at)
     _attr(query, "_qq_receive_sequence", sequence)
     query.variables = {**(kwargs.get("variables") or {}), "_routed_by_rule": kwargs["routed_by_rule"]}
+    runtime_scope = getattr(kwargs["adapter"]._runtime, "execution_context", None)
+    ingress_owner = None if runtime_scope is None else (
+        runtime_scope.instance_uuid, runtime_scope.workspace_uuid, runtime_scope.placement_generation,
+        query.bot_uuid, str(query.launcher_id), str(query.sender_id))
     if len(service.preparing) >= 64:
         service.admission_failed += 1
         _attr(query, "_execution_context", kwargs["execution_context"])
         if _explicit_raw(query):
+            if ingress_owner is not None:
+                journal.attach(ap, query, ingress_owner)
+                journal.record(query, 'ended', status='rejected', reason='capacity')
             await service.notice(query, "当前受理请求较多，这次尚未开始处理，请稍后再试。")
         _complete(query)
         return True, None
-    runtime_scope = getattr(kwargs["adapter"]._runtime, "execution_context", None)
     if runtime_scope is not None:
         service.preparing[sequence] = (runtime_scope.instance_uuid, runtime_scope.workspace_uuid,
             runtime_scope.placement_generation, query.bot_uuid, str(query.launcher_id), str(query.sender_id))
@@ -543,12 +555,16 @@ async def intercept_add(pool, arguments):
                 await _authorized_notice(ap, query)
                 if not await _validate_grant(continuation, query):
                     raise RuntimeError("QQ continuation authorization changed")
-    except Exception:
+    except Exception as exc:
         # Do not turn an ingress/config failure into silent loss of a mention.
         service.preparing.pop(sequence, None)
         service.observation_changed.set()
         service.admission_failed += 1
         if _explicit_raw(query):
+            if ingress_owner is not None:
+                journal.attach(ap, query, ingress_owner)
+                journal.failure(query, exc)
+                journal.record(query, 'ended', status='rejected', reason='admission_failed')
             await service.notice(query, "暂时无法受理这次请求，请稍后重试。")
         _complete(query)
         return True, None
@@ -585,9 +601,14 @@ async def intercept_add(pool, arguments):
             _attr(admitted, "_qq_continuation", continuation)
         service.register(admitted, task)
         return True, admitted
-    except Exception:
+    except Exception as exc:
+        journal.attach(ap, query, task.owner, origin='continuation' if continuation else 'mention')
+        reason = 'queue_full' if type(exc).__name__ == 'QueryPoolCapacityError' else 'admission_failed'
+        journal.failure(query, exc)
+        journal.record(query, 'ended', status='rejected', reason=reason)
         if continuation is None:
-            await service.notice(query, "当前请求已排满，这次尚未开始执行，请稍后再试。")
+            await service.notice(query, "当前请求已排满，这次尚未开始执行，请稍后再试。" if reason == 'queue_full'
+                                 else "暂时无法受理这次请求，请稍后重试。")
         _complete(query)
         return True, None
     finally:
@@ -650,6 +671,7 @@ def begin_processing(query):
     if task is not None:
         task.runner = asyncio.current_task()
         task.phase, task.changed = "running", time.monotonic()
+        journal.record(query, 'preparing')
 
 
 async def preflight(query, operation):
@@ -681,19 +703,36 @@ async def run_pipeline(ap, query, pipeline):
             if task.continuation is not None and not await _validate_grant(task.continuation, query):
                 await service.stop(task, "cancelled", notify=False)
                 return
+            from qunling.runtime_health import wait_available
+            journal.record(query, 'runtime_wait')
+            object.__setattr__(query, '_request_phase', 'runtime_wait')
+            await wait_available(ap.plugin_connector)
+            journal.record(query, 'running')
+            object.__setattr__(query, '_request_phase', 'running')
             await pipeline.run(query)
         if query.variables.get("_monitoring_has_error") and not getattr(query, "_qq_delivery_confirmed", False):
+            reason = ('delivery_unconfirmed' if getattr(query, '_qq_delivery_attempted', False)
+                      else getattr(query, '_request_error', 'pipeline_failed'))
+            journal.record(query, 'ended', status='unconfirmed' if reason=='delivery_unconfirmed' else 'failed', reason=reason)
             message = ("这次回复未能确认发送成功，已停止；不会自动重发。" if
                        getattr(query, "_qq_delivery_attempted", False) else
                        "这次请求处理失败，未获得可发送的结果；不会自动重复执行。")
             await service.once(task, "terminal", message)
-    except TimeoutError:
+        else:
+            confirmed = getattr(query, '_qq_delivery_confirmed', False)
+            journal.record(query, 'ended', status='completed' if confirmed else 'processed',
+                           reason='' if confirmed else 'no_confirmed_reply')
+    except TimeoutError as exc:
+        journal.failure(query, exc)
         await service.stop(task, "execution_timeout")
     except asyncio.CancelledError:
         # A control cancellation already sent its single final notification.
         if not task.terminal:
+            journal.record(query, 'ended', status='interrupted', reason='shutdown')
             raise
-    except Exception:
+    except Exception as exc:
+        journal.failure(query, exc)
+        journal.record(query, 'ended', status='failed', reason=getattr(query, '_request_error', 'pipeline_failed'))
         await service.once(task, "terminal", "这次请求处理失败，已停止；不会自动重复执行或发送。")
         raise
     finally:
@@ -714,6 +753,7 @@ async def fail_cleanup(ap, query):
     service = _service(ap)
     task.done.set()
     task.terminal = "failed"
+    journal.record(query, 'ended', status='failed', reason='admission_failed')
     service.retire(task)
     service.observation_changed.set()
     if task.watcher:
@@ -765,11 +805,14 @@ async def invoke_tool(ap, query, invoke, name="", *, source=""):
         if task.done.is_set():
             raise RuntimeError("The owning QQ request was cancelled")
         if service.parked >= service.parked_limit:
+            journal.record(query, 'tool_wait', reason='capacity', tool=name)
             raise RuntimeError("Long-task capacity is full; do not automatically retry this tool")
         service.parked += 1
         current = asyncio.current_task()
         task.tool_tasks.add(current)
         task.phase, task.changed = "tool_wait", time.monotonic()
+        journal.record(query, 'tool_wait', tool=name)
+        object.__setattr__(query, '_request_phase', 'tool_wait')
         if task.owns_slot:
             task.owns_slot = False
             task.foreground.release()
@@ -780,21 +823,33 @@ async def invoke_tool(ap, query, invoke, name="", *, source=""):
                 if task.continuation is not None and not await _validate_grant(task.continuation, task.query):
                     return _continuation_tool_denied("continuation_revoked")
                 task.phase, task.changed = "tool", time.monotonic()
+                object.__setattr__(query, '_request_phase', 'tool')
+                object.__setattr__(query, '_request_tool_failed', False)
+                journal.record(query, 'tool', tool=name, attempt=1, uncertain=True)
                 timeout = 420 if name in {"generate_image", "edit_image"} else service.tool_timeout
                 async with asyncio.timeout(timeout):
-                    return await invoke()
+                    result = await invoke()
+                if not getattr(query, '_request_tool_failed', False):
+                    journal.record(query, 'tool', tool=name, uncertain=False)
+                return result
             finally:
                 service.tools.release()
+        except Exception as exc:
+            journal.failure(query, exc)
+            raise
         finally:
             try:
                 if not task.done.is_set():
                     task.phase, task.changed = "resuming", time.monotonic()
+                    journal.record(query, 'resuming')
                     await task.foreground.acquire()
                     if task.done.is_set():
                         task.foreground.release()
                     else:
                         task.owns_slot = True
                         task.phase, task.changed = "running", time.monotonic()
+                        object.__setattr__(query, '_request_phase', 'model')
+                        journal.record(query, 'model')
             finally:
                 task.tool_tasks.discard(current)
                 service.parked -= 1

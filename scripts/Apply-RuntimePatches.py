@@ -46,6 +46,7 @@ PATCHES = (
     ("group-history-speakers.patch", "host", False),
     ("file-outbox-host.patch", "host", False),
     ("host-qq-dispatch.patch", "host", False),
+    ("host-request-diagnostics.patch", "host", False),
     ("sdk-image-tool-timeout.patch", "sdk", False),
     ("sdk-dedicated-background.patch", "sdk", False),
     ("sdk-windows-dependency-temp.patch", "sdk", True),

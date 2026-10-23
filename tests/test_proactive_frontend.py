@@ -49,6 +49,8 @@ let update={available:true,busy:false,phase:'idle'};
 let status={available:true};
 let groupsFailure=false,configFailure=false,conflict=false,unauthorized=false,holdPost=false,releasePost=null;
 let posts=[];
+let requestsData={available:true,sampled_at:1700000000,requests:[],next_before:null};
+let requestFailure=false,holdRequest=false,releaseRequest=null,requestPaths=[];
 const clone=value=>JSON.parse(JSON.stringify(value));
 const context=vm.createContext({
   document:{
@@ -67,6 +69,12 @@ const context=vm.createContext({
     if(unauthorized)return {ok:false,status:401,json:async()=>({error:'令牌无效'})};
     if(path==='/api/status')return {ok:true,json:async()=>clone(setup)};
     if(path==='/api/update')return {ok:true,json:async()=>clone(update)};
+    if(path.startsWith('/api/requests?')){
+      requestPaths.push(path);
+      if(holdRequest)await new Promise(resolve=>releaseRequest=resolve);
+      if(requestFailure)throw Error('请求记录暂不可用');
+      return {ok:true,json:async()=>clone(requestsData)};
+    }
     if(path==='/api/proactive/groups'){
       if(groupsFailure)throw Error('群列表加载失败');
       return {ok:true,json:async()=>({groups:clone(groups)})};

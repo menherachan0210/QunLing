@@ -113,6 +113,7 @@ function hideAdmin() {
 }
 function locked(message) {
   authEpoch += 1;
+  clearRequests();
   authenticated = false;
   setupState = null;
   proactiveConfigReady = false;
@@ -710,8 +711,102 @@ if (typeof IntersectionObserver !== "undefined") {
     const visible = entries.filter((entry) => entry.isIntersecting);
     if (visible.length) selectNav(visible[0].target.id);
   }, {rootMargin: "-10% 0px -65% 0px"});
-  ["overview", "models", "connection", "proactive", "maintenance", "advanced"].forEach((id) => observer.observe($(id)));
+  ["overview", "models", "connection", "proactive", "requests", "maintenance", "advanced"].forEach((id) => observer.observe($(id)));
 }
+const requestPhases = {received:"收到请求",queued:"排队",preparing:"准备上下文",runtime_wait:"等待功能组件",running:"处理消息",model:"生成回复",tool_wait:"等待工具",tool:"执行工具",retry_wait:"准备有限重试",resuming:"等待继续回复",sending:"发送回复",delivered:"发送已确认",ended:"处理结束"};
+const requestStatuses = {active:"处理中",completed:"回复已发送",processed:"流程已结束",failed:"处理失败",cancelled:"已取消",interrupted:"执行中断",unconfirmed:"结果未确认",rejected:"未能排队"};
+const requestReasons = {queue_full:"请求队列已满",queue_timeout:"排队超时",execution_timeout:"请求总时限已到",tool_timeout:"工具执行超时",tool_queue_timeout:"等待工具超时",runtime_unavailable:"功能组件暂不可用",upstream_unavailable:"上游服务暂不可用",upstream_timeout:"服务响应超时",rate_limited:"服务调用限流",authentication:"接口认证失败",permission:"权限或工作区绑定已失效",network:"连接异常",tool_failed:"工具执行失败",pipeline_failed:"消息处理异常",no_confirmed_reply:"流程结束，未记录文本回复的发送确认",delivery_unconfirmed:"回复发送未确认",restart_before_execution:"服务重启，尚未开始执行",restart_interrupted:"服务重启，执行被中断",restart_unconfirmed:"服务重启，操作结果未确认",cancelled:"用户取消",shutdown:"服务关闭，执行已中断",capacity:"长任务容量已满",admission_failed:"请求未能开始执行"};
+let requestsSequence = 0, requestDetailSequence = 0, requestsCursor = null, requestsBusy = false;
+function clearRequests() {
+  requestsSequence += 1;
+  requestDetailSequence += 1;
+  requestsCursor = null;
+  requestsBusy = false;
+  $("requests-list").replaceChildren();
+  $("request-detail").replaceChildren();
+  $("request-detail").hidden = true;
+  $("requests-older").hidden = true;
+  $("requests-refresh").disabled = false;
+}
+function requestTime(value) {
+  const time = new Date(Number(value) * 1000);
+  return Number.isFinite(time.getTime()) ? time.toLocaleString("zh-CN", {timeZone:"Asia/Shanghai",hour12:false}) : "时间未知";
+}
+function requestNode(tag, value) {
+  const node = document.createElement(tag);
+  node.textContent = value;
+  return node;
+}
+async function showRequest(requestId) {
+  const sequence = ++requestDetailSequence, epoch = authEpoch;
+  const box = $("request-detail");
+  box.hidden = false;
+  box.replaceChildren(requestNode("p", "正在读取处理过程…"));
+  try {
+    const data = await api("/api/requests?" + new URLSearchParams({request_id:requestId}));
+    if (!authenticated || epoch !== authEpoch || sequence !== requestDetailSequence) return;
+    const item = data.requests?.[0];
+    if (!data.available || !item) throw Error("该记录已过期或暂不可用，请刷新列表。");
+    const events = document.createElement("ol");
+    for (const event of item.events || []) {
+      const parts = [requestTime(event.at), requestPhases[event.phase] || "未知阶段"];
+      if (event.tool) parts.push(event.tool);
+      if (event.attempt) parts.push("第 " + event.attempt + " 次尝试");
+      if (event.reason) parts.push(requestReasons[event.reason] || "未分类异常");
+      events.append(requestNode("li", parts.join(" · ")));
+    }
+    box.replaceChildren(requestNode("h3", "请求 " + item.request_id), events);
+    if (item.operation_unconfirmed) box.append(requestNode("p", "有操作未确认结果。请先核对实际产物，避免重复执行。"));
+  } catch (error) {
+    if (authenticated && epoch === authEpoch && sequence === requestDetailSequence) box.replaceChildren(requestNode("p", error.message));
+  }
+}
+async function loadRequests(older = false) {
+  if (!authenticated) return;
+  const cursor = older ? requestsCursor : null;
+  clearRequests();
+  const sequence = requestsSequence, epoch = authEpoch;
+  requestsBusy = true;
+  $("requests-refresh").disabled = true;
+  text("requests-note", "正在读取请求记录…");
+  const filters = {limit:"50"};
+  if ($("requests-group").value.trim()) filters.group = $("requests-group").value.trim();
+  if ($("requests-status").value) filters.status = $("requests-status").value;
+  if (cursor) filters.before = cursor;
+  try {
+    const data = await api("/api/requests?" + new URLSearchParams(filters));
+    if (!authenticated || epoch !== authEpoch || sequence !== requestsSequence) return;
+    if (!data.available) throw Error("暂未启用请求记录，或机器人尚未完成配置。");
+    for (const item of data.requests || []) {
+      const row = document.createElement("article");
+      row.className = "request-row";
+      const button = requestNode("button", (requestStatuses[item.status] || "未知状态") + " · 群 " + item.group_id + " · " + requestTime(item.created));
+      button.type = "button";
+      button.className = "secondary small";
+      button.addEventListener("click", () => showRequest(item.request_id));
+      const detail = [item.origin === "continuation" ? "续问查询" : "@ /ai 请求", "发起人 " + item.sender, requestPhases[item.phase] || "未知阶段", "耗时 " + item.elapsed_seconds + " 秒"];
+      if (item.reason) detail.push(requestReasons[item.reason] || "未分类异常");
+      row.append(button, requestNode("p", detail.join(" · ")));
+      $("requests-list").append(row);
+    }
+    requestsCursor = data.next_before || null;
+    $("requests-older").hidden = !requestsCursor;
+    const warning = data.write_degraded ? "记录存储曾出现异常，以下内容可能不完整。 " : "";
+    text("requests-note", warning + (data.requests?.length ? "点击记录查看过程。" : "当前筛选条件下暂无记录。") + "采样于 " + requestTime(data.sampled_at) + "（北京时间）" + (cursor ? " · 较早记录，刷新可返回最新。" : ""));
+  } catch (error) {
+    if (authenticated && epoch === authEpoch && sequence === requestsSequence) text("requests-note", error.message);
+  } finally {
+    if (epoch === authEpoch && sequence === requestsSequence) {
+      requestsBusy = false;
+      $("requests-refresh").disabled = false;
+    }
+  }
+}
+$("requests-open").addEventListener("toggle", () => { if ($("requests-open").open) loadRequests(); });
+$("requests-refresh").addEventListener("click", () => loadRequests());
+$("requests-older").addEventListener("click", () => loadRequests(true));
+$("requests-group").addEventListener("change", () => loadRequests());
+$("requests-status").addEventListener("change", () => loadRequests());
 poll();
 setInterval(poll, 4000);
 setInterval(expireQQStatus, 1000);

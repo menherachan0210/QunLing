@@ -78,12 +78,30 @@ def test_page_is_public_but_state_and_admin_require_token(endpoint):
     assert "offline-password" not in page.text
     assert page.headers["Cache-Control"] == "no-store"
     assert "frame-ancestors 'none'" in page.headers["Content-Security-Policy"]
-    for path in ("/api/status", "/api/admin", "/api/update"):
+    for path in ("/api/status", "/api/admin", "/api/update", "/api/requests"):
         assert http.get(url + path, timeout=5).status_code == 401
     response = http.get(url + "/api/status", headers=headers(url), timeout=5)
     assert response.status_code == 200
     assert "offline-password" not in response.text
     assert "offline-test-token" not in response.text
+
+
+def test_request_diagnostics_filters_and_failures_do_not_leak_secrets(endpoint):
+    http,url,manager=endpoint
+    observed=[]
+    def read(filters):
+        observed.append(filters)
+        return {'available':True,'requests':[]}
+    manager.request_diagnostics=read
+    result=http.get(url+'/api/requests?group=30000&status=failed&limit=20',headers=headers(url),timeout=5)
+    assert result.status_code==200 and observed==[{'group':'30000','status':'failed','limit':20}]
+    for query in ('group=1&group=2','workspace=other','status=invalid','limit=101','before=nan:id'):
+        assert http.get(url+'/api/requests?'+query,headers=headers(url),timeout=5).status_code==400
+    assert len(observed)==1
+    def broken(filters): raise RuntimeError('private-runtime-password')
+    manager.request_diagnostics=broken
+    result=http.get(url+'/api/requests',headers=headers(url),timeout=5)
+    assert result.status_code==503 and 'private-runtime-password' not in result.text
 
 
 @pytest.mark.parametrize(

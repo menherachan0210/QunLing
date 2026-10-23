@@ -12,10 +12,10 @@ from pathlib import Path
 import secrets
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from bootstrap.api import LangBotAPI, NapCatAPI, SetupError
-from bootstrap import proactive
+from bootstrap import diagnostics, proactive
 from bootstrap.configure import (
     configure,
     ensure_plugins,
@@ -129,6 +129,9 @@ class SetupManager:
 
     def proactive_settings(self):
         return proactive.settings(self)
+
+    def request_diagnostics(self, filters):
+        return diagnostics.requests(self, filters)
 
     def proactive_groups(self):
         return proactive.groups(self)
@@ -450,6 +453,22 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.manager.snapshot())
         if path == "/api/update":
             return self._send(200, self.server.manager.update_status())
+        if path == "/api/requests":
+            try:
+                query = urlsplit(self.path).query
+                if len(query) > 1024:
+                    raise ValueError('Query too long')
+                values = parse_qs(query, keep_blank_values=True, max_num_fields=5)
+                if any(len(value) != 1 for value in values.values()):
+                    raise ValueError('Duplicate filter')
+                from qunling.request_journal import parse_filters
+                filters = parse_filters({key: value[0] for key, value in values.items()})
+            except ValueError:
+                return self._send(400, {"error": "诊断筛选条件无效。"})
+            try:
+                return self._send(200, self.server.manager.request_diagnostics(filters))
+            except Exception:
+                return self._send(503, {"error": "请求记录暂时无法读取，请稍后刷新。"})
         if path in {"/api/proactive", "/api/proactive/groups"}:
             try:
                 method = (self.server.manager.proactive_settings if path == "/api/proactive"

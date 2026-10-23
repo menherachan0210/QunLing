@@ -49,7 +49,7 @@ async def wait_workers_ready(connector, handler):
 
 async def wait_available(connector):
     """Hold new events during recovery, before any plugin side effects occur."""
-    if not connector.is_enable_plugin or getattr(connector, '_transport_task', None) is None:
+    if getattr(connector, '_transport_task', None) is None or not connector.is_enable_plugin:
         return
     async with asyncio.timeout(AVAILABILITY_TIMEOUT):
         while True:

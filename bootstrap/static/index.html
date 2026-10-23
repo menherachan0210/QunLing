@@ -37,6 +37,7 @@
     <a class="nav-link" href="#models"><svg class="icon"><use href="#i-spark"/></svg><span>AI 服务</span></a>
     <a class="nav-link" href="#connection"><svg class="icon"><use href="#i-chat"/></svg><span>QQ 连接</span></a>
     <a class="nav-link" href="#proactive"><svg class="icon"><use href="#i-spark"/></svg><span>自由对话</span></a>
+    <a class="nav-link" href="#requests"><svg class="icon"><use href="#i-grid"/></svg><span>请求诊断</span></a>
     <a class="nav-link" href="#maintenance"><svg class="icon"><use href="#i-refresh"/></svg><span>版本维护</span></a>
     <a class="nav-link" href="#advanced"><svg class="icon"><use href="#i-sliders"/></svg><span>高级管理</span></a>
   </nav>
@@ -127,6 +128,17 @@
           <div class="form-actions"><button id="proactive-save" type="submit" disabled><svg class="icon"><use href="#i-check"/></svg><span id="proactive-save-label">保存自由对话设置</span></button><button id="proactive-reload" type="button" class="secondary" hidden disabled>重新载入已保存设置</button><span id="proactive-dirty" class="save-note">设置独立保存，不影响 AI 接口配置</span></div>
           <p id="proactive-message" class="form-feedback" role="status" aria-live="polite"></p>
         </form>
+      </section>
+      <section class="card requests-card" id="requests" aria-labelledby="requests-heading">
+        <div class="card-heading"><div class="heading-icon"><svg class="icon"><use href="#i-grid"/></svg></div><div><h2 id="requests-heading">请求诊断</h2><p>查看 @、/ai 和转入查询的续问，定位排队、执行或发送问题。</p></div></div>
+        <details id="requests-open"><summary>查看最近请求</summary>
+          <div class="requests-filters"><label>群号<input id="requests-group" inputmode="numeric" maxlength="20" placeholder="全部群"></label><label>状态<select id="requests-status"><option value="">全部状态</option><option value="active">处理中</option><option value="failed">处理失败</option><option value="unconfirmed">结果未确认</option><option value="interrupted">执行中断</option><option value="completed">回复已发送</option><option value="processed">流程已结束</option><option value="rejected">未能排队</option><option value="cancelled">已取消</option></select></label><button id="requests-refresh" type="button" class="secondary">刷新</button></div>
+          <p class="note" id="requests-note" role="status" aria-live="polite">展开后加载记录；仅保存阶段和错误类别，保留最近 7 天、最多 2,000 条已结束请求。</p>
+          <div id="requests-list" class="requests-list"></div>
+          <button id="requests-older" type="button" class="secondary small" hidden>查看更早记录</button>
+          <section id="request-detail" class="request-detail" aria-label="请求处理过程" hidden></section>
+          <p class="note">“回复已发送”表示 QQ 接口已确认；不代表群成员已读。重启中断、发送未确认和写入操作不会整单自动重放。普通自由闲聊的状态请看“自由对话”。</p>
+        </details>
       </section>
       <section class="card updates" id="maintenance" aria-labelledby="update-heading">
         <div class="update-heading"><div class="card-heading"><div class="heading-icon"><svg class="icon"><use href="#i-refresh"/></svg></div><div><h2 id="update-heading">版本维护</h2><p id="update-source">正在读取部署版本…</p></div></div><span id="update-phase" class="phase" data-tone="neutral">连接中</span></div>

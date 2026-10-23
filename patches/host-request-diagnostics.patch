@@ -1,0 +1,97 @@
+diff --git a/src/langbot/pkg/pipeline/pipelinemgr.py b/src/langbot/pkg/pipeline/pipelinemgr.py
+--- a/src/langbot/pkg/pipeline/pipelinemgr.py
++++ b/src/langbot/pkg/pipeline/pipelinemgr.py
+@@ -234,6 +234,10 @@
+ 
+     async def _check_output(self, query: pipeline_query.Query, result: pipeline_entities.StageProcessResult):
+         """检查输出"""
++        from qunling import request_journal
++        request_journal.stage_finished(query)
++        if result.error_notice and not getattr(query, '_request_error', ''):
++            request_journal.failure(query, RuntimeError())
+         await self._assert_execution_active(query)
+         if result.user_notice:
+             # 处理str类型
+@@ -340,6 +344,8 @@
+ 
+             query.current_stage_name = stage_container.inst_name  # 标记到 Query 对象里
+ 
++            from qunling.request_journal import stage_started
++            stage_started(query, stage_container.inst)
+             result = stage_container.inst.process(query, stage_container.inst_name)
+ 
+             if isinstance(result, typing.Coroutine):
+@@ -597,6 +603,8 @@
+         except WorkspaceError as e:
+             self.ap.logger.info(f'Dropped query {query.query_id} because its Workspace execution binding is stale: {e}')
+         except Exception as e:
++            from qunling.request_journal import failure
++            failure(query, e)
+             inst_name = query.current_stage_name if query.current_stage_name else 'unknown'
+             self.ap.logger.error(f'Error processing query {query.query_id} stage={inst_name} : {e}')
+             self.ap.logger.error(f'Traceback: {traceback.format_exc()}')
+diff --git a/src/langbot/pkg/provider/tools/loaders/plugin.py b/src/langbot/pkg/provider/tools/loaders/plugin.py
+--- a/src/langbot/pkg/provider/tools/loaders/plugin.py
++++ b/src/langbot/pkg/provider/tools/loaders/plugin.py
+@@ -72,15 +72,17 @@
+         query: pipeline_query.Query,
+         source_id: str | None = None,
+     ) -> typing.Any:
+-        try:
++        from qunling.request_recovery import invoke_plugin
++
++        async def call():
+             return await self.ap.plugin_connector.call_tool(
+-                name,
+-                parameters,
+-                session=query.session,
+-                query_id=query.query_id,
++                name, parameters, session=query.session, query_id=query.query_id,
+                 bound_plugins=[source_id] if source_id else None,
+                 query_uuid=query.query_uuid,
+             )
++
++        try:
++            return await invoke_plugin(self.ap, query, call, name, source_id)
+         except Exception as e:
+             self.ap.logger.error(f'执行函数 {name} 时发生错误: {e}')
+             traceback.print_exc()
+diff --git a/src/langbot/pkg/api/http/controller/groups/platform/bots.py b/src/langbot/pkg/api/http/controller/groups/platform/bots.py
+--- a/src/langbot/pkg/api/http/controller/groups/platform/bots.py
++++ b/src/langbot/pkg/api/http/controller/groups/platform/bots.py
+@@ -273,3 +273,23 @@
+         async def _(bot_uuid: str, admin_id: int, request_context: RequestContext) -> str:
+             await self.ap.bot_service.delete_bot_admin(request_context, bot_uuid, admin_id)
+             return self.success()
++
++        @self.route(
++            '/<bot_uuid>/requests', methods=['GET'],
++            auth_type=group.AuthType.USER_TOKEN_OR_API_KEY, permission=Permission.RESOURCE_MANAGE,
++        )
++        async def request_diagnostics(bot_uuid: str, request_context: RequestContext):
++            import sqlite3
++            from qunling.request_journal import diagnostics, parse_filters
++            try:
++                if any(len(quart.request.args.getlist(key)) != 1 for key in quart.request.args):
++                    raise ValueError('Duplicate filter')
++                filters = parse_filters(quart.request.args.to_dict())
++            except ValueError:
++                return self.http_status(400, 'invalid_filter', '诊断筛选条件无效。')
++            try:
++                return self.success(data=await diagnostics(self.ap, request_context, bot_uuid, filters))
++            except PermissionError:
++                return self.http_status(403, 'forbidden', '无权查看该机器人的请求记录。')
++            except (OSError, sqlite3.Error):
++                return self.http_status(503, 'diagnostics_unavailable', '请求诊断存储暂不可用。')
+diff --git a/src/langbot/pkg/pipeline/process/handlers/chat.py b/src/langbot/pkg/pipeline/process/handlers/chat.py
+--- a/src/langbot/pkg/pipeline/process/handlers/chat.py
++++ b/src/langbot/pkg/pipeline/process/handlers/chat.py
+@@ -226,6 +226,8 @@
+                     yield entities.StageProcessResult(result_type=entities.ResultType.CONTINUE, new_query=query)
+ 
+             except Exception as e:
++                from qunling.request_journal import failure
++                failure(query, e)
+                 # Import orchestrator errors for specific handling
+                 from ....agent.runner.errors import (
+                     RunnerNotFoundError,
