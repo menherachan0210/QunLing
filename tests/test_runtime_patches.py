@@ -277,7 +277,8 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("host-plugin-health.patch", "host", False) in patcher.PATCHES
     assert ("sdk-transport-recovery.patch", "sdk", False) in patcher.PATCHES
     assert ("host-request-diagnostics.patch", "host", False) in patcher.PATCHES
-    assert len(names) == 28
+    assert ("sdk-utf8-chunk-performance.patch", "sdk", False) in patcher.PATCHES
+    assert len(names) == 29
 
 
 def test_all_bundled_patches_have_supported_runtime_blocks():

@@ -254,6 +254,9 @@ def failure(query, error):
 
 
 def stage_started(query, stage):
+    from qunling.qq_dispatch import stage_progress
+
+    stage_progress(query)
     kind = type(stage).__name__
     phase = 'sending' if kind == 'SendResponseBackStage' else 'model' if kind == 'Processor' else 'running'
     object.__setattr__(query, '_request_phase', phase)

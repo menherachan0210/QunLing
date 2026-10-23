@@ -51,6 +51,7 @@ PATCHES = (
     ("sdk-dedicated-background.patch", "sdk", False),
     ("sdk-windows-dependency-temp.patch", "sdk", True),
     ("sdk-attachment-message-budget.patch", "sdk", False),
+    ("sdk-utf8-chunk-performance.patch", "sdk", False),
     ("sdk-tool-provenance.patch", "sdk", False),
     ("sdk-qunling-worker-storage.patch", "sdk", False),
     ("sdk-transport-recovery.patch", "sdk", False),

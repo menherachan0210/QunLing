@@ -53,8 +53,13 @@ def continuation_tool_allowed(name, parameters=None):
 
 
 def _content_fingerprint(arguments):
-    payload = (arguments["message_event"].model_dump_json() + "\0"
-               + arguments["message_chain"].model_dump_json())
+    # The SDK's wire dump deliberately excludes source_platform_object. Real
+    # OneBot events carry an aiocqhttp.Event there, whose dynamic attributes
+    # make Pydantic's generic JSON serializer fail. Bind the typed sender,
+    # group, source message ID and content, not the transport implementation.
+    payload = json.dumps({"event": arguments["message_event"].model_dump(),
+                          "chain": arguments["message_chain"].model_dump()},
+                         ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).digest()
 
 
@@ -693,6 +698,19 @@ def begin_processing(query):
         task.runner = asyncio.current_task()
         task.phase, task.changed = "running", time.monotonic()
         journal.record(query, 'preparing')
+
+
+def stage_progress(query):
+    """Give each advancing pipeline stage its own inactivity budget.
+
+    Large attachment preparation must not consume the model's entire budget.
+    The outer run_pipeline deadline still bounds the whole request; progress
+    cannot revive queued, parked, cancelled or completed work.
+    """
+    task = getattr(query, "_qq_task", None)
+    if (task is not None and not task.done.is_set() and not task.terminal
+            and task.phase in {"running", "resuming"}):
+        task.changed = time.monotonic()
 
 
 async def preflight(query, operation):

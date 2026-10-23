@@ -1,0 +1,36 @@
+--- a/.venv/Lib/site-packages/langbot_plugin/runtime/io/connection.py
++++ b/.venv/Lib/site-packages/langbot_plugin/runtime/io/connection.py
+@@ -15,21 +15,20 @@
+     """Split text without breaking UTF-8 code points."""
+     if max_bytes <= 0:
+         raise ValueError("max_bytes must be positive")
++    # Encode once and split at byte boundaries. Scanning every Python character
++    # repeatedly made multi-megabyte image events stall plugin round trips.
++    raw = message.encode("utf-8")
+     chunks: list[str] = []
+-    current: list[str] = []
+-    current_size = 0
+-    for char in message:
+-        char_size = len(char.encode("utf-8"))
+-        if char_size > max_bytes:
++    start = 0
++    while start < len(raw):
++        end = min(start + max_bytes, len(raw))
++        if end < len(raw):
++            while end > start and raw[end] & 0xC0 == 0x80:
++                end -= 1
++        if end == start:
+             raise ValueError("max_bytes is smaller than one UTF-8 code point")
+-        if current and current_size + char_size > max_bytes:
+-            chunks.append("".join(current))
+-            current = []
+-            current_size = 0
+-        current.append(char)
+-        current_size += char_size
+-    if current:
+-        chunks.append("".join(current))
++        chunks.append(raw[start:end].decode("utf-8"))
++        start = end
+     return chunks
+ 
+ 
