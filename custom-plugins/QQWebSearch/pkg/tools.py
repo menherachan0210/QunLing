@@ -291,6 +291,13 @@ async def execute(tool, action, params, query_id, query_uuid):
                 }
                 for source in result["sources"]:
                     source["read_status"] = source_read_status(context, source["url"])
+                result["research_progress"] = {
+                    "searches_used": context.counts.get("search", 0),
+                    "searches_remaining": max(0, 3 - context.counts.get("search", 0)),
+                    "pages_opened": len(context.read_urls),
+                    "instruction": "这是检索进度，不是研究完成判断。先核对结果是否对应原问题；"
+                    "概述中的作者、原帖或项目是可追查线索。按证据缺口读取来源或调整下一次查询，不重复近义搜索。",
+                }
             elif action == "page":
                 result = await read_cached_page(tool.plugin, context, params, read_page)
             elif action == "images":

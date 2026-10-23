@@ -132,6 +132,28 @@ def group_message(number, *, sender="102", images=None, timestamp=None, **extra)
 
 
 @pytest.mark.asyncio
+async def test_natural_request_can_edit_a_later_image_from_its_frozen_batch(ref_env, tmp_path, monkeypatch):
+    from qunling.group_batch import publish
+    from qunling.integration import workspace_key
+    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path))
+    env = ref_env
+    variables = capture(env, query(Plain(text="把这张改成水彩")))
+    row = SimpleNamespace(bot_id="bot", group_id="201", sender_id="101", sender_name="成员",
+        message_id="21", timestamp=NOW + 2, text="", reply_to=None, is_bot=False, has_media=True)
+    assert publish(workspace_key(env.plugin), "bot", "201", "101", "1", [row], "999")
+    env.plugin.call_platform_api.side_effect = [{"messages": []}, {
+        "message_id": "21", "group_id": "201", "sender": {"user_id": "101"},
+        "message": [{"type": "image", "data": {"url": picture("later").url}}],
+    }]
+    result = await listing(env, variables)
+    assert len(result["images"]) == 1
+    actual = selected(env, variables, [result["images"][0]["image_ref"]])
+    assert actual[0].url == picture("later").url
+    assert await listing(env, variables) == result
+    assert env.plugin.call_platform_api.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_two_group_images_from_another_member_are_selectable_in_requested_order(
     ref_env,
 ):

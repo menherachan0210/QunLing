@@ -5,7 +5,7 @@ from test_runtime_patches import ROOT, patcher, proactive_originals
 NAME = "host-qq-dispatch.patch"
 PATH = "src/langbot/pkg/provider/tools/toolmgr.py"
 OLD = "            result = await invoke_tool(self.ap, query, invoke, name)\n"
-NEW = "            result = await invoke_tool(self.ap, query, invoke, name, source=source)\n"
+NEW = "            result = await invoke_tool(self.ap, query, invoke, name, source=source, parameters=parameters)\n"
 
 
 def installed_legacy(tmp_path):
@@ -27,6 +27,19 @@ def test_old_dispatch_installs_source_guard_idempotently_without_other_changes(t
     assert NEW in (tmp_path / PATH).read_text(encoding="utf-8")
     assert patcher.build_plan(NAME, tmp_path, source, "host").state == "already-applied"
     assert all((tmp_path / p).read_bytes() == content for p, content in before.items() if p != PATH)
+
+
+def test_previous_source_guard_upgrades_to_operation_guard(tmp_path):
+    source = (ROOT / "patches" / NAME).read_text(encoding="utf-8")
+    proactive_originals(tmp_path, source)
+    old = "            result = await invoke_tool(self.ap, query, invoke, name, source=source)\n"
+    legacy, _ = patcher.runtime_payload(source.replace("+" + NEW, "+" + old), "host")
+    assert patcher.git_apply(tmp_path, legacy).returncode == 0
+    plan = patcher.build_plan(NAME, tmp_path, source, "host")
+    assert plan.upgrade_from
+    patcher.execute_plans([plan], apply=True)
+    assert NEW in (tmp_path / PATH).read_text(encoding="utf-8")
+    assert patcher.build_plan(NAME, tmp_path, source, "host").state == "already-applied"
 
 
 @pytest.mark.parametrize("after_plan", [False, True])

@@ -22,7 +22,7 @@ MAX_VERSIONS = 3
 MAX_MESSAGE_IDS = 8
 MAX_RESULTS = 6
 MAX_RESULT_CHARS = 4000
-SOURCES = frozenset({"member_info", "avatar_analysis", "group_file_list", "image_delivery"})
+SOURCES = frozenset({"member_info", "avatar_analysis", "group_file_list", "image_delivery", "image_analysis"})
 
 _URL = re.compile(r"(?:[a-z][a-z0-9+.-]*://|data:|www\.)[^\s<>\"']+", re.I)
 _REF = re.compile(

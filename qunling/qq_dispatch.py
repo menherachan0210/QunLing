@@ -23,13 +23,33 @@ _continuation = ContextVar("qq_continuation_admission", default=None)
 _ARGUMENT_NAMES = ("bot_uuid", "launcher_type", "launcher_id", "sender_id", "message_event", "message_chain",
                    "adapter", "pipeline_uuid", "routed_by_rule", "variables", "execution_context")
 # Reviewed plugin tools with no message/file delivery, editing, job management,
-# arbitrary execution or persistent memory mutation. Mixed-action tools are
-# deliberately absent; an unknown tool or source is denied by default.
+# arbitrary execution or persistent memory mutation. Mixed-action tools use
+# an operation-level gate; an unknown tool or source is denied by default.
 CONTINUATION_READ_TOOLS = frozenset({
     "read_recent_group_context", "read_group_context_images", "read_forwarded_messages",
     "query_group_members", "read_qq_avatar", "read_text_attachment", "recall_memory",
     "search_web", "read_web_page", "search_web_images", "list_web_files", "list_edit_image_references",
 })
+
+
+def continuation_tool_allowed(name, parameters=None):
+    """Permit bounded retrieval/cache work, never delivery or external mutation."""
+    if name in CONTINUATION_READ_TOOLS:
+        return True
+    if not isinstance(parameters, dict):
+        return False
+    if name == "file_workspace":
+        return (set(parameters) <= {"operation", "arguments", "deliver"}
+                and parameters.get("operation") in {"list", "import", "inspect", "read", "search", "extract"}
+                and parameters.get("deliver", False) is False
+                and isinstance(parameters.get("arguments", {}), dict))
+    if name == "file_task":
+        return (set(parameters) <= {"action", "task_id", "wait_seconds"}
+                and parameters.get("action") in {"list", "status"})
+    if name == "browse_group_files":
+        return (set(parameters) <= {"action", "folder_ref", "search_text", "offset", "limit", "file_ref"}
+                and parameters.get("action", "list") in {"list", "import"})
+    return False
 
 
 def _content_fingerprint(arguments):
@@ -73,6 +93,7 @@ class _ContinuationGrant:
     ap: object
     ingress: _ObservedIngress
     validate: object
+    allow_actions: bool = False
     created: float = field(default_factory=time.monotonic)
     consumed: bool = False
     admission_task: object = field(default_factory=asyncio.current_task)
@@ -114,7 +135,7 @@ async def _validate_grant(grant, query=None):
         return False
 
 
-async def admit_continuation(ap, arguments, *, validate):
+async def admit_continuation(ap, arguments, *, validate, allow_actions=False):
     """Re-admit one successfully observed ingress using a host-only grant.
 
     ``validate`` is a zero-argument sync/async predicate returning exactly True.
@@ -122,7 +143,7 @@ async def admit_continuation(ap, arguments, *, validate):
     original participant, revision and placement, after its ingress cache entry
     has been consumed. It is retained for queued/preflight/tool revalidation.
     """
-    if not callable(validate) or not isinstance(arguments, dict):
+    if not callable(validate) or not isinstance(arguments, dict) or type(allow_actions) is not bool:
         return None
     service = getattr(ap, "_qq_dispatch", None)
     record = None if service is None else service.continuations.get(id(arguments.get("message_event")))
@@ -137,7 +158,7 @@ async def admit_continuation(ap, arguments, *, validate):
     if record.claimed or not record.observed or not record.matches(arguments):
         return None
     record.claimed = True  # no await before this one-shot claim
-    grant = _ContinuationGrant(ap, record, validate)
+    grant = _ContinuationGrant(ap, record, validate, allow_actions=allow_actions)
     if not await _validate_grant(grant):
         return None
     token = _continuation.set(grant)
@@ -779,7 +800,7 @@ def _continuation_tool_denied(code):
     }, ensure_ascii=False)
 
 
-async def invoke_tool(ap, query, invoke, name="", *, source=""):
+async def invoke_tool(ap, query, invoke, name="", *, source="", parameters=None):
     """Wrap authorized host tool execution (plugin, MCP, skill, native)."""
     service = getattr(ap, "_qq_dispatch", None)
     task = None if service is None else service.tasks.get(getattr(query, "query_uuid", ""))
@@ -795,7 +816,7 @@ async def invoke_tool(ap, query, invoke, name="", *, source=""):
     if _scope(query) != task.owner or task.done.is_set():
         raise RuntimeError("The owning QQ request is no longer active")
     if task.continuation is not None:
-        if source != "plugin" or name not in CONTINUATION_READ_TOOLS:
+        if not task.continuation.allow_actions and (source != "plugin" or not continuation_tool_allowed(name, parameters)):
             return _continuation_tool_denied("continuation_read_only")
         if not await _validate_grant(task.continuation, task.query):
             return _continuation_tool_denied("continuation_revoked")
@@ -822,6 +843,9 @@ async def invoke_tool(ap, query, invoke, name="", *, source=""):
             try:
                 if task.continuation is not None and not await _validate_grant(task.continuation, task.query):
                     return _continuation_tool_denied("continuation_revoked")
+                if (task.continuation is not None and not task.continuation.allow_actions
+                        and (source != "plugin" or not continuation_tool_allowed(name, parameters))):
+                    return _continuation_tool_denied("continuation_read_only")
                 task.phase, task.changed = "tool", time.monotonic()
                 object.__setattr__(query, '_request_phase', 'tool')
                 object.__setattr__(query, '_request_tool_failed', False)

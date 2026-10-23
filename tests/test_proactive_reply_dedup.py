@@ -10,8 +10,8 @@ from test_proactive_engine import Harness, eventually
 ANSWER = "刚才的头像没有核验成图，不能确认保留了原图特征。这个问题我已经记下，重新核对后再说明。"
 
 
-async def concurrent_replies(*, second=ANSWER, same_topic=True, failed_first=None):
-    h = Harness()
+async def concurrent_replies(*, second=ANSWER, same_topic=True, failed_first=None, reconcile=None):
+    h = Harness(reconcile=reconcile)
     entered = {name: asyncio.Event() for name in ("alice", "bob")}
     release = {name: asyncio.Event() for name in ("alice", "bob")}
     attempts = []
@@ -46,6 +46,28 @@ async def concurrent_replies(*, second=ANSWER, same_topic=True, failed_first=Non
     release["bob"].set()
     await h.engine.drain()
     return h, attempts
+
+
+@pytest.mark.parametrize("outcome", ["covered", "keep", "invented_receipt", "wrong_target", "failed"])
+def test_semantic_review_only_reuses_confirmed_coverage_and_preserves_distinct_answers(outcome):
+    async def scenario():
+        calls = []
+        async def review(context, decision, draft, delivered):
+            calls.append(delivered)
+            assert [item["receipt_id"] for item in delivered] == ["outbound-1"]
+            assert delivered[0]["target_message_id"] == "first"
+            if outcome == "failed":
+                raise TimeoutError()
+            if outcome == "keep":
+                return {"action": "keep"}
+            return {"action": "covered", "receipt_id": "fake" if outcome == "invented_receipt" else "outbound-1",
+                "covered_message_ids": ["first" if outcome == "wrong_target" else "second"]}
+        h, attempts = await concurrent_replies(second="这段不同措辞的回复需要结合已发内容核对，而不能单纯按文字相似度删除。", reconcile=review)
+        assert len(calls) == 1
+        assert attempts == (["first"] if outcome == "covered" else ["first", "second"])
+        assert h.engine._groups["100"].coverage_receipts["second"] == ("outbound-1" if outcome == "covered" else "outbound-2")
+        await h.engine.close()
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("second", [ANSWER, ANSWER.replace("，", "；"), ANSWER.replace("这个问题", "这个问题呀")])

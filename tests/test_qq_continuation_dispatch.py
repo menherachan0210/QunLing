@@ -40,11 +40,36 @@ async def observed(app, **kwargs):
     return values
 
 
-async def continuation(app, **kwargs):
+async def continuation(app, *, allow_actions=False, **kwargs):
     values = await observed(app, **kwargs)
-    query = await dispatch.admit_continuation(app, values, validate=lambda: True)
+    query = await dispatch.admit_continuation(app, values, validate=lambda: True, allow_actions=allow_actions)
     assert query is not None
     return query
+
+
+@pytest.mark.asyncio
+async def test_natural_task_gets_same_tool_path_without_fabricating_at_or_losing_owner(managed):
+    query = await continuation(managed, allow_actions=True, text="把刚才那张改成水彩，做好发出来")
+    assert query.sender_id == "20000" and not any(isinstance(p, pm.At) for p in query.message_chain)
+    controller = Controller(managed)
+    assert await dispatch.acquire_slot(controller, query)
+    invoke = AsyncMock(return_value="completed")
+    for name in ("generate_image", "edit_image", "send_file", "file_workspace"):
+        assert await dispatch.invoke_tool(managed, query, invoke, name, source="plugin",
+            parameters={"operation": "create", "deliver": True}) == "completed"
+    query._qq_continuation.validate = lambda: False
+    assert json.loads(await dispatch.invoke_tool(managed, query, invoke, "generate_image", source="plugin"))["executed"] is False
+    assert invoke.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_query_variables_cannot_upgrade_a_research_grant_to_actions(managed):
+    query = await continuation(managed, variables={"allow_actions": True, "natural_task_request": True})
+    assert await dispatch.acquire_slot(Controller(managed), query)
+    invoke = AsyncMock()
+    result = await dispatch.invoke_tool(managed, query, invoke, "send_file", source="plugin")
+    assert json.loads(result)["executed"] is False
+    invoke.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -270,6 +295,60 @@ async def test_reviewed_read_tools_keep_normal_tool_lease_and_owner(managed):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("name,parameters", [
+    *[("file_workspace", {"operation": operation, "arguments": {}})
+      for operation in ("list", "import", "inspect", "read", "search", "extract")],
+    ("file_task", {"action": "list"}), ("file_task", {"action": "status", "task_id": "task"}),
+    ("browse_group_files", {}), ("browse_group_files", {"action": "import", "file_ref": "file"}),
+])
+async def test_read_only_attachment_operations_use_the_existing_task_lease(managed, name, parameters):
+    query = await continuation(managed)
+    controller = Controller(managed)
+    assert await dispatch.acquire_slot(controller, query)
+    invoke = AsyncMock(return_value={"status": "pending", "task_id": "read-task"})
+    assert await dispatch.invoke_tool(managed, query, invoke, name, source="plugin", parameters=parameters) == {
+        "status": "pending", "task_id": "read-task"}
+    invoke.assert_awaited_once()
+    assert query._qq_task.owns_slot and managed.dispatch.parked == 0
+    dispatch.release_slot(controller, query)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,parameters", [
+    ("file_workspace", {"operation": "create"}), ("file_workspace", {"operation": "delete"}),
+    ("file_workspace", {"operation": "extract", "deliver": True}),
+    ("file_workspace", {"operation": "extract", "deliver": "false"}),
+    ("file_workspace", {"operation": "read", "arguments": []}),
+    ("file_task", {"action": "cancel", "task_id": "task"}),
+    ("browse_group_files", {"action": "delete", "file_ref": "file"}),
+])
+async def test_read_only_attachment_grant_never_delivers_or_mutates_external_content(managed, name, parameters):
+    query = await continuation(managed)
+    invoke = AsyncMock()
+    result = await dispatch.invoke_tool(managed, query, invoke, name, source="plugin", parameters=parameters)
+    assert json.loads(result)["executed"] is False
+    invoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_attachment_operation_is_rechecked_after_waiting_for_capacity(managed):
+    query = await continuation(managed)
+    controller = Controller(managed)
+    assert await dispatch.acquire_slot(controller, query)
+    await managed.dispatch.tools.acquire()
+    parameters = {"operation": "extract", "deliver": False}
+    invoke = AsyncMock()
+    pending = asyncio.create_task(dispatch.invoke_tool(managed, query, invoke, "file_workspace", source="plugin", parameters=parameters))
+    await until(lambda: query._qq_task.phase == "tool_wait")
+    parameters["deliver"] = True
+    managed.dispatch.tools.release()
+    assert json.loads(await pending)["executed"] is False
+    invoke.assert_not_awaited()
+    assert query._qq_task.owns_slot and managed.dispatch.parked == 0
+    dispatch.release_slot(controller, query)
+
+
+@pytest.mark.asyncio
 async def test_real_tool_manager_passes_trusted_source_into_continuation_gate(managed, tmp_path):
     # Apply the actual checked-in runtime patch to an isolated source copy.
     # The developer's ignored LangBot checkout may still have the older patch.
@@ -277,6 +356,7 @@ async def test_real_tool_manager_passes_trusted_source_into_continuation_gate(ma
     path = "src/langbot/pkg/provider/tools/toolmgr.py"
     source = Path(toolmgr.__file__).read_text(encoding="utf-8")
     for call in ("invoke_tool(self.ap, query, invoke, name)",
+                 "invoke_tool(self.ap, query, invoke, name, source=source, parameters=parameters)",
                  "invoke_tool(self.ap, query, invoke, name, source=source)"):
         source = source.replace("            from qunling.qq_dispatch import invoke_tool\n\n"
                                 + "            result = await " + call,
@@ -304,10 +384,17 @@ async def test_real_tool_manager_passes_trusted_source_into_continuation_gate(ma
     assert await manager._invoke_tool_with_monitoring(source="plugin", name="read_qq_avatar",
         parameters={}, query=query, invoke=invoke) == "read result"
     invoke.assert_awaited_once()
+    assert await manager._invoke_tool_with_monitoring(source="plugin", name="file_workspace",
+        parameters={"operation": "read", "arguments": {"asset_ref": "trusted-file"}},
+        query=query, invoke=invoke) == "read result"
+    assert invoke.await_count == 2
+    result = await manager._invoke_tool_with_monitoring(source="plugin", name="file_workspace",
+        parameters={"operation": "extract", "deliver": True}, query=query, invoke=invoke)
+    assert json.loads(result)["executed"] is False and invoke.await_count == 2
     result = await manager._invoke_tool_with_monitoring(source="mcp", name="read_qq_avatar",
         parameters={}, query=query, invoke=invoke)
     assert json.loads(result)["executed"] is False
-    invoke.assert_awaited_once()
+    assert invoke.await_count == 2
     dispatch.release_slot(controller, query)
 
 

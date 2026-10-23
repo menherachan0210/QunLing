@@ -147,7 +147,14 @@ async def search_web(config, query, *, images=False):
         "check recency when relevant, distinguish evidence from uncertainty, "
         "and investigate alternative independent sources when comparison, disagreement or "
         "insufficient evidence requires it. Do not treat the first search hit as conclusive. "
-        "Cite the source pages. Keep the answer concise, in Chinese. "
+        "Your role is to retrieve evidence for another assistant, not to replace the user's discussion with a generic final answer. "
+        "Identify the actual entity/phenomenon before drawing conclusions. For unfamiliar cultural phenomena, "
+        "look for originators, original posts/projects and concrete examples relevant to the question; "
+        "an overview or controversy article is a lead, not proof of every claim. "
+        "Report what the sources establish, their limitations and useful unresolved leads. "
+        "Do not turn figurative wording into a literal event or substitute generic AI-consciousness disclaimers "
+        "for investigating the named subject; when consciousness is actually asked about, research that question. "
+        "Cite the source pages. Return a focused evidence brief in Chinese. "
     )
     payload = {
         "model": model,

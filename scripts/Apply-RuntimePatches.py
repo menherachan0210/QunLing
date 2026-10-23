@@ -236,9 +236,20 @@ def proactive_reply_upgrade(name: str, root: Path, payload: bytes, component: st
         previous_hash = "730713902613a135d25330a71ac54e5ba80e044f6bd20a399804f099b5043f0c"
     elif name == "host-qq-dispatch.patch":
         path = "src/langbot/pkg/provider/tools/toolmgr.py"
-        old = "            result = await invoke_tool(self.ap, query, invoke, name)\n"
-        new = "            result = await invoke_tool(self.ap, query, invoke, name, source=source)\n"
-        previous_hash = "eb9ae5e935be58d3e2804d6f61007203756dd21849646d89bbe524f88c28e0da"
+        new = "            result = await invoke_tool(self.ap, query, invoke, name, source=source, parameters=parameters)\n"
+        versions = (
+            ("            result = await invoke_tool(self.ap, query, invoke, name)\n",
+             "eb9ae5e935be58d3e2804d6f61007203756dd21849646d89bbe524f88c28e0da"),
+            ("            result = await invoke_tool(self.ap, query, invoke, name, source=source)\n",
+             "f3ef7ac4f2d4dea6a8569f501a4994d23dae7d6589a421bc432e958a17d4438d"),
+        )
+        for old, previous_hash in versions:
+            candidate = payload.replace(("+" + new).encode(), ("+" + old).encode(), 1)
+            if (hashlib.sha256(candidate).hexdigest() == previous_hash
+                    and git_apply(root, candidate, "--reverse", "--check").returncode == 0):
+                break
+        else:
+            return None
     else:
         return None
     new_added = ("+" + new).encode("utf-8")

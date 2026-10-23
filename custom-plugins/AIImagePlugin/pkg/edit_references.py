@@ -443,6 +443,13 @@ async def list_references(plugin, api, variables, query_id, query_uuid):
                     > MAX_HISTORY_BYTES
                 ):
                     raise ValueError("Invalid history")
+                from types import SimpleNamespace
+                from qunling.group_batch import merge_history
+                from pkg.remote_image import validate_reference_url
+                history.setdefault("max_messages", context.history_max_messages)
+                history = await merge_history(plugin, SimpleNamespace(bot=context.bot,
+                    group=context.chat, sender=context.sender, anchor=context.anchor,
+                    timestamp=context.timestamp), history, validate_reference_url)
                 context.group_history_truncated = bool(history.get("truncated"))
                 context.group_history_messages = len(history["messages"])
                 pending = []
@@ -454,7 +461,7 @@ async def list_references(plugin, api, variables, query_id, query_uuid):
                     if (
                         type(timestamp) is not int
                         or not 0
-                        <= context.timestamp - timestamp
+                        <= history.get("batch_before_time", context.timestamp) - timestamp
                         <= context.history_window_seconds
                         or str(message.get("message_id", "")) == context.anchor
                     ):

@@ -172,7 +172,7 @@ class ContextStore:
             or item.query_id != query_id
             or item.query_uuid != query_uuid
         ):
-            raise VisionError("当前群聊上下文不可用，请在原群重新 @ 我提出问题。")
+            raise VisionError("当前群聊上下文已过期，请在原群重新提出问题。")
         for key, expected in (
             ("launcher_type", "group"),
             ("launcher_id", item.group),

@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   author: local
   name: QQGroupContext
-  version: 0.2.1
+  version: 0.2.2
   label:
     en_US: QQ Group Conversation Context
     zh_Hans: QQ 群聊资料与图片理解

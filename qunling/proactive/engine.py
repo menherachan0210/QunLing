@@ -211,7 +211,7 @@ def validate_decision(value: object, context: ConversationContext) -> Decision |
     if (not isinstance(covered, list) or len(covered) > MAX_MESSAGES
             or any(not isinstance(key, str) for key in covered) or len(set(covered)) != len(covered)):
         return None
-    if action not in ("silence", "wait", "reply", "followup", "tool_followup"):
+    if action not in ("silence", "wait", "reply", "followup", "tool_followup", "research", "task_request"):
         return None
     if action in ("silence", "wait"):
         return Decision(action, None) if target is None and not covered else None
@@ -239,6 +239,14 @@ def validate_decision(value: object, context: ConversationContext) -> Decision |
                 or context.messages.index(anchor) >= context.messages.index(candidate)
                 or covered not in ([], [target])):
             return None
+    if action in ("research", "task_request"):
+        candidate = next((message for message in context.messages if message.message_id == target), None)
+        if (not context.reply_candidate_ids or candidate is None
+                or candidate.bot_id != context.bot_id or candidate.group_id != context.group_id
+                or covered not in ([], [target])
+                or (context.mode == "quiet" and target not in context.addressed_candidate_ids
+                    and target not in context.followup_candidate_ids)):
+            return None
     if (action == "reply" and context.mode == "quiet"
             and target not in context.addressed_candidate_ids):
         return None
@@ -254,6 +262,7 @@ class ProactiveEngine:
         generate: Callable[[ConversationContext, Decision], Awaitable[str]],
         send: Callable[[str, str, str], Awaitable[str | None]],
         handoff: Callable[[ConversationContext, Decision], Awaitable[bool]] | None = None,
+        reconcile: Callable[..., Awaitable[object]] | None = None,
         clock: Callable[[], float] = time.time,
         semaphore: asyncio.Semaphore | None = None,
         debounce_scale: float = 1.0,
@@ -267,6 +276,7 @@ class ProactiveEngine:
         self._generate = generate
         self._send = send
         self._handoff = handoff
+        self._reconcile = reconcile
         self._clock = clock
         self._semaphore = semaphore if semaphore is not None else asyncio.Semaphore(2)
         self._debounce_scale = max(0.0, debounce_scale)
@@ -970,6 +980,7 @@ class ProactiveEngine:
         is not retried, even if the callback fails after submitting the request.
         """
         addressed = decision.target_message_id in context.addressed_candidate_ids
+        participation = self._candidate_timing(context, decision.target_message_id)[0]
         while True:
             current = self._current(group_id, sender, generation, revision)
             if current is None:
@@ -991,7 +1002,7 @@ class ProactiveEngine:
                     self._record(state, "budget_exhausted")
                     return
                 pacing_lane = state.lanes.get(target.sender_id, lane)
-                if self._can_speak(state, pacing_lane, policy, "followup", addressed=addressed):
+                if self._can_speak(state, pacing_lane, policy, participation, addressed=addressed):
                     # Claim before yielding to the callback. Neither a second
                     # lane nor a failed/uncertain callback can claim this again.
                     state.invalid_targets.add(decision.target_message_id)
@@ -1003,7 +1014,7 @@ class ProactiveEngine:
                         return
                     lane.handoff_target = decision.target_message_id
                     break
-                delay = self._cooldown_until(state, policy, "followup", addressed=addressed, lane=pacing_lane) - self._clock()
+                delay = self._cooldown_until(state, policy, participation, addressed=addressed, lane=pacing_lane) - self._clock()
                 if delay <= 0 or self._debounce_scale == 0:
                     self._record(state, "cooldown")
                     return
@@ -1053,6 +1064,7 @@ class ProactiveEngine:
     async def _deliver(self, group_id, sender, generation, revision, context, decision, text,
                        previous_receipts):
         addressed = decision.target_message_id in context.addressed_candidate_ids
+        reviewed = False
         while True:
             current = self._current(group_id, sender, generation, revision)
             if current is None:
@@ -1065,6 +1077,30 @@ class ProactiveEngine:
             if target is None:
                 self._record(state, "stale")
                 return
+            # Only review a race against a real receipt for an already-observed
+            # public contribution. New human traffic never cancels this answer.
+            if not reviewed and self._reconcile is not None:
+                known = {message.message_id for message in context.messages if not message.is_bot}
+                delivered = [{"receipt_id": key, "target_message_id": reply.target_id, "text": reply.text}
+                    for key, reply in state.reply_index.items()
+                    if key not in previous_receipts and reply.target_id in known][-3:]
+                if delivered:
+                    reviewed = True
+                    covered = await self._review_delivery(state, policy, context, decision, text, delivered)
+                    # Re-check configuration, ownership and freshness after the
+                    # model call. A result is not a new delivery authorization.
+                    current = self._current(group_id, sender, generation, revision)
+                    if current is None or not self._fresh(context, decision.target_message_id):
+                        return
+                    state, lane, policy = current
+                    if covered and self.resolve_target(group_id, decision.target_message_id) is not None:
+                        for key in decision.covered_message_ids or (decision.target_message_id,):
+                            if key not in state.invalid_targets:
+                                state.covered[key] = self._clock()
+                                state.coverage_receipts[key] = covered
+                        self._record(state, "duplicate_reply")
+                        return
+                    continue
             # Models never hold this lock. A ready answer waits outside it for
             # group pacing rather than being discarded when someone else sends.
             async with state.send_lock:
@@ -1148,6 +1184,28 @@ class ProactiveEngine:
                 self._record(state, "cooldown")
             await self._wait_delay(lane, delay)
 
+    async def _review_delivery(self, state, policy, context, decision, text, delivered):
+        """At most one bounded semantic check; failures preserve the pending answer."""
+        if not self._budget(state, policy):
+            return None
+        state.judgments.append(self._clock())
+        self._global_judgments.append(self._clock())
+        if not self._persist():
+            return None
+        try:
+            async with asyncio.timeout(self._model_timeout):
+                async with state.model_slots, self._semaphore:
+                    result = await self._reconcile(context, decision, text, delivered)
+            expected = list(decision.covered_message_ids or (decision.target_message_id,))
+            if (isinstance(result, dict) and set(result) == {"action", "receipt_id", "covered_message_ids"}
+                    and result["action"] == "covered" and result["covered_message_ids"] == expected
+                    and any(item["receipt_id"] == result["receipt_id"] for item in delivered)
+                    and result["receipt_id"] in state.reply_index):
+                return result["receipt_id"]
+        except Exception:
+            pass
+        return None
+
     async def _run(self, group_id: str, sender: str, generation: int, revision: str) -> None:
         state = None
         lane = None
@@ -1207,7 +1265,7 @@ class ProactiveEngine:
                 if not self._fresh(context, decision.target_message_id):
                     self._record(state, "batch_expired")
                     return
-                if decision.action != "tool_followup":
+                if decision.action not in ("tool_followup", "research", "task_request"):
                     self._record(state, "generating")
                     previous_receipts = frozenset(state.reply_index)
                     text = await asyncio.wait_for(self._generate(context, decision), self._model_timeout)
@@ -1217,7 +1275,7 @@ class ProactiveEngine:
                                    or 0xD800 <= ord(char) <= 0xDFFF for char in text)):
                         self._record(state, "invalid_generation")
                         return
-            if decision.action == "tool_followup":
+            if decision.action in ("tool_followup", "research", "task_request"):
                 handing_off = True
                 await self._handoff_once(group_id, sender, generation, revision, context, decision)
                 return
