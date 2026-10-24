@@ -183,12 +183,44 @@ async def test_free_reply_sends_same_persona_as_direct_reply_at_system_priority(
     system, data = call["messages"]
     contract = group_persona_prompt("冰夜姬", persona)
     assert system.role == "system" and contract in system.content
+    assert system.content.count(persona) == 1
+    assert persona not in data.content
     assert "会议全勤奖" not in system.content
     assert data.role == "user" and json.loads(data.content)["shared_memory"] == memory
     assert call["funcs"] == [] and call["extra_args"]["tools"] is None
     query = query_for(bridge, event(explicit=True))
     host.prepare_prompt(query)
     assert contract in query.prompt.messages[-1].content
+    assert query.prompt.messages[-1].content.count(persona) == 1
+
+
+@pytest.mark.asyncio
+async def test_reply_evidence_deduplicates_only_present_bot_speech_and_keeps_media_ownership(bridge):
+    from dataclasses import replace
+    from qunling.proactive.engine import ConversationContext, Decision, Message
+
+    prior = Message("bot", "30000", "b1", "10000", "刚才读到了蓝底白字。", time.time(),
+                    is_bot=True, has_media=True, reply_recipient_id="20001")
+    question = Message("bot", "30000", "m1", "20002", "这个配色你怎么看", time.time(), reply_to="b1")
+    context = ConversationContext("bot", "30000", "active", "具体的当前群人设", (prior, question),
+                                  ("m1",), prior.text, "b1", prior.timestamp,
+                                  reply_candidate_ids=("m1",), topic_message_ids=("b1", "m1"))
+    bridge._complete = AsyncMock(return_value="蓝底白字挺清楚。")
+    await bridge.generate(context, Decision("followup", "m1"))
+    _, payload = bridge._complete.await_args.args
+    evidence = payload["context"]
+    assert "previous_bot_reply" not in evidence
+    assert "persona" not in evidence and "last_bot_text" not in evidence
+    assert evidence["messages"][0]["reply_recipient_id"] == "20001"
+    assert evidence["messages"][0]["has_media"] is True
+    assert evidence["messages"][1]["sender_id"] == "20002"
+    assert evidence["messages"][1]["reply_to"] == "b1"
+    assert evidence["topic_message_ids"] == ("b1", "m1")
+    await bridge.generate(replace(context, messages=(question,)), Decision("followup", "m1"))
+    _, payload = bridge._complete.await_args.args
+    assert payload["context"]["previous_bot_reply"] == {
+        "message_id": "b1", "text": prior.text, "timestamp": prior.timestamp,
+    }
 
 
 @pytest.mark.asyncio

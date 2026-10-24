@@ -16,6 +16,7 @@ from qunling.assets import data_root
 
 MAX_BYTES = 256 * 1024
 MAX_GROUPS = 100
+MAX_PERSONA_CHARACTERS = 6000
 GROUP_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 REVISION = re.compile(r"(?:0|[0-9a-f]{32})\Z")
 TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
@@ -80,7 +81,7 @@ def validate(values: object) -> dict:
             raise ConfigError("invalid_config", "机器人称呼不能为空。")
         result["groups"][group_id] = {
             "mode": entry["mode"], "display_name": name,
-            "persona": _text(entry["persona"], 1000, "人设", multiline=True),
+            "persona": _text(entry["persona"], MAX_PERSONA_CHARACTERS, "人设", multiline=True),
             "quiet_hours": dict(quiet),
         }
     if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_BYTES:

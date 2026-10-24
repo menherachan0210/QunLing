@@ -254,6 +254,14 @@ function renderProactiveRuntime() {
   text("proactive-global-budget", `所有群共用的最近 24 小时判断额度：${proactiveUsage(status?.judgments_day, status?.judgments_day_limit)}。判断额度包含保持安静和调用失败的情况，不等于群消息数或回复数；达到上限后随时间恢复。`);
   text("proactive-runtime-updated", `状态采样：${proactiveTime(status?.generated_at)}${proactiveConfigReady ? "" : " · 本次读取失败，以上数据可能已过期"}`);
 }
+const proactivePersonaLimit = 6000;
+function renderProactivePersonaCount() {
+  // Count Unicode code points like Python's len(), including emoji as one.
+  const length = Array.from($("proactive-persona").value).length;
+  const over = length > proactivePersonaLimit;
+  text("proactive-persona-count", `${length} / ${proactivePersonaLimit} 字${over ? " · 超出限制，请缩短后保存；内容已保留" : ""}`);
+  $("proactive-persona").setAttribute("aria-invalid", String(over));
+}
 function renderProactiveEditor() {
   const selected = proactiveSelected;
   $("proactive-empty").hidden = Boolean(selected);
@@ -268,6 +276,7 @@ function renderProactiveEditor() {
   document.querySelectorAll("#proactive-mode option").forEach((option) => { option.disabled = !member && option.value !== "off"; });
   $("proactive-display-name").value = group.display_name;
   $("proactive-persona").value = group.persona;
+  renderProactivePersonaCount();
   $("proactive-quiet-enabled").checked = group.quiet_hours.enabled;
   $("proactive-quiet-start").value = group.quiet_hours.start;
   $("proactive-quiet-end").value = group.quiet_hours.end;
@@ -385,6 +394,7 @@ function editProactiveGroup() {
     quiet_hours: {enabled: $("proactive-quiet-enabled").checked, start: $("proactive-quiet-start").value, end: $("proactive-quiet-end").value, timezone: "Asia/Shanghai"}
   };
   proactiveDraft.groups[proactiveSelected] = group;
+  renderProactivePersonaCount();
   proactiveDirty = true;
   $("proactive-quiet-fields").hidden = !group.quiet_hours.enabled;
   text("proactive-mode-note", proactiveModeNotes[group.mode]);
@@ -605,6 +615,8 @@ $("proactive-form").addEventListener("submit", async (event) => {
   if ($("proactive-save").disabled || !proactiveDraft) return;
   const epoch = authEpoch;
   const config = JSON.parse(JSON.stringify(proactiveDraft));
+  const oversizedPersona = Object.entries(config.groups).find(([, group]) => Array.from(group.persona).length > proactivePersonaLimit);
+  if (oversizedPersona) { proactiveFeedback(`群 ${oversizedPersona[0]} 的性格与交流习惯超过 ${proactivePersonaLimit} 字，请缩短后保存。输入内容已保留。`); return; }
   const invalidQuiet = Object.values(config.groups).some((group) => group.quiet_hours.enabled && (!group.quiet_hours.start || !group.quiet_hours.end || group.quiet_hours.start === group.quiet_hours.end));
   if (invalidQuiet) { proactiveFeedback("请填写完整的安静时段，开始和结束时间不能相同。"); return; }
   proactiveAction = true;

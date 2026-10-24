@@ -131,6 +131,41 @@ def test_new_groups_are_off_and_master_switch_never_enables_groups():
 """)
 
 
+def test_persona_paste_preserves_long_text_and_blocks_oversize_across_groups():
+    from html.parser import HTMLParser
+
+    class PersonaField(HTMLParser):
+        attrs = None
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "textarea" and dict(attrs).get("id") == "proactive-persona":
+                self.attrs = dict(attrs)
+
+    field = PersonaField()
+    field.feed((Path(__file__).resolve().parents[1] / "bootstrap/static/index.html").read_text(encoding="utf-8"))
+    assert field.attrs is not None and "maxlength" not in field.attrs
+    run_browser(r"""
+  select('123');
+  const persona='性格正文'.repeat(300)+'🙂'.repeat(4800);
+  input('proactive-persona',persona);
+  assert.equal(element('proactive-persona-count').textContent,'6000 / 6000 字');
+  await save();
+  assert.equal(config.groups['123'].persona,persona);
+  await refresh();
+  assert.equal(element('proactive-persona').value,persona);
+  input('proactive-persona',persona+'多');
+  assert.equal(element('proactive-persona').getAttribute('aria-invalid'),'true');
+  select('456');
+  await save();
+  assert.equal(posts.length,1);
+  select('123');
+  assert.equal(element('proactive-persona').value,persona+'多');
+  input('proactive-persona',persona);
+  await save();
+  assert.equal(posts.length,2);
+""")
+
+
 def test_default_style_can_be_viewed_saved_reloaded_and_reset_without_changing_group_persona():
     run_browser(r"""
   assert.equal(element('proactive-default-style').value,builtinStyle);

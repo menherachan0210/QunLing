@@ -32,6 +32,32 @@ CONTINUATION_READ_TOOLS = frozenset({
     "collect_web_materials",
 })
 
+# Scheduling only: these names describe bounded operations, never user text or
+# permissions. Unknown sources/tools stay in the conservative general lane.
+_QUICK_TOOLS = frozenset({
+    "read_recent_group_context", "query_group_members", "read_web_page",
+    "comic_translation_status", "list_edit_image_references",
+})
+_NETWORK_TOOLS = frozenset({
+    "search_web", "search_web_images", "read_group_context_images", "read_qq_avatar",
+})
+
+
+def _tool_lane(name, source, parameters):
+    if source != "plugin":
+        return "general"
+    if name in _QUICK_TOOLS:
+        return "quick"
+    if name in _NETWORK_TOOLS:
+        return "network"
+    if isinstance(parameters, dict):
+        if name == "browse_group_files" and parameters.get("action", "list") == "list":
+            return "quick"
+        if (name == "file_task" and (parameters.get("action") == "list"
+                or (parameters.get("action") == "status" and parameters.get("wait_seconds", 10) == 0))):
+            return "quick"
+    return "general"
+
 
 def continuation_tool_allowed(name, parameters=None):
     """Permit bounded retrieval/cache work, never delivery or external mutation."""
@@ -309,6 +335,9 @@ class Dispatch:
         self.admission_failed = 0
         self.observation_changed = asyncio.Event()
         self.tools = asyncio.Semaphore(1)
+        self.quick_tools = asyncio.Semaphore(2)
+        self.network_tools = asyncio.Semaphore(1)
+        self.parked_by_lane = {"general": 0, "quick": 0, "network": 0}
         self.parked = 0
         self.sequence = 0
         self.retired = OrderedDict()
@@ -846,9 +875,16 @@ async def invoke_tool(ap, query, invoke, name="", *, source="", parameters=None)
     async with task.tool_lock:
         if task.done.is_set():
             raise RuntimeError("The owning QQ request was cancelled")
-        if service.parked >= service.parked_limit:
+        lane = _tool_lane(name, source, parameters)
+        capacity = {"general": service.tools, "quick": service.quick_tools,
+                    "network": service.network_tools}[lane]
+        # Reserve capacity independently: two long jobs must not reject a short
+        # context lookup before it even gets to the quick lane. Total parked work
+        # remains bounded by three lanes, while model slots are unchanged.
+        if service.parked_by_lane[lane] >= service.parked_limit:
             journal.record(query, 'tool_wait', reason='capacity', tool=name)
-            raise RuntimeError("Long-task capacity is full; do not automatically retry this tool")
+            raise RuntimeError("Tool lane capacity is full; do not automatically retry this tool")
+        service.parked_by_lane[lane] += 1
         service.parked += 1
         current = asyncio.current_task()
         task.tool_tasks.add(current)
@@ -860,13 +896,15 @@ async def invoke_tool(ap, query, invoke, name="", *, source="", parameters=None)
             task.foreground.release()
         try:
             async with asyncio.timeout(service.tool_queue_timeout):
-                await service.tools.acquire()
+                await capacity.acquire()
             try:
                 if task.continuation is not None and not await _validate_grant(task.continuation, task.query):
                     return _continuation_tool_denied("continuation_revoked")
                 if (task.continuation is not None and not task.continuation.allow_actions
                         and (source != "plugin" or not continuation_tool_allowed(name, parameters))):
                     return _continuation_tool_denied("continuation_read_only")
+                if lane != _tool_lane(name, source, parameters):
+                    raise RuntimeError("Tool operation changed while waiting for capacity")
                 task.phase, task.changed = "tool", time.monotonic()
                 object.__setattr__(query, '_request_phase', 'tool')
                 object.__setattr__(query, '_request_tool_failed', False)
@@ -878,7 +916,7 @@ async def invoke_tool(ap, query, invoke, name="", *, source="", parameters=None)
                     journal.record(query, 'tool', tool=name, uncertain=False)
                 return result
             finally:
-                service.tools.release()
+                capacity.release()
         except Exception as exc:
             journal.failure(query, exc)
             raise
@@ -897,6 +935,7 @@ async def invoke_tool(ap, query, invoke, name="", *, source="", parameters=None)
                         journal.record(query, 'model')
             finally:
                 task.tool_tasks.discard(current)
+                service.parked_by_lane[lane] -= 1
                 service.parked -= 1
 
 

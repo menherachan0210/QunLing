@@ -405,16 +405,16 @@ async def test_revoke_while_tool_waits_prevents_invoke_and_restores_slots(manage
     query = await dispatch.admit_continuation(managed, values, validate=lambda: allowed[0])
     controller = Controller(managed)
     assert await dispatch.acquire_slot(controller, query)
-    await managed.dispatch.tools.acquire()
+    await managed.dispatch.network_tools.acquire()
     invoke = AsyncMock()
     pending = asyncio.create_task(dispatch.invoke_tool(managed, query, invoke, "read_qq_avatar", source="plugin"))
     await until(lambda: managed.dispatch.parked == 1)
     allowed[0] = False
-    managed.dispatch.tools.release()
+    managed.dispatch.network_tools.release()
     result = json.loads(await pending)
     assert result["error"] == "continuation_revoked"
     invoke.assert_not_awaited()
-    assert managed.dispatch.parked == 0 and managed.dispatch.tools._value == 1
+    assert managed.dispatch.parked == 0 and managed.dispatch.network_tools._value == 1
     dispatch.release_slot(controller, query)
     assert controller.semaphore._value == 2
 

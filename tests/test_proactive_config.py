@@ -104,13 +104,28 @@ def test_invalid_top_level_is_rejected(value):
 
 
 @pytest.mark.parametrize("field,value", [("mode", []), ("mode", "random"),
-    ("persona", "a" * 1001), ("persona", "\ud800"), ("display_name", ""),
+    ("persona", "a" * 6001), ("persona", "\ud800"), ("display_name", ""),
     ("display_name", "x\nname"), ("quiet_hours", {}), ("quiet_hours", None)])
 def test_invalid_group_policy_is_rejected(field, value):
     data = config()
     data["groups"]["123456"][field] = value
     with pytest.raises(ConfigError):
         validate(data)
+
+
+def test_long_persona_survives_save_reload_and_rejected_edit(tmp_path):
+    store = ConfigStore("a", tmp_path)
+    data = config()
+    persona = "完整性格\n" * 1000 + "🙂" * 1000
+    assert len(persona) == 6000
+    data["groups"]["123456"]["persona"] = persona
+    saved = store.save(data, {"123456"})
+    assert ConfigStore("a", tmp_path).read()["groups"]["123456"]["persona"] == persona
+    oversized = deepcopy(saved)
+    oversized["groups"]["123456"]["persona"] += "多"
+    with pytest.raises(ConfigError):
+        store.save(oversized, {"123456"})
+    assert store.read() == saved
 
 
 @pytest.mark.parametrize("changes", [{"timezone": "../bad"}, {"timezone": "No/Such_Zone"},
