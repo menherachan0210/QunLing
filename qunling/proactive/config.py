@@ -46,13 +46,15 @@ def _text(value, limit, name, *, multiline=False):
 
 
 def validate(values: object) -> dict:
-    if (not isinstance(values, dict) or set(values) != {"version", "revision", "enabled", "groups"}
+    if (not isinstance(values, dict) or set(values) - {"default_style"} != {"version", "revision", "enabled", "groups"}
             or type(values["version"]) is not int or values["version"] != 1
             or type(values["enabled"]) is not bool
             or not isinstance(values["revision"], str) or not REVISION.fullmatch(values["revision"])
             or not isinstance(values["groups"], dict) or len(values["groups"]) > MAX_GROUPS):
         raise ConfigError("invalid_config", "自由对话配置无效，最多保存 100 个群的设置。")
     result = {**values, "groups": {}}
+    if "default_style" in values:
+        result["default_style"] = _text(values["default_style"], 6000, "默认语气", multiline=True)
     for group_id, entry in values["groups"].items():
         if not isinstance(group_id, str) or not GROUP_ID.fullmatch(group_id):
             raise ConfigError("invalid_config", "群号格式无效。")
@@ -152,6 +154,11 @@ class ConfigStore:
                     raise ConfigError("storage_unavailable", "自由对话配置损坏或不可读，请恢复配置文件后重试。")
                 if candidate["revision"] != current["revision"]:
                     raise ConfigError("revision_conflict", "设置已在其他页面修改，请重新载入后再保存。")
+                # Older consoles do not know this field. Saving group settings
+                # from one must not erase an administrator's default style.
+                if "default_style" not in candidate and "default_style" in current:
+                    candidate["default_style"] = current["default_style"]
+                    candidate = validate(candidate)
                 # An offline emergency pause is allowed only if policies are
                 # unchanged (or removed/turned off), never as an authorization path.
                 for group_id, policy in candidate["groups"].items():

@@ -221,10 +221,10 @@ button.proactive-group.is-selected:not(.icon-button, .input-action) { border-col
 .proactive-editor fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .proactive-editor legend { padding: 0; font-size: 16px; font-weight: 600; color: #4b5772; overflow-wrap: anywhere; }
 #proactive-group-id { margin: 3px 0 18px; }
-.proactive-editor select, .proactive-editor textarea { display: block; width: 100%; padding: 10px 12px; color: #37415a; border: 1px solid #e2e6ef; border-radius: 7px; background: #fcfdff; }
-.proactive-editor textarea { resize: vertical; min-height: 96px; line-height: 1.7; }
-.proactive-editor select:focus, .proactive-editor textarea:focus { outline: 2px solid #b5adf0; outline-offset: 2px; }
-.proactive-editor input:disabled, .proactive-editor textarea:disabled, .proactive-editor select:disabled { opacity: .55; cursor: not-allowed; }
+.proactive-editor select, .proactive-editor textarea, .proactive-default-style textarea { display: block; width: 100%; padding: 10px 12px; color: #37415a; border: 1px solid #e2e6ef; border-radius: 7px; background: #fcfdff; }
+.proactive-editor textarea, .proactive-default-style textarea { resize: vertical; min-height: 96px; line-height: 1.7; }
+.proactive-editor select:focus, .proactive-editor textarea:focus, .proactive-default-style textarea:focus { outline: 2px solid #b5adf0; outline-offset: 2px; }
+.proactive-editor input:disabled, .proactive-editor textarea:disabled, .proactive-editor select:disabled, .proactive-default-style textarea:disabled { opacity: .55; cursor: not-allowed; }
 .proactive-editor .field > .note { margin: 7px 0 0; }
 .proactive-quiet-heading { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 12px; }
 .proactive-quiet-heading label { color: #566178; font-size: 14px; font-weight: 550; }
@@ -252,7 +252,7 @@ button.proactive-group.is-selected:not(.icon-button, .input-action) { border-col
   .proactive-group-list { max-height: 210px; }
   .proactive-editor { padding: 17px; }
   .proactive-empty { min-height: 170px; padding: 18px; }
-  .proactive-editor select, .proactive-editor textarea { font-size: 16px; }
+  .proactive-editor select, .proactive-editor textarea, .proactive-default-style textarea { font-size: 16px; }
 }
 .advanced-card .card-heading { margin-bottom: 18px; }
 .management-link { display: flex; align-items: center; justify-content: space-between; gap: 13px; padding: 13px 14px; background: #f8f9fc; border: 1px solid #edf0f6; border-radius: 8px; transition: background .15s, border-color .15s; }
@@ -488,6 +488,10 @@ footer .icon { width: 12px; height: 12px; }
   .versions { gap: 15px; }
   .form-row { gap: 9px; }
 }
+.proactive-default-style { margin: 18px 0; padding: 16px; border: 1px solid var(--border, #e3e8f3); border-radius: 8px; }
+.proactive-default-style summary { cursor: pointer; font-weight: 600; }
+.proactive-default-style[open] summary { margin-bottom: 12px; }
+.proactive-default-style .form-actions { margin-top: 10px; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { transition: none !important; animation: none !important; }

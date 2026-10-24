@@ -77,6 +77,121 @@ def query_for(bridge, incoming):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode,enabled", [("off", True), ("natural", False), ("active", True)])
+async def test_group_persona_replaces_managed_style_for_direct_and_tool_prompt(bridge, mode, enabled):
+    from qunling.group_persona import PERSONA_MARKER, STYLE_MARKER
+
+    state = bridge.store.read()
+    state["enabled"] = enabled
+    state["groups"]["30000"].update(mode=mode, display_name="冰夜姬", persona="自信爽快，敢于反驳，少说客套话。")
+    bridge.store.save(state, known_group_ids={"30000"})
+    incoming = event(explicit=True)
+    query = query_for(bridge, incoming)
+    memory = ModelMessage(role="system", content="# Long-term Memory\n旧人设：胆小、每句话都道歉。群友喜欢科幻电影。")
+    query.prompt.messages.extend([ModelMessage(role="system", content=STYLE_MARKER + "\n旧内置风格"), memory])
+    original_messages = query.messages
+
+    host.prepare_prompt(query)
+    # Exercise the actual Host-to-runner serialization, including tool requests.
+    serialize = patched_method(LANGBOT_ROOT, "src/langbot/pkg/pipeline/process/handlers/chat.py",
+                               "ChatMessageHandler", "_build_history_prompt_config", {})
+    serialized = await serialize(None, query)
+    system = "\n".join(item["content"] for item in serialized if item["role"] == "system")
+    assert "自信爽快，敢于反驳，少说客套话。" in system
+    assert "旧内置风格" not in system and "会议全勤奖" not in system
+    assert system.index("旧人设") < system.index(PERSONA_MARKER)
+    assert "群友喜欢科幻电影" in system
+    assert memory in query.prompt.messages
+    assert query.messages is original_messages
+    assert json.loads(query.prompt.messages[-1].content.rsplit("\n", 1)[-1])["free_chat_enabled"] is (enabled and mode != "off")
+    host.prepare_prompt(query)
+    assert sum(PERSONA_MARKER in item.content for item in query.prompt.messages) == 1
+    assert query.prompt.messages[0].content == "保留的原始系统提示"
+
+
+@pytest.mark.asyncio
+async def test_group_persona_changes_next_prompt_and_does_not_leak_between_groups(bridge):
+    from qunling.group_persona import PERSONA_MARKER
+
+    state = bridge.store.read()
+    state["groups"]["30000"].update(display_name="甲", persona="自信爽快，不拘小节")
+    state["groups"]["90000"] = {**copy.deepcopy(DEFAULT_GROUP), "display_name": "乙", "persona": "温和细致，喜欢安静"}
+    bridge.store.save(state, known_group_ids={"30000", "90000"})
+    first, second = query_for(bridge, event(explicit=True)), query_for(bridge, event(group="90000", explicit=True))
+    host.prepare_prompt(first)
+    host.prepare_prompt(second)
+    assert "自信爽快，不拘小节" in first.prompt.messages[-1].content
+    assert "温和细致，喜欢安静" not in first.prompt.messages[-1].content
+    assert "温和细致，喜欢安静" in second.prompt.messages[-1].content
+    assert "自信爽快，不拘小节" not in second.prompt.messages[-1].content
+
+    state = bridge.store.read()
+    state["groups"]["30000"]["persona"] = ""
+    bridge.store.save(state, known_group_ids={"30000", "90000"})
+    host.prepare_prompt(first)
+    combined = "\n".join(item.content for item in first.prompt.messages)
+    assert "自信爽快，不拘小节" not in combined
+    assert "会议全勤奖" in combined
+    assert combined.count(PERSONA_MARKER) == 1
+
+
+@pytest.mark.asyncio
+async def test_saved_default_is_visible_in_admin_api_and_used_by_both_reply_paths(bridge):
+    from qunling.group_persona import builtin_style
+    from qunling.proactive.engine import ConversationContext, Decision, Message
+
+    state = bridge.store.read()
+    custom = "正式克制，回答充分展开，不讲笑话。"
+    result = await host.save_config(bridge.bot.ap, admin_context(), "bot", {**state, "default_style": custom})
+    assert result["builtin_style"] == builtin_style()
+    loaded = await host.get_config(bridge.bot.ap, admin_context(), "bot")
+    assert loaded["config"]["default_style"] == custom
+    assert bridge.configuration().default_style == custom
+    query = query_for(bridge, event(explicit=True))
+    host.prepare_prompt(query)
+    assert custom in query.prompt.messages[-1].content
+    assert "会议全勤奖" not in query.prompt.messages[-1].content
+    message = Message("bot", "30000", "m1", "20000", "你的看法呢", time.time())
+    context = ConversationContext("bot", "30000", "active", "", (message,), (), "", None, None,
+                                  default_style=custom)
+    bridge._complete = AsyncMock(return_value="正式回答")
+    await bridge.generate(context, Decision("reply", "m1"))
+    system, payload = bridge._complete.await_args.args
+    assert custom in system and "会议全勤奖" not in system
+    assert "default_style" not in payload["context"]
+
+
+@pytest.mark.asyncio
+async def test_free_reply_sends_same_persona_as_direct_reply_at_system_priority(bridge, monkeypatch):
+    from qunling import group_memory
+    from qunling.group_persona import group_persona_prompt
+    from qunling.proactive.engine import ConversationContext, Decision, Message
+
+    persona = "你很自信，轻松俏皮，认真提问时讲清楚。"
+    state = bridge.store.read()
+    state["groups"]["30000"].update(display_name="冰夜姬", persona=persona)
+    bridge.store.save(state, known_group_ids={"30000"})
+    memory = {"records": [{"text": "旧人设：每次先道歉。群友周五要交报告。"}]}
+    monkeypatch.setattr(group_memory, "recall_group_memory", AsyncMock(return_value=memory))
+    provider = NS(invoke_llm=AsyncMock(return_value=ModelMessage(role="assistant", content="自信接话")))
+    bridge._model = AsyncMock(return_value=NS(provider=provider))
+    message = Message("bot", "30000", "m1", "20000", "你怎么这么自信", time.time())
+    context = ConversationContext("bot", "30000", "active", persona, (message,), (), "", None, None,
+                                  display_name="冰夜姬", reply_candidate_ids=("m1",))
+    assert await bridge.generate(context, Decision("reply", "m1")) == "自信接话"
+    call = provider.invoke_llm.await_args.kwargs
+    system, data = call["messages"]
+    contract = group_persona_prompt("冰夜姬", persona)
+    assert system.role == "system" and contract in system.content
+    assert "会议全勤奖" not in system.content
+    assert data.role == "user" and json.loads(data.content)["shared_memory"] == memory
+    assert call["funcs"] == [] and call["extra_args"]["tools"] is None
+    query = query_for(bridge, event(explicit=True))
+    host.prepare_prompt(query)
+    assert contract in query.prompt.messages[-1].content
+
+
+@pytest.mark.asyncio
 async def test_explicit_prompt_gets_frozen_same_group_context_and_actual_capabilities(bridge):
     first = event("我打算明天搬家", sender="20001", message_id="history")
     first.timestamp -= 1

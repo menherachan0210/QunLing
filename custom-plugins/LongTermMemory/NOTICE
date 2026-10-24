@@ -10,7 +10,10 @@ correct scoped memory deletion/compatibility behavior, and add opt-in read-only
 group/speaker profile recall for QunLing group conversation. Profile retrieval
 is bounded and survives embedding failures; default explicit-request recall,
 memory writes, plugin identity and persisted configuration remain unchanged.
-The local version is 0.2.7+local.3. The exact upstream commit was not recorded with the original
+The 2026-10-24 revision treats injected profiles as factual reference data and
+gives current administrator group style precedence over remembered bot personas.
+Memory records, scopes, retrieval and write behavior are unchanged.
+The local version is 0.2.7+local.4. The exact upstream commit was not recorded with the original
 local copy; no commit identity is asserted here.
 Original upstream attribution and author/name installation identity are retained.
 See the local repair documentation. The repository's compatibility patch records

@@ -38,11 +38,12 @@ function element(id) {
   if(!nodes.has(id))nodes.set(id,makeElement(id));
   return nodes.get(id);
 }
-const edits=['proactive-enabled','proactive-mode','proactive-display-name','proactive-persona','proactive-quiet-enabled','proactive-quiet-start','proactive-quiet-end'];
+const edits=['proactive-enabled','proactive-mode','proactive-display-name','proactive-persona','proactive-default-style','proactive-reset-style','proactive-quiet-enabled','proactive-quiet-start','proactive-quiet-end'];
 const options=['off','quiet','natural','active'].map(mode=>({...makeElement(),value:mode}));
 element('settings').elements.api_key={value:'',type:'password'};
 const stored=new Map([['qqbot-setup','test-token']]);
 let config={version:1,revision:'r0',enabled:false,groups:{}};
+let builtinStyle='自然交流，有主见，闲聊简短。';
 let groups=[{group_id:'123',name:'测试群'},{group_id:'456',name:'<img src=x onerror=alert(1)>'}];
 let setup={plugins_ready:true,plugin_runtime_healthy:true,stage:'ready',configured:true,qq_connected:true,qq_logged_in:true,settings:{}};
 let update={available:true,busy:false,phase:'idle'};
@@ -87,7 +88,7 @@ const context=vm.createContext({
         config={...JSON.parse(opts.body),revision:'r'+posts.length};
       }
       if(configFailure)throw Error('设置读取失败');
-      return {ok:true,json:async()=>({config:clone(config),status:clone(status)})};
+      return {ok:true,json:async()=>({config:clone(config),status:clone(status),builtin_style:builtinStyle})};
     }
     throw Error('unexpected endpoint '+path);
   }
@@ -127,6 +128,46 @@ def test_new_groups_are_off_and_master_switch_never_enables_groups():
   await refresh();
   assert.equal(rows().find(row=>row.children[0].children[1].textContent==='789').children[1].textContent,'仅 @ 回复');
   assert.deepEqual(config.groups,{});
+""")
+
+
+def test_default_style_can_be_viewed_saved_reloaded_and_reset_without_changing_group_persona():
+    run_browser(r"""
+  assert.equal(element('proactive-default-style').value,builtinStyle);
+  assert.equal(element('proactive-default-style').disabled,false);
+  select('123'); input('proactive-persona','本群独立：自信俏皮');
+  input('proactive-default-style','所有未设置性格的群：正式严谨');
+  await refresh();
+  assert.equal(element('proactive-default-style').value,'所有未设置性格的群：正式严谨');
+  await save();
+  assert.equal(config.default_style,'所有未设置性格的群：正式严谨');
+  assert.equal(config.groups['123'].persona,'本群独立：自信俏皮');
+  assert.equal(config.groups['123'].mode,'off');
+  await evaluate('pollProactive(authEpoch, true, true)');
+  assert.equal(element('proactive-default-style').value,config.default_style);
+  element('proactive-reset-style').click();
+  assert.equal(element('proactive-default-style').value,builtinStyle);
+  assert.notEqual(config.default_style,''); // Reset remains a draft until saved.
+  await save();
+  assert.equal(config.default_style,'');
+  assert.equal(config.groups['123'].persona,'本群独立：自信俏皮');
+""")
+
+
+def test_default_style_conflict_and_auth_locks_preserve_unsaved_changes():
+    run_browser(r"""
+  input('proactive-default-style','未保存的默认语气');
+  config.revision='other-tab';
+  await refresh();
+  assert.equal(element('proactive-default-style').value,'未保存的默认语气');
+  assert.equal(element('proactive-default-style').disabled,true);
+  assert.equal(element('proactive-reset-style').disabled,true);
+  assert.equal(element('proactive-save').disabled,true);
+  await element('proactive-reload').click();
+  assert.equal(element('proactive-default-style').value,builtinStyle);
+  unauthorized=true; await refresh();
+  assert.equal(element('proactive-default-style').disabled,true);
+  assert.equal(element('proactive-default-style').value,'');
 """)
 
 

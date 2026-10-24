@@ -21,7 +21,8 @@ def styled_prompts(prompts):
     result.append(
         {
             "role": "system",
-            "content": MARKER + "\n" + STYLE_PATH.read_text(encoding="utf-8").strip(),
+            "content": MARKER + "\n以下是内置默认语气；本群另有管理员性格设置时，以当前群设置为准。"
+                       "对话依据与任务规则始终适用。\n" + STYLE_PATH.read_text(encoding="utf-8").strip(),
         }
     )
     return result

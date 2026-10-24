@@ -17,6 +17,28 @@ def test_defaults_do_not_authorize_or_create_storage(tmp_path):
     assert store.read_valid and not store.root.exists()
 
 
+def test_editable_default_survives_restart_legacy_client_and_reset(tmp_path):
+    store = ConfigStore("a", tmp_path)
+    old = config()
+    assert validate(old) == old  # Existing files load without a migration write.
+    stored = store.save({**old, "default_style": "  沉稳严谨，少说客套话。  "}, {"123456"})
+    assert ConfigStore("a", tmp_path).read()["default_style"] == "沉稳严谨，少说客套话。"
+    assert ConfigStore("b", tmp_path).read().get("default_style", "") == ""
+    old_console = {key: value for key, value in stored.items() if key != "default_style"}
+    saved = store.save(old_console, {"123456"})
+    assert saved["default_style"] == stored["default_style"]
+    reset = store.save({**saved, "default_style": ""}, {"123456"})
+    assert reset["default_style"] == "" and reset["groups"] == stored["groups"]
+    with pytest.raises(ConfigError, match="其他页面"):
+        store.save({**saved, "default_style": "不应覆盖"}, {"123456"})
+
+
+@pytest.mark.parametrize("style", [None, [], 42, "a" * 6001, "\ud800", "bad\x00style"])
+def test_invalid_default_style_is_rejected(style):
+    with pytest.raises(ConfigError):
+        validate({**config(), "default_style": style})
+
+
 def test_save_reload_is_bot_scoped_and_revision_checked(tmp_path):
     a, b = ConfigStore("a", tmp_path), ConfigStore("b", tmp_path)
     stored = a.save(config(), {"123456"})

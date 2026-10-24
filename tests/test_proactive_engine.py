@@ -53,6 +53,18 @@ async def eventually(predicate):
     assert predicate()
 
 
+def test_saved_default_style_is_frozen_into_free_reply_context():
+    async def scenario():
+        h = Harness()
+        h.config = replace(h.config, default_style="正式克制，不讲笑话")
+        assert h.engine.on_message(h.message())
+        await h.engine.drain()
+        assert h.checked[0].default_style == "正式克制，不讲笑话"
+        assert h.generated[0][0].default_style == "正式克制，不讲笑话"
+        await h.engine.close()
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("snapshot", [
     EngineConfig("1", False, {"100": GroupPolicy()}),
     EngineConfig("1", True, {}),

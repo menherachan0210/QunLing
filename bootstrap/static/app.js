@@ -24,6 +24,7 @@ let proactiveAction = false;
 let proactiveLoading = false;
 let proactiveStatus = null;
 let proactiveSavedConfig = null;
+let proactiveBuiltinStyle = null;
 let proactiveLastPoll = 0;
 const proactiveModes = {off: "仅 @ 回复", quiet: "安静参与", natural: "自然参与", active: "活跃参与"};
 const proactiveModeNotes = {
@@ -121,6 +122,8 @@ function locked(message) {
   proactiveLastPoll = 0;
   proactiveStatus = null;
   proactiveSavedConfig = null;
+  proactiveBuiltinStyle = null;
+  $("proactive-default-style").value = "";
   $("proactive-runtime").hidden = true;
   $("console-content").hidden = true;
   $("unlock").hidden = false;
@@ -167,6 +170,8 @@ function controls() {
   const proactiveBlocked = !authenticated || !setupState?.qq_logged_in || configAction || updating || proactiveAction || proactiveLoading || !proactiveConfigReady || !proactiveGroupsReady || proactiveConflict || proactiveStatus?.available === false;
   document.querySelectorAll("[data-proactive-edit], .proactive-group").forEach((element) => { element.disabled = proactiveBlocked; });
   $("proactive-group-settings").disabled = proactiveBlocked || !proactiveSelected;
+  $("proactive-default-style").disabled = proactiveBlocked || proactiveBuiltinStyle === null;
+  $("proactive-reset-style").disabled = proactiveBlocked || proactiveBuiltinStyle === null;
   $("proactive-reset-group").disabled = proactiveBlocked || !proactiveSelected || !proactiveDraft || !Object.hasOwn(proactiveDraft.groups, proactiveSelected);
   $("proactive-save").disabled = proactiveBlocked || !proactiveDirty;
   $("proactive-refresh").disabled = !authenticated || !setupState?.qq_logged_in || updating || proactiveLoading || proactiveAction;
@@ -180,6 +185,7 @@ function proactiveDefaultGroup() {
 }
 function validProactiveConfig(value) {
   return value?.version === 1 && typeof value.revision === "string" && typeof value.enabled === "boolean" &&
+    (value.default_style === undefined || typeof value.default_style === "string") &&
     value.groups && !Array.isArray(value.groups) && typeof value.groups === "object" &&
     Object.entries(value.groups).every(([id, group]) => /^\d+$/.test(id) && group && Object.hasOwn(proactiveModes, group.mode) &&
       typeof group.display_name === "string" && typeof group.persona === "string" && typeof group.quiet_hours?.enabled === "boolean" &&
@@ -315,11 +321,14 @@ function applyProactive(value, replace = false) {
   proactiveConfigReady = true;
   proactiveStatus = value.status || {};
   proactiveSavedConfig = JSON.parse(JSON.stringify(value.config));
+  proactiveBuiltinStyle = typeof value.builtin_style === "string" ? value.builtin_style : null;
   if (replace || !proactiveDraft || !proactiveDirty) {
     proactiveDraft = JSON.parse(JSON.stringify(value.config));
     proactiveDirty = false;
     proactiveConflict = false;
     $("proactive-enabled").checked = proactiveDraft.enabled;
+    $("proactive-default-style").value = proactiveDraft.default_style || proactiveBuiltinStyle || "";
+    text("proactive-default-style-note", proactiveBuiltinStyle === null ? "当前服务尚未提供默认语气，请更新后重试。" : proactiveDraft.default_style ? "当前使用已保存的自定义默认语气。" : "当前使用内置默认语气。");
     renderProactiveGroups();
     renderProactiveEditor();
   } else if (value.config.revision !== proactiveDraft.revision) {
@@ -549,6 +558,24 @@ $("proactive-enabled").addEventListener("change", () => {
   if ($("proactive-enabled").disabled || !proactiveDraft) return;
   proactiveDraft.enabled = $("proactive-enabled").checked;
   proactiveDirty = true;
+  proactiveSummary();
+  controls();
+});
+$("proactive-default-style").addEventListener("input", () => {
+  if ($("proactive-default-style").disabled || !proactiveDraft) return;
+  const value = $("proactive-default-style").value.trim();
+  proactiveDraft.default_style = value === proactiveBuiltinStyle ? "" : value;
+  proactiveDirty = true;
+  text("proactive-default-style-note", value ? "默认语气已修改，保存后生效。" : "留空将在保存后恢复内置默认语气。");
+  proactiveSummary();
+  controls();
+});
+$("proactive-reset-style").addEventListener("click", () => {
+  if ($("proactive-reset-style").disabled || !proactiveDraft || proactiveBuiltinStyle === null) return;
+  proactiveDraft.default_style = "";
+  $("proactive-default-style").value = proactiveBuiltinStyle;
+  proactiveDirty = true;
+  text("proactive-default-style-note", "已恢复内置默认语气，保存后生效；群内独立性格保留。");
   proactiveSummary();
   controls();
 });

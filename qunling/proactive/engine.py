@@ -44,6 +44,7 @@ class EngineConfig:
     revision: str
     enabled: bool
     groups: Mapping[str, GroupPolicy]
+    default_style: str = ""
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ class ConversationContext:
     participant_ids: tuple[str, ...] = ()
     covered_message_ids: tuple[str, ...] = ()
     continuation_anchors: tuple[tuple[str, str], ...] = ()
+    default_style: str = ""
 
 
 @dataclass(frozen=True)
@@ -858,7 +860,7 @@ class ProactiveEngine:
                                    policy.display_name, addressed, candidates, conversation_id,
                                    lane.sender_id, shared["focus_message_ids"], shared["topic_id"],
                                    shared["topic_message_ids"], shared["participant_ids"], shared["covered_message_ids"],
-                                   tuple(continuations.items()))
+                                   tuple(continuations.items()), default_style=self._snapshot.default_style)
 
     def _current(self, group_id: str, sender_id: str, generation: int, revision: str):
         self.refresh_configuration()
