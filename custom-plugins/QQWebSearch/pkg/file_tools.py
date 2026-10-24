@@ -14,6 +14,7 @@ from langbot_plugin.runtime.io.connection import MAX_MESSAGE_BYTES
 
 from pkg.errors import WebError
 from pkg.files import download_file
+from pkg.materials import register_material
 from qunling.assets import AssetError, AssetStore
 from qunling.integration import query_context
 from qunling.scope import Scope
@@ -36,7 +37,7 @@ async def prepare_file(plugin, context, params, *, api=None):
         )
     ):
         raise WebError("下载只接受公网文件url和可选的filename，不接受路径或收件人。")
-    context.claim("file_download", 3)
+    context.claim("file_download", 6)
     item = await download_file(params["url"], params.get("filename"))
     ref = plugin.web_queries.remember_file(context, item)
     item = context.files[ref]
@@ -60,11 +61,7 @@ async def prepare_file(plugin, context, params, *, api=None):
             raise WebError("未提供可信的当前问题上下文。")
         shared_context = await query_context(plugin, api)
         scope = Scope(**shared_context["scope"])
-        asset = await asyncio.to_thread(
-            lambda: AssetStore.from_env().put(
-                scope, item["name"], item["data"], origin="web", metadata={}
-            )
-        )
+        asset = await register_material(plugin, api, item, shared=shared_context)
         shared_store = AssetStore.from_env()
         shared_store.grant(scope, shared_context["request_key"], asset["asset_ref"])
         # A prior legacy send in this query must also block the new asset entry.

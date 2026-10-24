@@ -83,7 +83,11 @@ class HostDelivery:
                 from langbot_plugin.runtime.io.connection import MAX_MESSAGE_BYTES
                 if ((len(raw) + 2) // 3) * 4 + 65536 > min(MAX_MESSAGE_BYTES, 32 * 1024 * 1024):
                     raise AssetError("delivery_limit", "产物超过消息传输上限。")
-                chain = MessageChain([File(name=item["name"], size=len(raw), base64=base64.b64encode(raw).decode("ascii"))])
+                if item["name"].lower().endswith(".gif") and raw[:6] in {b"GIF87a", b"GIF89a"}:
+                    from langbot_plugin.api.entities.builtin.platform.message import Image
+                    chain = MessageChain([Image(base64=base64.b64encode(raw).decode("ascii"))])
+                else:
+                    chain = MessageChain([File(name=item["name"], size=len(raw), base64=base64.b64encode(raw).decode("ascii"))])
                 # Resolve/revalidate the actual bot immediately before the
                 # synchronous reservation section, with no shared tenant state.
                 bot = await self.resolver(self.ap, claim.scope, claim.route)

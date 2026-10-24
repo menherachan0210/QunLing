@@ -4,7 +4,7 @@ ARG TARGETARCH
 RUN test "${TARGETARCH:-amd64}" = amd64 \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates git build-essential libgomp1 \
+        ca-certificates git build-essential libgomp1 fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONUTF8=1 \

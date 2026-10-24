@@ -116,7 +116,12 @@ def _prepare_image(raw: bytes) -> str:
         width, height = image.size
         if width <= 0 or height <= 0 or width * height > MAX_PIXELS:
             raise VisionError("图片像素超过 4000 万，请缩小后重新发送。")
-        # Animated inputs are represented by their first frame only.
+        if getattr(image, "is_animated", False):
+            from qunling.animation_preview import contact_sheet
+            with contact_sheet(image) as preview:
+                output = io.BytesIO()
+                preview.save(output, format="PNG")
+            return _prepare_image(output.getvalue())
         image.seek(0)
         image.thumbnail((MAX_EDGE, MAX_EDGE), Image.Resampling.LANCZOS)
         with ImageOps.exif_transpose(image) as frame:

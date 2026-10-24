@@ -69,7 +69,7 @@ def test_palette_transparency_is_preserved():
         assert image.convert("RGBA").getpixel((10, 10))[3] == 0
 
 
-def test_gif_uses_first_frame_only():
+def test_gif_preserves_animation_bytes_and_timing():
     output = io.BytesIO()
     with (
         Image.new("RGB", (20, 20), "red") as first,
@@ -83,10 +83,14 @@ def test_gif_uses_first_frame_only():
             duration=100,
             loop=0,
         )
-    with decode_result(media.prepare_image(output.getvalue())) as image:
-        assert getattr(image, "n_frames", 1) == 1
-        red, green, blue = image.getpixel((10, 10))
-        assert red > 240 and green < 10 and blue < 10
+    raw = output.getvalue()
+    result = media.prepare_image(raw)
+    assert result["animated"] and result["frames"] == 2
+    assert result["duration_ms"] == 200
+    assert result["data"] == raw and result["mime"] == "image/gif"
+    with Image.open(io.BytesIO(result["data"])) as image:
+        image.seek(1)
+        assert image.convert("RGB").getpixel((10, 10)) == (0, 0, 255)
 
 
 def test_exif_orientation_is_applied_and_jpeg_metadata_removed():

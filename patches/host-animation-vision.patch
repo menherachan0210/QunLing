@@ -1,0 +1,18 @@
+diff --git a/src/langbot/pkg/pipeline/preproc/preproc.py b/src/langbot/pkg/pipeline/preproc/preproc.py
+--- a/src/langbot/pkg/pipeline/preproc/preproc.py
++++ b/src/langbot/pkg/pipeline/preproc/preproc.py
+@@ -397,6 +397,14 @@
+         query.variables['user_message_text'] = plain_text
+ 
++        # Normalize only model input. Keep original message-chain bytes for
++        # reference editing, file import and faithful animation delivery.
++        from qunling.vision_input import model_image_content
++        content_list = [
++            await model_image_content(item.image_base64)
++            if item.type == 'image_base64' and item.image_base64 else item
++            for item in content_list
++        ]
+         query.user_message = provider_message.Message(role='user', content=content_list)
+ 
+         # Extract configured KB UUIDs into query variables so PromptPreProcessing
+         # plugins can still adjust the authorized retrieval set before run_runner.

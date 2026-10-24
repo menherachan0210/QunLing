@@ -163,8 +163,8 @@ class AssetStore:
             db.execute("BEGIN IMMEDIATE")
             self._prune(db)
             existing = db.execute(
-                "SELECT * FROM assets WHERE scope=? AND digest=? AND name=? ORDER BY created DESC LIMIT 1",
-                (scope.key, digest, name),
+                "SELECT * FROM assets WHERE scope=? AND digest=? AND name=? AND metadata=? ORDER BY created DESC LIMIT 1",
+                (scope.key, digest, name, encoded),
             ).fetchone()
             if existing:
                 return self._public(existing)
@@ -199,6 +199,10 @@ class AssetStore:
     def get(self, scope: Scope, ref: str) -> dict:
         row = self._row(scope, ref)
         return self._public(row)
+
+    def metadata(self, scope: Scope, ref: str) -> dict:
+        """Read private recipe data only after the usual scoped lookup."""
+        return json.loads(self._row(scope, ref)["metadata"])
 
     def _row(self, scope, ref):
         if not isinstance(ref, str) or not REF.fullmatch(ref):

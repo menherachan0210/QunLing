@@ -128,6 +128,16 @@ def test_plain_chat_untrusted_or_nested_document_content_never_adds_turn(guard_m
     assert guard.take_notice() is None
 
 
+@pytest.mark.parametrize("name", ["generate_image", "edit_image"])
+def test_ai_gif_job_hints_continue_without_repeating_paid_generation(guard_module, name):
+    trusted = guard_module.trusted_sources([resource(name=name, owner="langbot-team/AIImagePlugin")], {name})
+    assert trusted == {name: "langbot-team/AIImagePlugin"}
+    guard = guard_module.TaskContinuation(trusted)
+    guard.observe(name, {"task_id": "task_123", "_qunling_task": task_hint(task_id="task_123")})
+    assert guard.take_notice()
+    assert guard_module.trusted_sources([resource(name=name, owner="other/AIImagePlugin")], {name}) == {}
+
+
 @pytest.mark.parametrize("field,value", [
     ("version", True), ("version", 2), ("status", []), ("next_action", {}),
     ("can_continue", "true"), ("retryable", 1), ("error_code", {}),

@@ -35,6 +35,22 @@ def _prepare_image(raw: bytes) -> dict:
         # Verify container integrity before reopening for actual pixel decoding.
         probe.verify()
     with Image.open(io.BytesIO(raw), formats=list(IMAGE_FORMATS)) as image:
+        if getattr(image, "is_animated", False):
+            # Validate all frames within a finite decode budget, then retain the
+            # animation byte-for-byte. Never silently turn an animated meme into a still.
+            frame_limit = min(240, 80_000_000 // (width * height))
+            duration = 0
+            for index in range(frame_limit + 1):
+                try:
+                    image.seek(index)
+                except EOFError:
+                    return {"data": raw, "mime": Image.MIME[image.format],
+                            "width": width, "height": height, "animated": True,
+                            "frames": index, "duration_ms": duration}
+                if index == frame_limit:
+                    raise WebError("动图超出解码帧数或像素预算，未将它冒充静态图。", code="animation_limit")
+                image.load()
+                duration += max(20, min(60000, int(image.info.get("duration", 100) or 100)))
         image.seek(0)
         image.thumbnail((MAX_EDGE, MAX_EDGE), Image.Resampling.LANCZOS)
         with ImageOps.exif_transpose(image) as frame:

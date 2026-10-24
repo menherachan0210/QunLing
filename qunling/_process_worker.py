@@ -78,7 +78,13 @@ def main():
             raise FileError("invalid_parameters", "密码输入超过限制。")
         password = json.loads(secret_input)["password"]
     if operation == "create":
-        result = export_file(args["format"], args["payload"], root / "output")
+        if args["format"] == "gif":
+            from qunling.animation import render
+            inputs = {ref: (root / safe_name(name)).read_bytes()
+                      for ref, name in request.get("animation_inputs", {}).items()}
+            result = render(args["payload"], inputs, root / "output")
+        else:
+            result = export_file(args["format"], args["payload"], root / "output")
     else:
         source = root / safe_name(request["input_name"])
         if operation == "inspect":

@@ -208,6 +208,9 @@ async def test_missing_actual_pixels_never_reach_vision_or_send(monkeypatch, fai
     assert result["status"] == "no_images" and result["images"] == []
     assert context.images == {}
     plugin.invoke_llm.assert_not_awaited()
+    with pytest.raises(WebError, match="重复"):
+        await tools.find_images(plugin, context, "全身图")
+    assert (await tools.find_images(plugin, context, "更具体的原作全身图"))["status"] == "no_images"
     with pytest.raises(WebError, match="上限"):
         await tools.find_images(plugin, context, "再次尝试")
 
@@ -411,9 +414,10 @@ def test_tool_schemas_expose_no_credentials_or_arbitrary_send_destination():
     directory = Path(__file__).resolve().parents[1] / "components/tools"
     expected = {
         "search_web": {"query"},
-        "search_web_images": {"query"},
+        "search_web_images": {"query", "source_urls", "purpose"},
         "read_web_page": {"url", "page_ref", "offset", "find_text"},
         "send_web_images": {"image_refs"},
+        "collect_web_materials": {"refs"},
     }
     for name, properties in expected.items():
         document = yaml.safe_load(
@@ -421,7 +425,8 @@ def test_tool_schemas_expose_no_credentials_or_arbitrary_send_destination():
         )
         schema = document["spec"]["parameters"]
         assert set(schema["properties"]) == properties
-        assert set(schema["required"]) == (set() if name == "read_web_page" else properties)
+        assert set(schema["required"]) == (set() if name == "read_web_page" else {"query"}
+                                           if name == "search_web_images" else properties)
         assert schema["additionalProperties"] is False
 
 

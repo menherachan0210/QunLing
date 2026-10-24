@@ -39,7 +39,7 @@ def _task_result(value, store=None, scope=None, context=None):
     detail = value.get("result")
     if (value.get("status") == "failed" and isinstance(detail, dict)
             and detail.get("error_code") in {"invalid_selector", "invalid_parameters", "result_limit",
-                                           "invalid_schema", "invalid_query", "cell_limit"}):
+                                           "invalid_schema", "invalid_query", "cell_limit", "output_limit"}):
         value = {**value, "_qunling_task": {
             "version": 1, "task_id": value.get("task_id"), "status": "partial",
             "can_continue": True, "retryable": False, "error_code": "invalid_input", "next_action": "continue",
@@ -90,6 +90,10 @@ async def workspace(plugin, api, context, scope, store, params):
                 for entry in entries:
                     if isinstance(entry, dict) and "asset_ref" in entry:
                         store.require_visible(scope, entry["asset_ref"], context)
+        if operation == "create" and args.get("format") == "gif":
+            from qunling.animation import source_refs
+            for ref in source_refs(args["payload"]):
+                store.require_visible(scope, ref, context)
     if "password" in args:
         # Encrypted inputs retain the same bounded parser and visibility rules,
         # but credentials must not enter durable payloads or task snapshots.
@@ -155,6 +159,36 @@ async def tasks(context, scope, params):
     raise AssetError("invalid_parameters", "未知任务操作。")
 
 
+async def animation(plugin, api, context, scope, store, params):
+    from qunling.animation import revise_recipe, validate_recipe
+    _keys(params, {"action", "recipe", "base_ref", "speed", "filename", "deliver"}, {"action"})
+    action = params["action"]
+    if action not in {"create", "revise", "inspect"}:
+        raise AssetError("invalid_parameters", "动画操作为 create、revise 或 inspect。")
+    original = None
+    if action in {"revise", "inspect"}:
+        ref = params.get("base_ref")
+        store.require_visible(scope, ref, context)
+        original = store.metadata(scope, ref).get("gif_recipe")
+        if not original:
+            raise AssetError("invalid_parameters", "该文件没有保存的制作方案；可将它作为图片图层重新制作。")
+        original = validate_recipe(original)
+    if action == "inspect":
+        _keys(params, {"action", "base_ref"}, {"action", "base_ref"})
+        return {"status": "ok", "recipe": original, "artifact": store.get(scope, params["base_ref"]),
+                "instruction": "这是保存的制作方案，不是对成品画面的视觉判断。可直接 revise；要看动作请引用群内成品并读取图片关键帧。"}
+    if action == "create":
+        if "base_ref" in params or "speed" in params:
+            raise AssetError("invalid_parameters", "基于已有方案修改时使用 revise。")
+        recipe = validate_recipe(params.get("recipe"))
+    else:
+        recipe = revise_recipe(original, params.get("recipe", {}), params.get("speed", 1))
+    return await workspace(plugin, api, context, scope, store, {
+        "operation": "create", "deliver": params.get("deliver", True),
+        "arguments": {"format": "gif", "filename": params.get("filename", "表情动画.gif"), "payload": recipe},
+    })
+
+
 async def call_tool(tool, name, params, query_id, query_uuid):
     try:
         api = QueryBasedAPIProxy(query_id=query_id, query_uuid=query_uuid,
@@ -170,6 +204,8 @@ async def call_tool(tool, name, params, query_id, query_uuid):
             elif name == "send_attachment":
                 _keys(params, {"asset_ref"}, {"asset_ref"})
                 result = await send_attachment(store, scope, context, api, params["asset_ref"])
+            elif name == "gif_animation":
+                result = await animation(tool.plugin, api, context, scope, store, params)
             else:
                 raise AssetError("invalid_parameters", "未知文件工具。")
         return _result(result)

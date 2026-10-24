@@ -22,8 +22,8 @@ from langbot.pkg.pipeline.controller import Controller
 @pytest.mark.asyncio
 @pytest.mark.parametrize('pipeline_uuid', ['pipeline', None])
 @pytest.mark.parametrize('native', [False, True])
-@pytest.mark.parametrize('action', ['task_request', 'research'])
-async def test_natural_generation_from_native_event_reaches_real_task_queue(managed, tmp_path, monkeypatch, pipeline_uuid, native, action):
+@pytest.mark.parametrize('action,tool_name', [('task_request', 'generate_image'), ('task_request', 'gif_animation'), ('research', 'read_group_context_images')])
+async def test_natural_generation_from_native_event_reaches_real_task_queue(managed, tmp_path, monkeypatch, pipeline_uuid, native, action, tool_name):
     monkeypatch.setenv('QUNLING_DATA_DIR', str(tmp_path))
     runtime = managed.adapter._runtime
     runtime.bot_entity.workspace_uuid = 'workspace'
@@ -69,7 +69,7 @@ async def test_natural_generation_from_native_event_reaches_real_task_queue(mana
         assert await qq_dispatch.acquire_slot(Controller(managed), query)
         tool = AsyncMock(return_value='result')
         assert await qq_dispatch.invoke_tool(managed, query, tool,
-            'generate_image' if action == 'task_request' else 'read_group_context_images',
+            tool_name,
             source='plugin', parameters={}) == 'result'
         tool.assert_awaited_once()
         bridge.engine._generate.assert_not_awaited()

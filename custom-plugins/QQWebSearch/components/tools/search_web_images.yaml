@@ -16,15 +16,33 @@ spec:
         type: string
         maxLength: 1000
         description: Image subject, character/work name and required composition such as full-body.
+      source_urls:
+        type: array
+        minItems: 1
+        maxItems: 4
+        items:
+          type: string
+        description: Optional actually observed public source pages or image URLs; reuses prior research instead of another search.
+      purpose:
+        type: string
+        enum: [inspect, send, collect]
+        default: inspect
+        description: send when user wants existing pictures delivered; collect for later processing; inspect for visual research only.
     required: [query]
     additionalProperties: false
   llm_prompt: |
     Use when the user asks to find/show/send EXISTING pictures, character art or photos from the web.
     Preserve the user's subject and constraints. Do not fabricate identity or full-body status.
     This searches source pages and checks real downloaded pixels; it does not generate images.
-    If matched image_refs are returned, use send_web_images to send up to two requested images.
-    No matches means give sources/limitations, never substitute generated content.
-    Only once per query; do not retry on failure or empty results.
+    Use purpose=send when asked to show/send pictures, then send_web_images for actual QQ images.
+    Use purpose=collect when gathering assets for other tools, e.g. a ZIP, edit or GIF.
+    Returned asset_refs work with file_workspace, edit_image(asset_refs), gif_animation,
+    and send_attachment. collect_web_materials can gather mixed references with a source manifest.
+    Animated GIFs keep their original frames; visual checks use chronological sampled frames.
+    Reuse source_urls from existing search/page results when available. Never invent an image URL.
+    At most two different image queries/source sets per turn; refine actual gaps after empty
+    results rather than repeating an identical request. Some failed sites do not erase other
+    successful candidates. If exhausted, report limitations; never substitute generated content.
 execution:
   python:
     path: search_web_images.py

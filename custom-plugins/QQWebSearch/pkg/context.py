@@ -27,6 +27,8 @@ class QueryContext:
     images: dict = field(default_factory=dict)
     files: dict = field(default_factory=dict)
     pages: dict = field(default_factory=dict)
+    searches: dict = field(default_factory=dict)
+    image_queries: set = field(default_factory=set)
     page_urls: dict = field(default_factory=dict)
     page_failures: dict = field(default_factory=dict)
     read_urls: set = field(default_factory=set)
@@ -89,6 +91,11 @@ class QueryStore:
             return context
 
     def remember(self, context, image):
+        import hashlib
+        digest = hashlib.sha256(image["data"]).digest()
+        for ref, existing in context.images.items():
+            if hashlib.sha256(existing["data"]).digest() == digest:
+                return ref
         self.reserve_bytes(len(image["data"]))
         ref = "webimg_" + secrets.token_urlsafe(9)
         context.images[ref] = image
@@ -103,7 +110,8 @@ class QueryStore:
         )
         size += sum(
             len(json.dumps(page, ensure_ascii=False).encode("utf-8"))
-            for context in self.entries.values() for page in context.pages.values()
+            for context in self.entries.values()
+            for collection in (context.pages, context.searches) for page in collection.values()
         )
         if size + added > MAX_BYTES:
             raise WebError("临时文件或图片缓存已满，请稍后重新提问。")
@@ -123,4 +131,11 @@ class QueryStore:
         self.reserve_bytes(len(item["data"]))
         ref = "webfile_" + secrets.token_urlsafe(12)
         context.files[ref] = item
+        return ref
+
+    def remember_search(self, context, query, result):
+        item = {"query": query, **result}
+        self.reserve_bytes(len(json.dumps(item, ensure_ascii=False).encode("utf-8")))
+        ref = "websearch_" + secrets.token_urlsafe(12)
+        context.searches[ref] = item
         return ref

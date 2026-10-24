@@ -234,12 +234,9 @@ class JobService:
                     for kind in ("payload", "result"):
                         self._path(scope, task.id, kind).unlink(missing_ok=True)
                 removed += self.outbox.prune_final(scope, task.id, older_than=cutoff, remove_files=remove_files)
-            folder = self.jobs / scope.key
-            if folder.is_dir() and not folder.is_symlink():
-                try:
-                    folder.rmdir()  # Only an empty scoped directory; never recursive.
-                except OSError:
-                    pass
+            # A concurrent submit may already have resolved this directory but
+            # not opened its payload temporary file yet. Keep the tiny empty
+            # scope directory; pruning payloads must not race with new writes.
         return removed
 
     async def _handle(self, scope, payload, progress):

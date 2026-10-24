@@ -55,7 +55,7 @@ def test_transparency_uses_white_background():
         assert all(channel > 245 for channel in image.getpixel((10, 10)))
 
 
-def test_gif_uses_first_frame_only():
+def test_gif_shows_chronological_keyframes():
     output = io.BytesIO()
     with (
         Image.new("RGB", (20, 20), "red") as first,
@@ -70,8 +70,11 @@ def test_gif_uses_first_frame_only():
             loop=0,
         )
     with decode_result(media.prepare_image(output.getvalue())) as image:
-        red, green, blue = image.getpixel((10, 10))
+        assert image.size == (600, 302)
+        red, green, blue = image.getpixel((150, 74))
         assert red > 240 and green < 10 and blue < 10
+        red, green, blue = image.getpixel((450, 74))
+        assert blue > 240 and green < 10 and red < 10
 
 
 def test_exif_orientation_is_applied_and_metadata_removed():

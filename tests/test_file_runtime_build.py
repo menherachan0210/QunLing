@@ -32,7 +32,7 @@ patcher = module("file_runtime_patcher", "scripts/Apply-RuntimePatches.py")
 
 def test_pins_and_isolated_python_import_path(tmp_path, monkeypatch):
     assert dict(runtime.pins()) == {
-        "pypdf": "6.21.1", "python-docx": "1.2.0", "openpyxl": "3.1.5", "python-pptx": "1.0.2",
+        "pypdf": "6.21.1", "python-docx": "1.2.0", "openpyxl": "3.1.5", "python-pptx": "1.0.2", "Pillow": "12.2.0",
     }
     root = tmp_path / "public project"
     (root / "qunling").mkdir(parents=True)

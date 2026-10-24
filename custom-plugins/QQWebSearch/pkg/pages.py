@@ -235,6 +235,10 @@ class PageParser(HTMLParser):
                     target = None
                 if target and target not in self.link_seen and len(self.links) < MAX_LINKS:
                     self.active_link = {"url": target, "parts": []}
+                    if (urlsplit(target).path.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
+                            and target not in self.other_seen and len(self.other_images) < MAX_IMAGES * 4):
+                        self.other_seen.add(target)
+                        self.other_images.append({"url": target, "alt": clean_text(attrs.get("title", "") or "")[:MAX_ALT_CHARS]})
         if tag == "base" and not self.base_seen:
             self.base_seen = True
             try:
@@ -256,6 +260,9 @@ class PageParser(HTMLParser):
                     self.og_images.append({"url": image_url, "alt": ""})
         if tag == "img" and not parent_muted and not hidden and not _small(attrs):
             candidates = _srcset(attrs.get("srcset") or attrs.get("data-srcset")) + [
+                attrs.get("data-original"),
+                attrs.get("data-lazy-src"),
+                attrs.get("data-url"),
                 attrs.get("data-src"),
                 attrs.get("src"),
             ]

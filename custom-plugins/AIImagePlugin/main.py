@@ -325,6 +325,18 @@ class AIImagePlugin(BasePlugin):
                     raise ImageGenerationError(
                         "多图参考总大小超过限制，未提交图片编辑请求；请缩小图片。"
                     )
+                from qunling.vision_input import animation_data_url
+                try:
+                    normalized = await asyncio.gather(*(
+                        asyncio.to_thread(animation_data_url, value) for value in data_urls
+                    ))
+                except (ValueError, OSError):
+                    raise ImageGenerationError("参考动图无法安全读取关键帧，尚未提交编辑请求。") from None
+                data_urls = [value for value, _ in normalized]
+                if any(animated for _, animated in normalized):
+                    body["prompt"] += ("\n部分参考图是带 Frame/时间标记的原动图关键帧采样。"
+                                       "按时间顺序参考动作、主体和构图；时间标签不是原图内容，不画进成品。"
+                                       "若要求输出多帧，遵循输出分镜布局，不能把参考采样拼图直接当成最终一帧。")
                 body["images"] = [{"image_url": value} for value in data_urls]
                 return await client.post(
                     "/images/edits", cast_to=ImagesResponse, body=body

@@ -57,10 +57,16 @@ async def send_attachment(store, scope, context, api, ref, *, caption=None):
         raise AssetError("delivery_unconfirmed", "该附件已尝试发送，但 QQ 回执未确认；请先查看聊天，避免重复发送。")
     try:
         async with asyncio.timeout(45):
-            chain = ([Plain(text=caption)] if caption else []) + [File(
-                name=item["name"], size=item["size"],
-                base64=base64.b64encode(content).decode("ascii"),
-            )]
+            encoded = base64.b64encode(content).decode("ascii")
+            image_bytes = (content.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a"))
+                           or (content.startswith(b"RIFF") and content[8:12] == b"WEBP"))
+            if ((store.metadata(scope, ref).get("media_type") == "image" and image_bytes)
+                    or (item["name"].lower().endswith(".gif") and content[:6] in {b"GIF87a", b"GIF89a"})):
+                from langbot_plugin.api.entities.builtin.platform.message import Image
+                component = Image(base64=encoded)
+            else:
+                component = File(name=item["name"], size=item["size"], base64=encoded)
+            chain = ([Plain(text=caption)] if caption else []) + [component]
             await api.reply(MessageChain(chain), quote_origin=False)
     except BaseException as error:
         store.mark_delivery(scope, request, ref, "unconfirmed")

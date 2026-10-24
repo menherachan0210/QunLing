@@ -22,6 +22,8 @@ from components.tools.generate_image import (
 )
 from main import ImageGenerationError
 from pkg.image_context import query_claim_lock, remember_output, select_image
+from pkg.gif_output import prepare_prompt, prepare_context, finish, finish_asset
+from qunling.assets import AssetError
 
 
 class EditImage(Tool):
@@ -37,7 +39,8 @@ class EditImage(Tool):
         if (
             not isinstance(params, dict)
             or "prompt" not in params
-            or set(params) - {"prompt", "image_refs"}
+            or set(params) - {"prompt", "image_refs", "asset_refs", "gif_frames", "frame_duration_ms", "deliver"}
+            or ("image_refs" in params and "asset_refs" in params)
         ):
             return INVALID_PROMPT
         prompt = params["prompt"]
@@ -47,6 +50,10 @@ class EditImage(Tool):
             or len(prompt) > MAX_PROMPT_CHARS
         ):
             return INVALID_PROMPT
+        try:
+            plan, prompt = prepare_prompt(params)
+        except AssetError as exc:
+            return str(exc)
         try:
             reply_api = QueryBasedAPIProxy(
                 query_id=query_id,
@@ -64,7 +71,10 @@ class EditImage(Tool):
                         if isinstance(state, str)
                         else GENERATING
                     )
-                if "image_refs" in params:
+                if "asset_refs" in params:
+                    from pkg.asset_input import select_assets
+                    image = await select_assets(self.plugin, reply_api, params["asset_refs"])
+                elif "image_refs" in params:
                     from pkg.edit_references import select_references
 
                     image = select_references(
@@ -77,8 +87,11 @@ class EditImage(Tool):
                     )
                 else:
                     image = select_image(self.plugin, variables)
+                context = await prepare_context(self.plugin, reply_api, plan, deliver=params.get("deliver", True))
                 await reply_api.set_query_var(QUERY_STATE_KEY, "started")
         except ImageGenerationError as exc:
+            return str(exc)
+        except AssetError as exc:
             return str(exc)
         except Exception:
             return GUARD_UNAVAILABLE
@@ -93,6 +106,12 @@ class EditImage(Tool):
         except Exception:
             await GenerateImage._record_state(reply_api, "generation_failed")
             return GENERATION_FAILED
+        if plan is not None:
+            await GenerateImage._record_state(reply_api, "gif_saved")
+            return await finish(context, plan, result)
+        if params.get("deliver", True) is False:
+            await GenerateImage._record_state(reply_api, "asset_saved")
+            return await finish_asset(context, result)
         try:
             await asyncio.wait_for(
                 reply_api.reply(

@@ -25,12 +25,15 @@ spec:
         default: 10
     additionalProperties: false
   llm_prompt: |
-    list accepts only action. status/cancel require task_id from file_workspace or
+    list accepts only action. status/cancel require task_id from file_workspace, gif_animation or
     this tool's list. status optionally waits 0–15 seconds (default 10).
     Continue pending work using status, without requiring a new user confirmation.
     Cancellation is only for a user's stop/cancel request. Completed processing
-    returns result and artifact refs; it has not sent files. Use send_attachment
-    if delivery is part of the original request. Do not resubmit work merely because
+    returns result and artifact refs. Check delivery_status separately: queued or
+    started means the Host will deliver; sent means delivery was confirmed. Never
+    call send_attachment again for those tasks. unconfirmed requires checking receipt,
+    not automatic retry. Only use send_attachment when no delivery was registered
+    and delivery is part of the original request. Do not resubmit work merely because
     it is still running. Failed tasks explain a category; preserve partial outputs.
 execution:
   python:

@@ -37,6 +37,7 @@ PATCHES = (
     ("onebot-group-trigger.patch", "host", False),
     ("chroma-delete-count.patch", "host", False),
     ("onebot-image-vision.patch", "host", False),
+    ("host-animation-vision.patch", "host", False),
     ("image-tool-host-timeout.patch", "host", False),
     ("onebot-text-attachment.patch", "host", False),
     ("onebot-group-context.patch", "host", False),

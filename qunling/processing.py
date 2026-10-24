@@ -22,6 +22,8 @@ OPERATIONS = {
     "create": ({"format", "payload", "filename"}, {"format", "payload", "filename"}),
 }
 
+_GIF_SLOT = asyncio.Semaphore(1)
+
 
 def validate_operation(operation, args):
     if operation not in OPERATIONS or not isinstance(args, dict):
@@ -47,13 +49,23 @@ def validate_operation(operation, args):
         raise AssetError("input_limit", "单次生成或处理参数不能超过 512 KiB，请分批处理。")
     if operation == "create":
         name = safe_name(args["filename"])
-        if args["format"] not in {"txt", "md", "csv", "json", "docx", "xlsx", "pptx", "zip"}:
+        if args["format"] not in {"txt", "md", "csv", "json", "docx", "xlsx", "pptx", "zip", "gif"}:
             raise AssetError("unsupported_export", "暂不支持该生成格式。")
         if not name.lower().endswith("." + args["format"]):
             raise AssetError("invalid_name", "文件扩展名应与生成格式一致。")
+        if args["format"] == "gif":
+            from qunling.animation import validate_recipe
+            validate_recipe(args["payload"])
 
 
 async def run_operation(store: AssetStore, scope: Scope, operation: str, args: dict) -> dict:
+    if operation == "create" and isinstance(args, dict) and args.get("format") == "gif":
+        async with _GIF_SLOT:
+            return await _run_operation(store, scope, operation, args)
+    return await _run_operation(store, scope, operation, args)
+
+
+async def _run_operation(store: AssetStore, scope: Scope, operation: str, args: dict) -> dict:
     validate_operation(operation, args)
     args = dict(args)
     password = args.pop("password", None)
@@ -68,6 +80,19 @@ async def run_operation(store: AssetStore, scope: Scope, operation: str, args: d
             name = "source" + Path(safe_name(item["name"])).suffix[:32]
             (root / name).write_bytes(store.read(scope, args["asset_ref"]))
             request["input_name"] = name
+        elif args["format"] == "gif":
+            from qunling.animation import source_refs, validate_recipe
+            args["payload"] = validate_recipe(args["payload"])
+            staged, total = {}, 0
+            for index, ref in enumerate(source_refs(args["payload"])):
+                content = store.read(scope, ref)
+                total += len(content)
+                if total > 32 * 1024 * 1024:
+                    raise AssetError("input_limit", "动画素材总量不能超过 32 MiB。")
+                name = f"image-{index}.input"
+                (root / name).write_bytes(content)
+                staged[ref] = name
+            request["animation_inputs"] = staged
         elif args["format"] == "zip":
             # Public schema accepts asset refs; the worker receives only bytes.
             payload = args["payload"]
@@ -133,7 +158,9 @@ async def run_operation(store: AssetStore, scope: Scope, operation: str, args: d
             filename = args.get("filename")
             if operation == "extract" and not filename:
                 filename = args["member"].replace("\\", "/").rsplit("/", 1)[-1]
+            metadata = ({"gif_recipe": args["payload"]}
+                        if operation == "create" and args["format"] == "gif" else None)
             item = store.put(scope, safe_name(filename), output.read_bytes(),
-                             origin="generated" if operation == "create" else "archive")
+                             origin="generated" if operation == "create" else "archive", metadata=metadata)
             result = {**result, "artifact": item, "result_refs": [item["asset_ref"]]}
         return {"status": "ok", **result}

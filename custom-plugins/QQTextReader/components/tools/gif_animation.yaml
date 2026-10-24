@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: gif_animation
+  label:
+    en_US: Make and revise GIF animations
+    zh_Hans: 制作和修改 GIF 表情动画
+  description:
+    en_US: Render existing images, animated images, text and shapes into a GIF with effects and keyframes; revise saved recipes.
+    zh_Hans: 多图合成、图片抖动旋转、字幕和图形动画；用代码渲染 GIF，支持沿用素材继续修改，无需视频生成接口。
+spec:
+  parameters:
+    type: object
+    required: [action]
+    properties:
+      action:
+        type: string
+        enum: [create, revise, inspect]
+      recipe:
+        type: object
+        description: 动画方案，具体结构及示例见工具说明；revise 时仅提供需覆盖的字段。
+      base_ref:
+        type: string
+        description: revise/inspect 使用此前生成的 GIF asset_ref。
+      speed:
+        type: number
+        description: 仅 revise；0.25–4，0.5 表示慢一倍，2 表示快一倍。
+      filename:
+        type: string
+        description: 以 .gif 结尾的文件名。
+      deliver:
+        type: boolean
+        default: true
+        description: 默认后台完成后直接向当前会话发送动态图；中间产物可设 false。
+    additionalProperties: false
+  llm_prompt: |
+    Use for a natural request to make/edit a GIF, including free dialogue; no @ or
+    fixed command is required. This renders frames locally, without a video model.
+    If new AI-drawn poses are needed, use generate_image or edit_image with gif_frames;
+    those tools create and preserve 2–6 frames and automatically assemble a GIF.
+    Reuse their returned recipe/frame_refs here for revisions without generating again.
+    Select actual referenced images: file_workspace list/import for current or
+    quoted images; read_recent_group_context + import_group_context_images for
+    selected same-group history, including the bot's images. Use only returned
+    asset_ref values. Do not replace an ambiguous reference with an unrelated image.
+    Recipe fields (all optional except at least frames or layers):
+      width,height: integers 32..512, default 384; background: transparent(default)
+        or color name/#RRGGBB/#RRGGBBAA. GIF has binary transparency, not soft alpha.
+      fps: integer 1..24, default 12; duration_ms: 100..10000, default total frames
+        duration or 2000; fps*duration_ms/1000 <=120. loop: 0 forever(default), 1..100.
+      source_speed: .125..8(default1); playback speed of animated source images.
+      frames: up to 12 {asset_ref,duration_ms?:500}; shown in order, contain-fit.
+        With explicit duration_ms the sequence repeats to fill the duration.
+      layers: up to 16 drawn in order, above frames. Each has type and options:
+        type=image: asset_ref required; animated GIF/WebP inputs keep animation.
+        type=text: text required(max120 chars), font_size 8..120(default36).
+        type=ellipse/rectangle/line: draw a colored shape; width/height control size.
+        x,y are CENTER coordinates in pixels(default canvas center).
+        width,height integers 1..512(default canvas size); images keep aspect ratio.
+        color(default #111111), scale .1..3(default1), rotation degrees(default0),
+        opacity 0..1(default1). Newlines in text create multiple lines.
+        effect: none/shake/bounce/pulse/spin; amplitude 0..200(default12);
+        cycles .1..12(default2) is repetitions over the output duration.
+        keyframes: up to20 {t,x?,y?,scale?,rotation?,opacity?}; t in [0,1], strictly
+        increasing; linearly interpolate supplied properties. Use trajectories
+        and multiple shapes for custom code-rendered animation, never Python/JS.
+    Example shake+caption:
+      {width:384,height:384,duration_ms:2000,layers:[
+        {type:image,asset_ref:ACTUAL_REF,width:300,height:280,y:155,effect:shake,cycles:5},
+        {type:text,text:急了,color:#e02020,font_size:44,y:330,effect:pulse}]}
+    Example moving dot (no image needed):
+      {width:256,height:128,layers:[{type:ellipse,width:32,height:32,color:#7266ff,
+        keyframes:[{t:0,x:30},{t:0.5,x:226},{t:1,x:30}]}]}
+    For follow-ups use inspect(base_ref) to retrieve the original full recipe, then
+    revise(base_ref,recipe={changed fields},speed?). Arrays are replaced whole;
+    preserve other layers when changing a caption. speed changes overall and
+    sequence timing and the playback rate of animated source images.
+    file_workspace list can recover prior output asset_refs after context changes.
+    Saved recipes/inputs expire with the file workspace (7 days by default).
+    Processing is a durable background job. Continue using file_task(task_id).
+    Result includes actual decoded frame count and duration; a one-frame warning
+    means it is static. Delivery queued/started is NOT sent; do not send it again.
+    Do not claim to have visually checked the result from its recipe. For motion
+    analysis, read the posted GIF via read_group_context_images (sampled keyframes).
+    Maximum output 6 MiB; simplify dimensions/fps/duration on a budget error.
+    Do not emit Python code, local paths or Markdown image links as the deliverable.
+execution:
+  python:
+    path: gif_animation.py
+    attr: GifAnimation

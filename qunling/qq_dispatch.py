@@ -29,6 +29,7 @@ CONTINUATION_READ_TOOLS = frozenset({
     "read_recent_group_context", "read_group_context_images", "read_forwarded_messages",
     "query_group_members", "read_qq_avatar", "read_text_attachment", "recall_memory",
     "search_web", "read_web_page", "search_web_images", "list_web_files", "list_edit_image_references",
+    "collect_web_materials",
 })
 
 
@@ -46,6 +47,8 @@ def continuation_tool_allowed(name, parameters=None):
     if name == "file_task":
         return (set(parameters) <= {"action", "task_id", "wait_seconds"}
                 and parameters.get("action") in {"list", "status"})
+    if name == "gif_animation":
+        return set(parameters) == {"action", "base_ref"} and parameters.get("action") == "inspect"
     if name == "browse_group_files":
         return (set(parameters) <= {"action", "folder_ref", "search_text", "offset", "limit", "file_ref"}
                 and parameters.get("action", "list") in {"list", "import"})

@@ -91,7 +91,7 @@ diff --git a/pkg/task_continuation.py b/pkg/task_continuation.py
 new file mode 100644
 --- /dev/null
 +++ b/pkg/task_continuation.py
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,138 @@
 +"""Bounded completion checks based only on Host-bound, trusted tool metadata."""
 +from __future__ import annotations
 +
@@ -100,11 +100,12 @@ new file mode 100644
 +
 +
 +TRUSTED_TOOLS = {
-+    "local/QQTextReader": frozenset({"file_workspace", "send_attachment", "file_task", "read_text_attachment"}),
++    "langbot-team/AIImagePlugin": frozenset({"generate_image", "edit_image"}),
++    "local/QQTextReader": frozenset({"file_workspace", "send_attachment", "file_task", "read_text_attachment", "gif_animation"}),
 +    "local/QQGroupContext": frozenset({"import_group_context_images"}),
 +    "local/QQWebSearch": frozenset({
 +        "search_web", "read_web_page", "search_web_images", "send_web_images",
-+        "list_web_files", "download_web_file", "send_web_file",
++        "list_web_files", "download_web_file", "send_web_file", "collect_web_materials",
 +    }),
 +}
 +STATES = {"pending", "running", "waiting", "partial", "completed", "failed", "cancelled"}

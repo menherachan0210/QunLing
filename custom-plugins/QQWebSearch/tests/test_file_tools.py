@@ -197,7 +197,7 @@ async def test_download_failure_does_not_cache_or_refund_limit(monkeypatch):
     plugin, context = fixture()
     download = AsyncMock(side_effect=WebError("download failed"))
     monkeypatch.setattr(file_tools, "download_file", download)
-    for _ in range(3):
+    for _ in range(6):
         with pytest.raises(WebError):
             await file_tools.prepare_file(
                 plugin, context, {"url": "https://files.example/file.txt"}
@@ -206,7 +206,7 @@ async def test_download_failure_does_not_cache_or_refund_limit(monkeypatch):
         await file_tools.prepare_file(
             plugin, context, {"url": "https://files.example/file.txt"}
         )
-    assert download.await_count == 3
+    assert download.await_count == 6
     assert not context.files and not context.file_delivery
 
 

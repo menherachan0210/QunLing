@@ -7,7 +7,7 @@ metadata:
     zh_Hans: 修改图片
   description:
     en_US: Edit or combine one to four query-bound reference images and send one result.
-    zh_Hans: 修改或组合本轮选定的1至4张参考图片，并发送一张结果。
+    zh_Hans: 修改或组合本轮选定的1至4张参考图片，也可画出多帧动作并合成 GIF。
 spec:
   parameters:
     type: object
@@ -25,6 +25,33 @@ spec:
         items:
           type: string
         description: Optional exact edit_ref_ values from this query's list_edit_image_references or current image prompt.
+      gif_frames:
+        type: array
+        minItems: 2
+        maxItems: 6
+        items:
+          type: string
+          minLength: 1
+          maxLength: 300
+        description: Optional ordered descriptions of 2–6 new poses using the selected references; one storyboard is split into frames and assembled as a GIF.
+      asset_refs:
+        type: array
+        minItems: 1
+        maxItems: 4
+        uniqueItems: true
+        items:
+          type: string
+        description: Shared asset_ref values from web collection, file tools, group imports or earlier outputs. Mutually exclusive with image_refs.
+      deliver:
+        type: boolean
+        default: true
+        description: Set false for intermediate images/GIFs; returns shared asset_refs without sending to QQ. Deliver only the final requested artifact.
+      frame_duration_ms:
+        type: integer
+        minimum: 100
+        maximum: 1500
+        default: 350
+        description: Hold time per frame; only with gif_frames.
     required:
       - prompt
     additionalProperties: false
@@ -41,12 +68,29 @@ spec:
     list_edit_image_references or its current-image prompt. Other tools' img_ references
     are incompatible. For prior group images including another member's uploads, list references first.
     For multiple references preserve their order and specify requested changes per image.
+    Alternatively pass asset_refs returned by web/file/GIF tools; these carry actual
+    saved image bytes, not URLs. Never combine asset_refs and image_refs in one call.
+    If the edited image is an intermediate for another tool, set deliver=false.
+    It returns shared asset_refs for file/GIF/ZIP tools without posting intermediate
+    results. Default deliver=true sends the result as usual. Do not regenerate to obtain a reference.
+    Animated references are read as chronological sampled keyframes, not full video.
+    To replace a character in an existing GIF, inspect its sampled motion, then use
+    gif_frames to preserve the action across 2–6 poses. Without gif_frames the result is a still.
     A clear request to combine two pictures or swap their characters' clothing is supported
     without making the user create a collage. If the objects are ambiguous, ask which pictures.
     Without image_refs, legacy single-image selection uses the current or quoted image,
     otherwise this sender's latest upload or delivered plugin image in the same chat within 30 minutes.
     Multiple current images require explicit image_refs, not a forced single-image workflow.
     Do not invent a source image or silently switch to generating a new image when none is available.
+    When asked to AI-draw several expressions/poses of this character and make a GIF,
+    supply gif_frames in playback order and optional frame_duration_ms. prompt is
+    the shared character/style instruction. One paid edit generates a grid of frames;
+    code splits and saves the source and each frame, composes the GIF and queues it
+    to the original chat. For simple shake/bounce/spin/text applied to existing images
+    use gif_animation instead. No @ or special command is needed in free dialogue.
+    Follow GIF task_id using file_task. queued/started is not confirmed sent; never
+    duplicate delivery. Reuse recipe/frame_refs with gif_animation for speed, caption
+    or sequence changes. Partial results do not authorize another paid request.
     Generate and edit tools together allow at most one paid request per user message.
     Never retry either tool after an error, timeout, unconfirmed result or delivery failure.
     On success, the image is already sent; acknowledge briefly without Markdown image links.

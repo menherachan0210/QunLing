@@ -6,21 +6,44 @@ metadata:
     en_US: Generate an image
     zh_Hans: 生成图片
   description:
-    en_US: Generate one new image on explicit user request and send it to the current chat.
-    zh_Hans: 按用户明确要求生成一张新图片，并发送到当前聊天。
+    en_US: Generate an image or animation storyboard and send an image or assembled GIF.
+    zh_Hans: 按自然语言要求生成新图，或画多帧分镜并自动合成 GIF 发回原会话。
 spec:
   parameters:
     type: object
     properties:
+      deliver:
+        type: boolean
+        default: true
+        description: Set false to save an intermediate image/GIF as shared asset_refs for later tools without posting it to QQ.
       prompt:
         type: string
         minLength: 1
         maxLength: 8000
         description: The user's requested new image, with its subject, style and composition.
+      gif_frames:
+        type: array
+        minItems: 2
+        maxItems: 6
+        items:
+          type: string
+          minLength: 1
+          maxLength: 300
+        description: Optional ordered pose/expression descriptions for 2–6 AI-drawn animation frames. One storyboard request is split and assembled into a looping GIF.
+      frame_duration_ms:
+        type: integer
+        minimum: 100
+        maximum: 1500
+        default: 350
+        description: Hold time per frame; only with gif_frames.
     required:
       - prompt
     additionalProperties: false
   llm_prompt: |
+    When the requested image is an intermediate for GIF/ZIP/document processing,
+    set deliver=false. It returns shared asset_refs and does not send intermediate
+    pictures; use the next tool and deliver the requested final artifact. Default
+    deliver=true keeps direct image/GIF delivery. Never regenerate just to obtain a ref.
     Generate exactly one NEW image and send it directly to the current conversation.
     Call only when the user explicitly asks you to create, draw, or generate a new image.
     Interpret natural language intent; no fixed trigger word is required.
@@ -28,9 +51,22 @@ spec:
     Do not call to recognize, describe, analyze, OCR, or answer questions about an existing image.
     Do not call because you gave an example, proposed an image, or mentioned image generation yourself.
     Do not call for a quoted or hypothetical image-generation request.
-    Pass only a non-empty prompt of at most 8000 characters. Do not supply account IDs,
+    Pass a non-empty prompt of at most 8000 characters. Do not supply account IDs,
     recipients, API credentials, endpoints, model names, or image counts.
-    The tool creates one image per user message and sends it to that message's own chat.
+    For a request to AI-draw several poses/images and assemble a GIF, supply gif_frames
+    in playback order and optionally frame_duration_ms. prompt describes the common
+    subject, style and background. This uses ONE paid storyboard request, then splits
+    it into reusable frame images and composes a GIF; it does not use an AI video API.
+    Do not supply gif_frames for an ordinary still image. For animating supplied
+    images with shake/bounce/spin/text or stitching existing pictures, use gif_animation
+    instead; no paid generation is needed. To change an existing character's poses,
+    use edit_image with gif_frames and the actual selected reference images.
+    GIF output returns task_id, saved_refs, frame_refs and recipe. Continue with
+    file_task; queued/started delivery is not confirmed sent and must not be duplicated.
+    On a partial result preserve/reuse the saved frames. Revisions to speed, ordering
+    or subtitles use gif_animation, never another paid generation. More frames are
+    not necessarily smoother; generated poses/grid alignment require visual checking.
+    The tool creates one image request per user message and delivers to its own chat.
     Call at most once for the same user message. Do not retry on failure, timeout,
     an unconfirmed result, or delivery failure: another generation could be billed again.
     On success, the image is already delivered. A brief acknowledgement is enough;
