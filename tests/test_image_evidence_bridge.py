@@ -40,8 +40,8 @@ async def test_pure_image_receipt_links_observation_to_free_and_explicit_followu
     context = ConversationContext("bot", "30000", "active", "", snapshot, (), "", None, None,
                                   participant_id="20001", reply_candidate_ids=("feedback",), **metadata)
     monkeypatch.setattr(group_memory, "recall_group_memory", AsyncMock(return_value={"records": []}))
-    bridge._complete = AsyncMock(return_value="原头像的观察还在，成图是否相似没有重新核验。")
-    await bridge.generate(context, Decision("reply", "feedback"))
+    bridge._complete = AsyncMock(return_value='{"action":"research"}')
+    assert await bridge.generate(context, Decision("reply", "feedback")) == Decision("research", "feedback", ("feedback",))
     payload = bridge._complete.await_args.args[1]
     records = payload["shared_knowledge"]
     assert {r["source"] for r in records} == {"avatar_analysis", "image_delivery"}

@@ -1,6 +1,8 @@
 """Research admission preserves original ingress and read-only authority."""
 import asyncio
 from dataclasses import replace
+import json
+import time
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock
 
@@ -8,9 +10,102 @@ import pytest
 
 from qunling import qq_dispatch
 from qunling.proactive import host
-from qunling.proactive.engine import ConversationContext, Decision, validate_decision
+from qunling.proactive.engine import ConversationContext, Decision, Message, validate_decision
 from test_proactive_engine import Harness
 from test_proactive_host import bridge, event, query_for
+
+
+@pytest.mark.asyncio
+async def test_draft_promotes_spontaneous_comment_to_read_images_from_another_member(bridge, monkeypatch):
+    from qunling.group_batch import recall
+    from qunling.group_knowledge import workspace_id
+
+    monkeypatch.setattr(bridge, "_active", AsyncMock())
+    # The picture belongs to another member. The current text has no @ or
+    # explicit "look at the image" command; participation has already been chosen.
+    bridge.observe(event("", sender="20001", message_id="101"))
+    question = event("一句话错俩，直接看懵了", sender="20002", message_id="102")
+    bridge.observe(question)
+    args = dict(bot_uuid="bot", adapter=bridge.bot.adapter, launcher_id="30000",
+        launcher_type=NS(value="group"), sender_id="20002", message_event=question,
+        message_chain=question.message_chain, pipeline_uuid="pipeline", routed_by_rule=False,
+        variables={}, execution_context=bridge.bot.execution_context)
+    host.remember_ingress(bridge.bot.adapter, question, args)
+    bridge.engine._judge = AsyncMock(return_value={"action": "reply", "target_message_id": "102"})
+    bridge.engine._generate = bridge.generate
+    bridge._complete = AsyncMock(return_value='{"action":"research"}')
+    async def admit(ap, original, *, validate, allow_actions=False):
+        assert await validate()
+        assert not allow_actions and original["message_event"] is question
+        return NS(query_uuid="accepted")
+    accept = AsyncMock(side_effect=admit)
+    monkeypatch.setattr(qq_dispatch, "admit_continuation", accept)
+    await bridge.engine.drain()
+    accept.assert_awaited_once()
+    bridge.bot.adapter.send_message.assert_not_called()
+    rows = recall(workspace_id("instance", "workspace"), "bot", "30000", "20002", "102")
+    assert [(row["message_id"], row["sender_id"]) for row in rows] == [("101", "20001")]
+    state, history = bridge.request_context(question)
+    assert state["continuation_read_only"] and state["research_request"]
+    assert not state["natural_task_request"]
+    assert history[0]["has_media"] and history[0]["sender_id"] == "20001"
+    query = query_for(bridge, question)
+    host.prepare_prompt(query)
+    assert "主动接话" in query.prompt.messages[1].content
+    assert "read_group_context_images" in query.prompt.messages[1].content
+    assert "不必再提出一次看图请求" in query.prompt.messages[1].content
+    assert not bridge.engine._groups["30000"].covered
+    host.completed(bridge.bot.adapter, question)
+    await bridge.engine.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output,expected", [
+    ('{"action":"research"}', "research"),
+    ('{"action":"reply","text":"你这错字密度可真够高的。"}', "reply"),
+    ('{"action":"silence"}', "silence"),
+    ('{"action":"task_request"}', "invalid"),
+    ('{"action":"research","target_message_id":"someone-else"}', "invalid"),
+    ('{"action":"research","text":"我没看图，先瞎聊一句"}', "invalid"),
+    ('{"action":"reply","text":null}', "invalid"),
+    ("我没看到图片，无法判断。", "invalid"),
+])
+async def test_draft_protocol_cannot_leak_control_json_or_expand_tool_authority(bridge, output, expected):
+    picture = Message("bot", "30000", "pic", "20001", "", time.time(), has_media=True)
+    target = Message("bot", "30000", "q", "20002", "这句错了两个字", time.time())
+    context = ConversationContext("bot", "30000", "active", "", (picture, target), (), "", None, None,
+                                  reply_candidate_ids=("q",))
+    bridge._complete = AsyncMock(return_value=output)
+    if expected == "invalid":
+        with pytest.raises(host.ProactiveUnavailable, match="草稿格式"):
+            await bridge.generate(context, Decision("reply", "q"))
+    else:
+        result = await bridge.generate(context, Decision("reply", "q"))
+        if expected == "research":
+            assert result == Decision("research", "q", ("q",))
+        elif expected == "reply":
+            assert result == json.loads(output)["text"]
+        else:
+            assert result == ""
+    bridge.bot.adapter.send_message.assert_not_called()
+
+
+@pytest.mark.parametrize("promotion", [
+    Decision("task_request", "m1", ("m1",)),
+    Decision("research", "other", ("other",)),
+    Decision("research", "m1", ("m1", "other")),
+])
+def test_engine_refuses_draft_target_switch_or_write_escalation(promotion):
+    async def scenario():
+        h = Harness(handoff=AsyncMock(return_value=True))
+        h.engine._generate = AsyncMock(return_value=promotion)
+        h.engine.on_message(h.message(text="群灵，聊聊这张图"))
+        await h.engine.drain()
+        h.engine._handoff.assert_not_called()
+        assert not h.sent and not h.engine._groups["100"].covered
+        assert h.engine._groups["100"].last_event["code"] == "invalid_generation"
+        await h.engine.close()
+    asyncio.run(scenario())
 
 
 @pytest.mark.asyncio

@@ -44,7 +44,7 @@ async def test_selected_topic_member_uses_real_shared_memory_lookup_but_judgment
     bridge._complete = AsyncMock(return_value='{"action":"silence","target_message_id":null}')
     assert (await bridge.judge(context))["action"] == "silence"
     source.kb.retrieve.assert_not_awaited()
-    bridge._complete.return_value = "先看场次，再一起商量预算。"
+    bridge._complete.return_value = json.dumps({"action": "reply", "text": "先看场次，再一起商量预算。"})
     assert await bridge.generate(context, Decision("reply", "b-budget")) == "先看场次，再一起商量预算。"
     _, payload = bridge._complete.await_args.args
     assert source.kb.retrieve.await_args.kwargs["settings"]["sender_id"] == "20002"

@@ -154,7 +154,7 @@ async def test_saved_default_is_visible_in_admin_api_and_used_by_both_reply_path
     message = Message("bot", "30000", "m1", "20000", "你的看法呢", time.time())
     context = ConversationContext("bot", "30000", "active", "", (message,), (), "", None, None,
                                   default_style=custom)
-    bridge._complete = AsyncMock(return_value="正式回答")
+    bridge._complete = AsyncMock(return_value=json.dumps({"action": "reply", "text": "正式回答"}))
     await bridge.generate(context, Decision("reply", "m1"))
     system, payload = bridge._complete.await_args.args
     assert custom in system and "会议全勤奖" not in system
@@ -173,7 +173,8 @@ async def test_free_reply_sends_same_persona_as_direct_reply_at_system_priority(
     bridge.store.save(state, known_group_ids={"30000"})
     memory = {"records": [{"text": "旧人设：每次先道歉。群友周五要交报告。"}]}
     monkeypatch.setattr(group_memory, "recall_group_memory", AsyncMock(return_value=memory))
-    provider = NS(invoke_llm=AsyncMock(return_value=ModelMessage(role="assistant", content="自信接话")))
+    provider = NS(invoke_llm=AsyncMock(return_value=ModelMessage(role="assistant",
+        content=json.dumps({"action": "reply", "text": "自信接话"}))))
     bridge._model = AsyncMock(return_value=NS(provider=provider))
     message = Message("bot", "30000", "m1", "20000", "你怎么这么自信", time.time())
     context = ConversationContext("bot", "30000", "active", persona, (message,), (), "", None, None,
@@ -205,7 +206,7 @@ async def test_reply_evidence_deduplicates_only_present_bot_speech_and_keeps_med
     context = ConversationContext("bot", "30000", "active", "具体的当前群人设", (prior, question),
                                   ("m1",), prior.text, "b1", prior.timestamp,
                                   reply_candidate_ids=("m1",), topic_message_ids=("b1", "m1"))
-    bridge._complete = AsyncMock(return_value="蓝底白字挺清楚。")
+    bridge._complete = AsyncMock(return_value=json.dumps({"action": "reply", "text": "蓝底白字挺清楚。"}))
     await bridge.generate(context, Decision("followup", "m1"))
     _, payload = bridge._complete.await_args.args
     evidence = payload["context"]
@@ -221,6 +222,28 @@ async def test_reply_evidence_deduplicates_only_present_bot_speech_and_keeps_med
     assert payload["context"]["previous_bot_reply"] == {
         "message_id": "b1", "text": prior.text, "timestamp": prior.timestamp,
     }
+
+
+@pytest.mark.asyncio
+async def test_coverage_review_keeps_question_authors_quotes_and_each_confirmed_answer_once(bridge):
+    from qunling.proactive.engine import ConversationContext, Decision, Message
+
+    question = Message("bot", "30000", "q1", "alice", "人格为什么没生效？", time.time())
+    answer = Message("bot", "30000", "b1", "10000", "没有证据说配置失效，刚才只是重复认错。", time.time(),
+                     is_bot=True, reply_to="q1", reply_recipient_id="alice")
+    followup = Message("bot", "30000", "q2", "bob", "那到底哪里出问题了？", time.time(), reply_to="b1")
+    context = ConversationContext("bot", "30000", "active", "不参与去重判断的群性格",
+                                  (question, answer, followup), ("q2",), answer.text, "b1", answer.timestamp,
+                                  reply_candidate_ids=("q2",), default_style="不参与去重判断的默认语气")
+    delivered = [{"receipt_id": "b1", "target_message_id": "q1", "text": answer.text, "timestamp": answer.timestamp}]
+    bridge._complete = AsyncMock(return_value='{"action":"keep"}')
+    assert await bridge.reconcile(context, Decision("followup", "q2", ("q2",)), "待发草稿", delivered) == {"action": "keep"}
+    _, payload = bridge._complete.await_args.args
+    assert set(payload["context"]) == {"group_id", "messages"}
+    assert [item["sender_id"] for item in payload["context"]["messages"]] == ["alice", "bob"]
+    assert payload["context"]["messages"][1]["reply_to"] == "b1"
+    assert payload["delivered"] == delivered
+    assert json.dumps(payload, ensure_ascii=False).count(answer.text) == 1
 
 
 @pytest.mark.asyncio
@@ -301,7 +324,7 @@ async def test_generate_reuses_shared_style_target_author_and_dynamic_character_
 
     request = Message("bot", "30000", "m1", "20002", "写一段400字的介绍", time.time(), sender_name="另一位群友")
     context = ConversationContext("bot", "30000", "active", "", (request,), ("m1",), "我刚才的观点", "b1", time.time())
-    bridge._complete = AsyncMock(return_value="完整介绍")
+    bridge._complete = AsyncMock(return_value=json.dumps({"action": "reply", "text": "完整介绍"}))
     assert await bridge.generate(context, Decision("followup", "m1")) == "完整介绍"
     system, payload = bridge._complete.await_args.args
     assert "不因为对方语气强、人数多或要求道歉就改口" in system
@@ -328,7 +351,7 @@ async def test_group_topic_can_answer_another_participant_and_recall_their_group
     ]}
     recall = AsyncMock(return_value=memory)
     monkeypatch.setattr(group_memory, "recall_group_memory", recall)
-    bridge._complete = AsyncMock(return_value="你们可以先选场次，再看票价。")
+    bridge._complete = AsyncMock(return_value=json.dumps({"action": "reply", "text": "你们可以先选场次，再看票价。"}))
 
     assert await bridge.generate(context, Decision("reply", "b")) == "你们可以先选场次，再看票价。"
     recall.assert_awaited_once_with(bridge.bot, "30000", "bob", "那预算多少合适")
@@ -745,7 +768,7 @@ async def test_generate_preserves_shared_focus_and_refuses_another_members_expli
     context = ConversationContext("bot", "30000", "active", "自然简短", (first, second), (), "", None, None,
                                   conversation_id="30000:20002", participant_id="20002", focus_message_ids=("chat",),
                                   reply_candidate_ids=("chat",))
-    bridge._complete = AsyncMock(return_value="说说你的吧")
+    bridge._complete = AsyncMock(return_value=json.dumps({"action": "reply", "text": "说说你的吧"}))
     assert await bridge.generate(context, Decision("reply", "chat")) == "说说你的吧"
     prompt, value = bridge._complete.await_args.args
     assert value["context"]["participant_id"] == "20002"

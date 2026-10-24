@@ -115,6 +115,7 @@ _MODES = {
     "active": _Mode(2, 15, 240, 2400, 60, 600, 30, 5, 8),
 }
 GLOBAL_JUDGMENTS_PER_DAY = 4800
+MAX_REVIEW_RECEIPTS = 8
 
 
 def _repeated_reply(first: str, second: str) -> bool:
@@ -261,7 +262,7 @@ class ProactiveEngine:
     def __init__(
         self, *, bot_id: str, config: Callable[[], EngineConfig],
         judge: Callable[[ConversationContext], Awaitable[object]],
-        generate: Callable[[ConversationContext, Decision], Awaitable[str]],
+        generate: Callable[[ConversationContext, Decision], Awaitable[str | Decision]],
         send: Callable[[str, str, str], Awaitable[str | None]],
         handoff: Callable[[ConversationContext, Decision], Awaitable[bool]] | None = None,
         reconcile: Callable[..., Awaitable[object]] | None = None,
@@ -1063,10 +1064,26 @@ class ProactiveEngine:
                 return receipt_id, roots
         return None
 
+    @staticmethod
+    def _delivery_candidates(state, context):
+        """Recent public answers, including ones delivered before this batch.
+
+        Do not filter by participant, lexical similarity or just the last reply:
+        an intervening conversation does not reopen an answered question. Both
+        the original question and a real, still-observed receipt are required.
+        This only retrieves evidence; the semantic review decides coverage.
+        """
+        known = {message.message_id for message in context.messages if not message.is_bot}
+        observed = {message.message_id for message in state.messages if message.is_bot}
+        return [{"receipt_id": key, "target_message_id": reply.target_id,
+                 "text": reply.text, "timestamp": reply.at}
+                for key, reply in state.reply_index.items()
+                if key in observed and reply.target_id in known and reply.text.strip()][-MAX_REVIEW_RECEIPTS:]
+
     async def _deliver(self, group_id, sender, generation, revision, context, decision, text,
                        previous_receipts):
         addressed = decision.target_message_id in context.addressed_candidate_ids
-        reviewed = False
+        reviewed_receipts = set()
         while True:
             current = self._current(group_id, sender, generation, revision)
             if current is None:
@@ -1079,23 +1096,28 @@ class ProactiveEngine:
             if target is None:
                 self._record(state, "stale")
                 return
-            # Only review a race against a real receipt for an already-observed
-            # public contribution. New human traffic never cancels this answer.
-            if not reviewed and self._reconcile is not None:
-                known = {message.message_id for message in context.messages if not message.is_bot}
-                delivered = [{"receipt_id": key, "target_message_id": reply.target_id, "text": reply.text}
-                    for key, reply in state.reply_index.items()
-                    if key not in previous_receipts and reply.target_id in known][-3:]
-                if delivered:
-                    reviewed = True
+            # Reconcile against confirmed answers from earlier batches too.
+            # New receipts during review or pacing require another check; a
+            # boolean "already reviewed" would let the next race slip through.
+            if self._reconcile is not None:
+                delivered = self._delivery_candidates(state, context)
+                if any(item["receipt_id"] not in reviewed_receipts for item in delivered):
+                    reviewed_receipts.update(item["receipt_id"] for item in delivered)
                     covered = await self._review_delivery(state, policy, context, decision, text, delivered)
+                    if covered is False:
+                        # An explicit semantic "keep" can recognize a genuine
+                        # new request even if its answer uses the same wording.
+                        # Do not override it with the text-only race fallback.
+                        previous_receipts = previous_receipts | {item["receipt_id"] for item in delivered}
                     # Re-check configuration, ownership and freshness after the
                     # model call. A result is not a new delivery authorization.
                     current = self._current(group_id, sender, generation, revision)
                     if current is None or not self._fresh(context, decision.target_message_id):
                         return
                     state, lane, policy = current
-                    if covered and self.resolve_target(group_id, decision.target_message_id) is not None:
+                    if (isinstance(covered, str) and covered in state.reply_index
+                            and any(m.is_bot and m.message_id == covered for m in state.messages)
+                            and self.resolve_target(group_id, decision.target_message_id) is not None):
                         for key in decision.covered_message_ids or (decision.target_message_id,):
                             if key not in state.invalid_targets:
                                 state.covered[key] = self._clock()
@@ -1117,6 +1139,13 @@ class ProactiveEngine:
                 if target is None:
                     self._record(state, "stale")
                     return
+                # Acquiring the send lock may have waited for another sender.
+                # Never run a model while holding it, but review its receipt
+                # before releasing this draft to QQ.
+                if (self._reconcile is not None and any(
+                        item["receipt_id"] not in reviewed_receipts
+                        for item in self._delivery_candidates(state, context))):
+                    continue
                 duplicate = self._new_duplicate_reply(
                     state, policy, decision.target_message_id, text, previous_receipts)
                 if duplicate is not None:
@@ -1187,7 +1216,7 @@ class ProactiveEngine:
             await self._wait_delay(lane, delay)
 
     async def _review_delivery(self, state, policy, context, decision, text, delivered):
-        """At most one bounded semantic check; failures preserve the pending answer."""
+        """Return a covering receipt, False for keep, or None if unavailable."""
         if not self._budget(state, policy):
             return None
         state.judgments.append(self._clock())
@@ -1198,6 +1227,8 @@ class ProactiveEngine:
             async with asyncio.timeout(self._model_timeout):
                 async with state.model_slots, self._semaphore:
                     result = await self._reconcile(context, decision, text, delivered)
+            if result == {"action": "keep"}:
+                return False
             expected = list(decision.covered_message_ids or (decision.target_message_id,))
             if (isinstance(result, dict) and set(result) == {"action", "receipt_id", "covered_message_ids"}
                     and result["action"] == "covered" and result["covered_message_ids"] == expected
@@ -1233,6 +1264,9 @@ class ProactiveEngine:
                 context = self._context(group_id, state, lane, policy)
                 if not context.reply_candidate_ids:
                     return
+                # A receipt arriving during judging is just as new as one
+                # arriving during generation. Freeze this with the input.
+                previous_receipts = frozenset(state.reply_index)
                 batch_ids = set(context.reply_candidate_ids)
                 lane.batch_participants = {m.sender_id for m in context.messages if m.message_id in batch_ids}
                 borrowed = tuple(m for m in context.messages if m.message_id in batch_ids and m.sender_id != sender)
@@ -1269,9 +1303,22 @@ class ProactiveEngine:
                     return
                 if decision.action not in ("tool_followup", "research", "task_request"):
                     self._record(state, "generating")
-                    previous_receipts = frozenset(state.reply_index)
                     text = await asyncio.wait_for(self._generate(context, decision), self._model_timeout)
-                    if (not isinstance(text, str) or not text.strip()
+                    if isinstance(text, Decision):
+                        # The draft can discover missing visual/source evidence
+                        # after participation was judged. It may only promote
+                        # this same target to the existing read-only workflow.
+                        promotion = {"action": text.action, "target_message_id": text.target_message_id,
+                                     "covered_message_ids": list(text.covered_message_ids)}
+                        if (text.action != "research" or text.target_message_id != decision.target_message_id
+                                or validate_decision(promotion, context) is None):
+                            self._record(state, "invalid_generation")
+                            return
+                        decision = text
+                    elif isinstance(text, str) and not text.strip():
+                        self._record(state, "silence")
+                        return
+                    elif (not isinstance(text, str) or not text.strip()
                             or len(text.strip()) > reply_character_limit(context, decision)
                             or any((ord(char) < 32 and char not in "\n\t")
                                    or 0xD800 <= ord(char) <= 0xDFFF for char in text)):

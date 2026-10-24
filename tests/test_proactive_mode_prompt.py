@@ -65,7 +65,7 @@ CASES = [
     ]), frozenset({"silence"})),
     ("active_unseen_picture", _context("active", [
         _message("m1", "user-a", "小岚，这张图片上写的是什么？", has_media=True),
-    ], addressed=("m1",)), frozenset({"silence"})),
+    ], addressed=("m1",)), frozenset({"research"})),
     ("active_unfinished_statement", _context("active", [
         _message("m1", "user-a", "我遇到个奇怪的事，等一下我把后半段发出来。"),
     ]), frozenset({"wait", "silence"})),
@@ -99,7 +99,7 @@ CASES = [
 # trailing-message cases this catches an otherwise plausible reply to m2.
 EXPECTED_REPLY_TARGETS = {
     name: context.reply_candidate_ids[0]
-    for name, context, actions in CASES if actions & {"reply", "followup"}
+    for name, context, actions in CASES if actions & {"reply", "followup", "research"}
 }
 
 
@@ -110,7 +110,7 @@ async def test_judge_protocol_preserves_participation_mode_and_conversation(name
     action = sorted(allowed_actions)[0]
     expected = {
         "action": action,
-        "target_message_id": EXPECTED_REPLY_TARGETS[name] if action in {"reply", "followup"} else None,
+        "target_message_id": EXPECTED_REPLY_TARGETS[name] if action in {"reply", "followup", "research"} else None,
     }
     bridge = HostBridge.__new__(HostBridge)
     bridge.bot = SimpleNamespace(adapter=SimpleNamespace(bot_account_id="10000"))
