@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from urllib.parse import urldefrag
 
 from pkg.errors import WebError
@@ -12,11 +13,14 @@ from pkg.pages import MAX_STORED_TEXT_CHARS, MAX_TEXT_CHARS
 def _parameters(params):
     if (
         not isinstance(params, dict)
-        or set(params) - {"url", "page_ref", "offset", "find_text"}
+        or set(params) - {"url", "page_ref", "offset", "find_text", "freshness"}
         or ("url" in params) == ("page_ref" in params)
     ):
         raise WebError("请提供一个url或本轮page_ref，以及可选offset/find_text。",
                        code="invalid_parameters", next_action="correct_parameters")
+    if params.get("freshness", "auto") not in ("auto", "live") or (
+            "page_ref" in params and params.get("freshness") == "live"):
+        raise WebError("历史 page_ref 保留固定快照；重新核实请用 url 和 freshness=live。", code="invalid_parameters")
     offset = params.get("offset", 0)
     if type(offset) is not int or not 0 <= offset <= MAX_STORED_TEXT_CHARS:
         raise WebError("offset须为有效的正文字符位置。", code="invalid_offset",
@@ -37,21 +41,30 @@ def source_read_status(context, url):
     return page.get("_read_status", "not_read")
 
 
-async def read_cached_page(plugin, context, params, reader):
+async def read_cached_page(plugin, context, params, reader, *, text_limit=MAX_TEXT_CHARS):
     offset, needle = _parameters(params)
-    async with context.page_lock:
-        if "page_ref" in params:
-            ref = params["page_ref"]
-            if not isinstance(ref, str) or ref not in context.pages:
-                raise WebError("page_ref已过期或不属于本轮问题。",
-                               code="unknown_page_ref", next_action="use_current_query_reference")
-        else:
-            raw_url = params["url"]
-            if not isinstance(raw_url, str) or not 1 <= len(raw_url) <= 8192:
-                raise WebError("网页url无效。", code="invalid_url",
-                               next_action="use_observed_public_url")
-            url = validate_public_url(urldefrag(raw_url)[0])
+    if "page_ref" in params:
+        ref = params["page_ref"]
+        if not isinstance(ref, str) or ref not in context.pages:
+            raise WebError("page_ref已过期或不属于本轮问题。",
+                           code="unknown_page_ref", next_action="use_current_query_reference")
+    else:
+        raw_url = params["url"]
+        if not isinstance(raw_url, str) or not 1 <= len(raw_url) <= 8192:
+            raise WebError("网页url无效。", code="invalid_url",
+                           next_action="use_observed_public_url")
+        url = validate_public_url(urldefrag(raw_url)[0])
+        # Lock only this URL while fetching. Independent URLs can use the two
+        # shared network slots, while duplicates still fetch exactly once.
+        async with context.page_lock:
+            if url not in context.page_fetch_locks:
+                if len(context.page_fetch_locks) >= 8:
+                    raise WebError("本轮网页地址数量已达到上限。", code="tool_budget_exhausted")
+                context.page_fetch_locks[url] = asyncio.Lock()
+        async with context.page_fetch_locks[url]:
             ref = context.page_urls.get(url)
+            if ref and params.get("freshness") == "live" and context.pages[ref].get("cache", {}).get("hit"):
+                ref = None
             if ref is None:
                 if url in context.page_failures:
                     error = context.page_failures[url]
@@ -59,11 +72,13 @@ async def read_cached_page(plugin, context, params, reader):
                                    next_action=error["next_action"], attempts=error["attempts"])
                 context.claim("page", 4)
                 try:
-                    page = await reader(url)
+                    async with context.page_slots:
+                        page = await reader(url)
                 except WebError as exc:
                     context.page_failures[url] = exc.result()
                     raise
                 ref = plugin.web_queries.remember_page(context, url, page)
+    async with context.page_lock:
         page = context.pages[ref]
         text = page.get("full_text", page["text"])
         quality = page.get("quality", "readable" if text else "no_readable_text")
@@ -73,6 +88,7 @@ async def read_cached_page(plugin, context, params, reader):
             "images": page.get("images", []),
             "content_truncated": bool(page.get("content_truncated")),
             "total_chars": len(text),
+            "cache": page.get("cache", {"hit": False}),
         }
         if quality != "readable":
             return {
@@ -98,7 +114,7 @@ async def read_cached_page(plugin, context, params, reader):
                 }
             match_offset = offset + match.start()
             offset = max(offset, match_offset - 1200)
-        end = min(len(text), offset + MAX_TEXT_CHARS)
+        end = min(len(text), offset + text_limit)
         ranges = sorted([*page.get("_read_ranges", []), (offset, end)])
         merged = []
         for start, stop in ranges:
@@ -122,3 +138,26 @@ async def read_cached_page(plugin, context, params, reader):
             "需要更多正文时使用本轮page_ref和next_offset，或find_text定位字面关键词；"
             "相关详情链接可以继续读取。遇到单站失败应在预算内换公开来源，不必再次询问是否继续。",
         }
+
+
+async def read_pages(plugin, context, params, reader):
+    if not isinstance(params, dict) or "urls" not in params:
+        return await read_cached_page(plugin, context, params, reader)
+    if (set(params) - {"urls", "freshness"} or not isinstance(params["urls"], list)
+            or not 1 <= len(params["urls"]) <= 4
+            or any(not isinstance(url, str) for url in params["urls"])
+            or params.get("freshness", "auto") not in ("auto", "live")):
+        raise WebError("批量读取接受 1 至 4 个 urls 和可选 freshness。", code="invalid_parameters")
+    urls = list(dict.fromkeys(params["urls"]))
+    async def one(url):
+        try:
+            async with asyncio.timeout(45):
+                return await read_cached_page(plugin, context,
+                    {"url": url, "freshness": params.get("freshness", "auto")}, reader, text_limit=4000)
+        except WebError as exc:
+            return {"url": url, **exc.result()}
+        except TimeoutError:
+            return {"url": url, **WebError("读取网页达到时间上限。", code="page_timeout").result()}
+    pages = await asyncio.gather(*(one(url) for url in urls))
+    return {"status": "ok" if all(page.get("status") == "ok" for page in pages) else "partial",
+            "pages": pages, "instruction": "各页结果独立；按 page_ref/next_offset 继续阅读，不能把部分正文说成整页已读。"}

@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+pytestmark = pytest.mark.sdk
+
 from qunling import group_memory as memory
 
 

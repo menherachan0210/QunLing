@@ -33,6 +33,8 @@ class QueryContext:
     page_failures: dict = field(default_factory=dict)
     read_urls: set = field(default_factory=set)
     page_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    page_fetch_locks: dict = field(default_factory=dict)
+    page_slots: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(2))
     file_delivery: dict = field(default_factory=dict)
     delivery: str | None = None
     active: int = 0

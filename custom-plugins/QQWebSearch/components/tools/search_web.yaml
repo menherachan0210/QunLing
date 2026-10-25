@@ -12,6 +12,11 @@ spec:
   parameters:
     type: object
     properties:
+      freshness:
+        type: string
+        enum: [auto, live]
+        default: auto
+        description: auto reuses fresh local search evidence when available; live must be used for explicit web verification or time-sensitive facts.
       query:
         type: string
         minLength: 1
@@ -20,6 +25,10 @@ spec:
     required: [query]
     additionalProperties: false
   llm_prompt: |
+    Search checks scoped unexpired local evidence first. Cache metadata reports the original
+    collection time; a hit is not a new web verification. Use freshness=live when the user
+    explicitly asks to search/verify online or needs current facts. Insufficient cached
+    evidence should be followed with source reading or a more specific live search.
     Search public web information on the user's request or when up-to-date facts are needed.
     Use natural language, not a fixed command. Include source URLs in the final answer.
     The answer is a provider search summary, not proof you read every source. sources includes

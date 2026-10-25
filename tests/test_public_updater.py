@@ -265,6 +265,7 @@ class DockerModel:
 
 @pytest.fixture
 def transaction(tmp_path, monkeypatch):
+    monkeypatch.setenv("QQBOT_IMAGE_MODE", "build")
     driver = DockerModel(tmp_path)
     engine = module.UpdateEngine(
         tmp_path,

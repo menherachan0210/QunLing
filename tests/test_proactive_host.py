@@ -26,6 +26,18 @@ ROOT = Path(__file__).resolve().parents[1]
 LANGBOT_ROOT = Path(next(iter(importlib.util.find_spec("langbot").submodule_search_locations))).parents[1]
 
 
+@pytest.mark.asyncio
+async def test_decision_model_does_not_replace_reply_or_reconciliation_model(bridge):
+    pipeline = bridge.bot.ap.pipeline_mgr.get_pipeline_by_uuid.return_value
+    pipeline.pipeline_entity.config["ai"]["qunling_decision_model"] = "fast-decision"
+    await bridge._complete(host.JUDGE_PROMPT, {"group_id": "30000"})
+    await bridge._complete(host.GENERATE_PROMPT, {"group_id": "30000"})
+    await bridge._complete(host.RECONCILE_PROMPT, {"context": {"group_id": "30000"}})
+    model_ids = [call.args[1] for call in bridge.bot.ap.model_mgr.get_model_by_uuid.await_args_list]
+    assert model_ids == ["fast-decision", "chat-model", "chat-model"]
+    assert all(item.kwargs["funcs"] == [] for item in bridge.bot.ap.model_mgr.get_model_by_uuid.return_value.provider.invoke_llm.await_args_list)
+
+
 @pytest.fixture
 def bridge(tmp_path, monkeypatch):
     monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path))

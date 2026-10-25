@@ -4,6 +4,20 @@
 
 ## 一条消息如何处理
 
+新增优化集中在独立模块，保持原消息归属和工具调度链路：
+
+| 模块 | 职责与边界 |
+| --- | --- |
+| `qunling/knowledge/` | 配置、按成员/群订阅范围隔离的资料、TTL/配额、租约与 Host 生命周期采集；不复用个人记忆库，不发送 QQ 消息 |
+| `qunling/web_pages.py`、`web_search.py` | 前台工具与后台/主动自检共用实际网络实现；插件 `pkg` 保留兼容导出 |
+| `qunling/files/cache.py`、`cache.py` | 可信父进程向隔离解析进程传递当前成员的 JSON 结构缓存；不传共享缓存路径或密码 |
+| `qunling/memory_recall.py` | 成功注入记忆后，仅修改该次 LocalAgent 自动 RAG 选择；已授权资源及显式记忆工具权限保持完整 |
+| `qunling/journal_writer.py`、`performance.py` | 顺序后台诊断写盘、分阶段耗时与有限窗口统计，不负责执行/重试业务 |
+| `bootstrap/capabilities.py` | 管理员明确确认后执行有界自检，结果不包含密钥、模型原始响应或测试图片 |
+| `deploy/updater/images.py` | 按可信仓库完整提交拉取镜像，验证来源、版本和平台后固定为摘要；保留原更新/恢复事务 |
+
+`host-web-knowledge.patch` 接入机器人启动及管理路由；关闭时沿用现有 Host 生命周期钩子取消采集。`host-memory-recall.patch` 在授权资源建立之后调整本次自动检索，不修改持久流水线配置。知识检索仅在已决定回复的普通对话或已获准执行的查询中发生，不为每条群消息额外调用模型。
+
 ```mermaid
 flowchart LR
     QQ["QQ 群聊／私聊"] <--> NapCat["NapCat：QQ 登录与 OneBot"]
@@ -82,7 +96,7 @@ LocalAgent 每次对话最多 24 轮工具迭代。SDK 的工具来源字段用�
 
 推荐部署把 LangBot、Plugin Runtime 和 NapCat 放在容器内部网络。管理入口只绑定本机，再用 SSH 转发或自行配置的认证入口访问；Plugin Runtime 的控制、调试端口不应公开。常规聊天功能不启用 Box 沙箱。只有独立 updater 容器挂载 Docker socket；插件、Host 与设置网页均不直接获得该权限。
 
-设置网页通过内部认证接口请求 updater 检查配置仓库的 `main` 提交、更新到固定 SHA。updater 负责构建、停止业务服务、备份五个业务卷、替换镜像和健康检查；失败时尝试恢复旧镜像和数据。`update-data` 卷保存工作状态与备份，源码只在更新工作目录中准备，不覆盖用户下载的项目目录。这个服务具有 Docker 管理权限，来源仓库必须由管理员信任。
+设置网页通过内部认证接口请求 updater 检查配置仓库的 `main` 提交、更新到固定 SHA。updater 负责拉取并核对该提交的预构建镜像（不可用时构建）、停止业务服务、备份五个业务卷、替换镜像和健康检查；失败时尝试恢复旧镜像和数据。`update-data` 卷保存工作状态与备份，源码只在更新工作目录中准备，不覆盖用户下载的项目目录。这个服务具有 Docker 管理权限，来源仓库必须由管理员信任。
 
 | 数据 | 保存位置或生命周期 | 迁移时的处理 |
 | --- | --- | --- |

@@ -149,13 +149,13 @@ class Journal:
             events = [events[0], *events[-(MAX_EVENTS-1):]]
         return json.dumps(events, separators=(',', ':'))
 
-    def start(self, query, owner, *, origin='mention'):
+    def start(self, query, owner, *, origin='mention', at=None):
         instance, workspace, _, bot, group, sender = owner
         assert _id(instance) == self.instance
         request_id = _id(query.query_uuid) if query.query_uuid else 'admission-' + uuid.uuid4().hex
         message_id = getattr(query.message_event, 'message_id', None)
         message_id = '' if message_id is None else _id(message_id)
-        now = self.clock()
+        now = self.clock() if at is None else at
         events = self._events('[]', now, 'received')
         with self.connect() as db:
             db.execute('INSERT OR IGNORE INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -165,10 +165,10 @@ class Journal:
             self.prune(db, now)
         return request_id
 
-    def record(self, request_id, phase, *, status='active', reason='', tool='', attempt=0, uncertain=None):
+    def record(self, request_id, phase, *, status='active', reason='', tool='', attempt=0, uncertain=None, at=None):
         if phase not in PHASES or status not in STATUSES or reason not in REASONS:
             raise ValueError('Invalid diagnostic code')
-        tool, now = _tool(tool), self.clock()
+        tool, now = _tool(tool), self.clock() if at is None else at
         with self.connect() as db:
             row = db.execute('SELECT * FROM requests WHERE request_id=? AND instance=? AND boot_id=?',
                              (request_id, self.instance, self.boot_id)).fetchone()
@@ -204,6 +204,9 @@ class Journal:
             item = {key: row[key] for key in ('request_id','group_id','sender','message_id','origin','created','updated','phase','status','reason','tool','attempts')}
             item['elapsed_seconds'] = round(max(0, (self.clock() if row['status']=='active' else row['updated'])-row['created']), 1)
             item['operation_unconfirmed'] = bool(row['uncertain'])
+            from qunling.performance import request_timings
+            item['timing'] = request_timings(json.loads(row['events']),
+                self.clock() if row['status'] == 'active' else row['updated'], max_events=MAX_EVENTS)
             if request_id:
                 item['events'] = json.loads(row['events'])
             result.append(item)
@@ -220,7 +223,8 @@ def get_journal(ap, instance):
         stores = {}; ap._request_journals = stores
     if instance not in stores:
         key = hashlib.sha256(_id(instance).encode()).hexdigest()[:32]
-        stores[instance] = Journal(Path(root)/'requests'/f'{key}.sqlite3', instance)
+        from qunling.journal_writer import QueuedJournal
+        stores[instance] = QueuedJournal(Path(root)/'requests'/f'{key}.sqlite3', instance)
     return stores[instance]
 
 
@@ -279,7 +283,8 @@ async def diagnostics(ap, context, bot_uuid, filters):
     store = get_journal(ap, binding.instance_uuid)
     if store is None:
         return dict(available=False, requests=[])
-    result = store.listing(context.workspace_uuid, bot_uuid, **filters)
+    import asyncio
+    result = await asyncio.to_thread(store.listing, context.workspace_uuid, bot_uuid, **filters)
     if getattr(store, 'write_failed', False) or getattr(ap, '_request_diagnostics_degraded', False):
         result['write_degraded'] = True
     return result

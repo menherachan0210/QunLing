@@ -1,0 +1,26 @@
+diff --git a/src/langbot/pkg/platform/botmgr.py b/src/langbot/pkg/platform/botmgr.py
+--- a/src/langbot/pkg/platform/botmgr.py
++++ b/src/langbot/pkg/platform/botmgr.py
+@@ -1856,6 +1856,9 @@
+         )
+ 
+     async def run(self):
++        from qunling.knowledge.host import start as start_knowledge
++
++        start_knowledge(self)
+         async def exception_wrapper():
+             try:
+                 self.task_context.set_current_action('Running...')
+diff --git a/src/langbot/pkg/api/http/controller/groups/platform/bots.py b/src/langbot/pkg/api/http/controller/groups/platform/bots.py
+--- a/src/langbot/pkg/api/http/controller/groups/platform/bots.py
++++ b/src/langbot/pkg/api/http/controller/groups/platform/bots.py
+@@ -132,6 +132,9 @@
+                 await self.ap.bot_service.delete_bot(request_context, bot_uuid)
+             return self.success()
+ 
++        from qunling.knowledge.host import register_routes as register_knowledge_routes
++        register_knowledge_routes(self)
++
+         @self.route(
+             '/<bot_uuid>/logs',
+             methods=['POST'],

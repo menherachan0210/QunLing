@@ -2,6 +2,8 @@ import base64
 import io
 
 import pytest
+
+pytestmark = pytest.mark.sdk
 from PIL import Image
 
 from qunling.vision_input import animation_data_url, model_image_content

@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.sdk
+
 from qunling.assets import AssetError, AssetStore
 from qunling.jobs import JobService
 from qunling.processing import run_operation, validate_operation

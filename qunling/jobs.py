@@ -226,6 +226,8 @@ class JobService:
 
     def prune(self) -> int:
         """Only final jobs older than retention; active payloads are never removed."""
+        from qunling.cache import JsonCache
+        JsonCache(self.assets.root / "parsed-documents.sqlite3").prune()
         cutoff = time.time() - self.retention_seconds
         removed = 0
         for scope in self.tasks.scopes():

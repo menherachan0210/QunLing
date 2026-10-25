@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock
 import time
 
 import pytest
+
+pytestmark = pytest.mark.sdk
 from PIL import Image
 
 from qunling import capture, inbox as inbox_module, integration, transfers

@@ -121,6 +121,7 @@ services:
       QQBOT_PROJECT: ${COMPOSE_PROJECT_NAME:-qq-ai-bot}
       QQBOT_UPDATE_REPOSITORY: ${QQBOT_UPDATE_REPOSITORY:-menherachan0210/QunLing}
       QQBOT_UPDATE_BRANCH: ${QQBOT_UPDATE_BRANCH:-main}
+      QQBOT_IMAGE_MODE: ${QQBOT_IMAGE_MODE:-auto}
       QQBOT_UPDATE_KEEP_BACKUPS: ${QQBOT_UPDATE_KEEP_BACKUPS:-2}
     volumes:
       - setup-state:/var/lib/qqbot-setup:ro

@@ -7,21 +7,23 @@
 使用单独的 Python 3.12 环境，在仓库根目录安装普通测试和解析依赖：
 
 ```bash
-python -m pip install pytest pytest-asyncio requests PyYAML qrcode Pillow aiohttp -r qunling/requirements.txt
-python -m pytest tests --ignore=tests/test_attachment_transport_budget.py --ignore=tests/test_file_pipeline.py --ignore=tests/test_file_tool_integration.py -q
+python -m pip install pytest pytest-asyncio requests PyYAML qrcode Pillow aiohttp httpx tzdata -r qunling/requirements.txt
+python -m pytest tests --public-only -q
 ```
 
 这层覆盖部署、初始化、固定来源补丁、文件格式与任务生命周期，不需要安装 LangBot/SDK。它不调用模型、不登录 QQ；RAR/7z 的原生用例需要完整的 7-Zip，可通过 `QUNLING_TEST_7ZIP`／`QQCOMIC_TEST_7Z` 指定可信程序，缺少时会明确跳过。额外 RAR 测试样本用 `QUNLING_TEST_ARCHIVES` 指定，不能拿用户附件替代合成样本。
 
-被排除的三个测试文件覆盖真实 SDK 消息及发送接口，在已准备好固定 SDK 的开发环境或部署镜像中执行。插件测试也在该环境按插件**分别启动 Python**，避免不同插件的同名 `pkg` 模块混在一起。例如：
+`--public-only` 根据测试及其测试辅助模块的 Host/SDK 导入依赖自动分组，不使用允许文件清单。未运行的 Host/SDK 测试在固定版本环境或部署镜像中执行；镜像层不使用此过滤，自动收集整个根测试目录。插件测试仍按插件**分别启动 Python**，避免同名 `pkg` 模块混在一起。例如：
 
 ```bash
-python -m pytest tests/test_attachment_transport_budget.py tests/test_file_pipeline.py tests/test_file_tool_integration.py -q
+python -m pytest tests -q
 python -m pytest custom-plugins/QQTextReader/tests -q
 python -m pytest custom-plugins/QQComicTranslator/tests -q
 ```
 
-CI 的 `public-tests` 包含 `tests/test_task*.py` 和不需要 SDK 的 `tests/test_file*.py`，仅安装上面的普通依赖。`linux-compose` 先构建实际应用镜像，再用一次性容器运行完整文件／任务／传输回归以及六个插件的离线测试；测试依赖预先下载为 wheels，执行时 `--network none`，不启动业务入口。随后才验收容器初始化、插件安装和更新回滚。以上各层不能互相代替，新增 Linux 构建应以该提交的 CI 实际结果为准。
+CI 的 `public-tests` 自动发现所有普通环境测试；间接加载 SDK、无法从导入依赖判断的模块需声明 `pytestmark = pytest.mark.sdk`。`linux-compose` 先构建实际应用镜像，再用一次性容器收集整个根测试目录及六个插件的离线测试；测试依赖预先下载为 wheels，执行时 `--network none`，不启动业务入口。随后验收容器初始化、插件安装和更新回滚。主分支全部通过后才向 GHCR 发布该提交的两个镜像；首次发布需将包设为公开，非主分支和 PR 不发布。各层不能互相代替，新增 Linux 构建应以该提交的 CI 实际结果为准。
+
+新增解析器行为或调整固定解析依赖时，提升 `qunling/files/cache.py` 的 `VERSION`，避免跨版本复用旧结构。知识库、后台采集、文件缓存、重复召回和能力测试应验证权限/版本/时效边界与调用次数，不能以“返回了成功字段”代替验证。
 
 新增文件格式应实现真实类型检查、结构导航、分页／检索、明确能力与限制，并补合成样本和失败边界；不要只增加扩展名判断。产物遵循固定 schema，通过共享任务与授权资产发送，不能接受任意代码、宿主路径或收件人。共享处理子进程有资源限制，但不是完整 OS 沙箱；不要把它改成通用命令执行入口。
 

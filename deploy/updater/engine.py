@@ -73,6 +73,9 @@ class UpdateEngine:
         self.project = project or os.environ.get("QQBOT_PROJECT", "qq-ai-bot")
         self.repository = repository or os.environ.get("QQBOT_UPDATE_REPOSITORY", "menherachan0210/QunLing")
         self.branch = branch or os.environ.get("QQBOT_UPDATE_BRANCH", "main")
+        self.image_mode = os.environ.get("QQBOT_IMAGE_MODE", "auto")
+        if self.image_mode not in {"auto", "pull", "build"}:
+            raise UpdateError("QQBOT_IMAGE_MODE 应为 auto、pull 或 build。")
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}", self.project):
             raise UpdateError("部署项目名称无效。")
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repository):
@@ -129,6 +132,7 @@ class UpdateEngine:
             "current_revision": current, "latest_revision": value.get("latest_revision", ""),
             "update_available": bool(value.get("latest_revision") and value["latest_revision"] != current),
             "phase": phase, "busy": phase not in TERMINAL,
+            "image_mode": self.image_mode,
             "message": value.get("message", "点击检查 GitHub 更新。"),
             "checked_at": value.get("checked_at", ""),
             "cleanup": self.cleanup_snapshot(),
@@ -288,6 +292,7 @@ class UpdateEngine:
             "-e", "QQBOT_PROJECT=" + self.project,
             "-e", "QQBOT_UPDATE_REPOSITORY=" + self.repository,
             "-e", "QQBOT_UPDATE_BRANCH=" + self.branch,
+            "-e", "QQBOT_IMAGE_MODE=" + self.image_mode,
             "-e", "QQBOT_UPDATE_KEEP_BACKUPS=" + (str(self.keep_backups) if self.retention_valid else "disabled"),
             info["Image"], "worker", job_id,
         )
@@ -443,7 +448,7 @@ class UpdateEngine:
         try:
             if job.get("phase") != "queued":
                 raise UpdateError("更新任务被中断，正在恢复上次部署。")
-            phase("building", "正在下载并构建新版本，机器人暂时继续运行。")
+            phase("building", "正在准备新版本镜像，机器人暂时继续运行。")
             source = directory / "source"
             self.checkout(job["revision"], source)
             old, volumes = self.capture_current(directory)
@@ -451,16 +456,23 @@ class UpdateEngine:
             job.update(volumes=volumes, worker_image=worker_image,
                        old_revision=self.current_revision())
             write(directory / "job.json", job)
-            app_image = self.project + "-app:" + job["revision"]
-            updater_image = self.project + "-updater:" + job["revision"]
-            for dockerfile, image in (("deploy/compose/Dockerfile", app_image),
-                                      ("deploy/updater/Dockerfile", updater_image)):
-                self.run("docker", "build", "--label",
-                         "org.opencontainers.image.revision=" + job["revision"],
-                         "--label", "io.qunling.update-project=" + self.project,
-                         "--build-arg", "QQBOT_REVISION=" + job["revision"],
-                         "-t", image, "-f", str(source / dockerfile), str(source),
-                         timeout=7200, log=log)
+            from deploy.updater.images import pull_prebuilt
+            images = None if self.image_mode == "build" else pull_prebuilt(self, job["revision"], log)
+            if images is not None:
+                app_image, updater_image = images
+                job["image_source"] = "prebuilt"
+            else:
+                app_image = self.project + "-app:" + job["revision"]
+                updater_image = self.project + "-updater:" + job["revision"]
+                job["image_source"] = "build"
+                for dockerfile, image in (("deploy/compose/Dockerfile", app_image),
+                                          ("deploy/updater/Dockerfile", updater_image)):
+                    self.run("docker", "build", "--label",
+                             "org.opencontainers.image.revision=" + job["revision"],
+                             "--label", "io.qunling.update-project=" + self.project,
+                             "--build-arg", "QQBOT_REVISION=" + job["revision"],
+                             "-t", image, "-f", str(source / dockerfile), str(source),
+                             timeout=7200, log=log)
             new = self.resolve(source / "deploy/compose/compose.yaml", app_image, updater_image)
             if set(new["volumes"]) != set(old["volumes"]):
                 raise UpdateError("新版更改了数据卷结构，需要手动迁移。")
@@ -480,6 +492,7 @@ class UpdateEngine:
             new["services"]["updater"].setdefault("environment", {}).update(
                 QQBOT_PROJECT=self.project, QQBOT_UPDATE_REPOSITORY=self.repository,
                 QQBOT_UPDATE_BRANCH=self.branch,
+                QQBOT_IMAGE_MODE=self.image_mode,
                 QQBOT_UPDATE_KEEP_BACKUPS=str(self.keep_backups) if self.retention_valid else "disabled")
             write(new_path, new)
             # Pull a changed QQ image before interrupting the running deployment.

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,18 @@ OPERATIONS = {
 }
 
 _GIF_SLOT = asyncio.Semaphore(1)
+
+
+async def _disk(function, *args, **kwargs):
+    """Finish bounded disk work before its temporary directory can be removed."""
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await task
+        finally:
+            raise
 
 
 def validate_operation(operation, args):
@@ -72,25 +85,39 @@ async def _run_operation(store: AssetStore, scope: Scope, operation: str, args: 
     with tempfile.TemporaryDirectory(prefix="qunling-file-") as temporary:
         root = Path(temporary)
         request = {"operation": operation, "args": args}
+        cache = cache_key = None
         if password is not None:
             request["password_supplied"] = True
         if operation != "create":
-            item = store.get(scope, args["asset_ref"])
+            item = await _disk(store.get, scope, args["asset_ref"])
             # Prefix prevents collision with fixed protocol filenames.
             name = "source" + Path(safe_name(item["name"])).suffix[:32]
-            (root / name).write_bytes(store.read(scope, args["asset_ref"]))
+            content = await _disk(store.read, scope, args["asset_ref"])
+            await _disk((root / name).write_bytes, content)
             request["input_name"] = name
+            if (operation in {"inspect", "read", "search"} and password is None
+                    and isinstance(args.get("selector", {}), dict)
+                    and not args.get("selector", {}).get("member")):
+                from qunling.cache import JsonCache
+                from qunling.files.cache import VERSION
+                cache = JsonCache(store.root / "parsed-documents.sqlite3")
+                cache_key = VERSION + ":" + hashlib.sha256(content).hexdigest() + Path(name).suffix
+                candidate = await _disk(cache.get, scope.key, cache_key)
+                if candidate is not None:
+                    await _disk((root / "parsed-input.json").write_text,
+                                json.dumps(candidate, ensure_ascii=False), encoding="utf-8")
+                request["parsed_cache"] = True
         elif args["format"] == "gif":
             from qunling.animation import source_refs, validate_recipe
             args["payload"] = validate_recipe(args["payload"])
             staged, total = {}, 0
             for index, ref in enumerate(source_refs(args["payload"])):
-                content = store.read(scope, ref)
+                content = await _disk(store.read, scope, ref)
                 total += len(content)
                 if total > 32 * 1024 * 1024:
                     raise AssetError("input_limit", "动画素材总量不能超过 32 MiB。")
                 name = f"image-{index}.input"
-                (root / name).write_bytes(content)
+                await _disk((root / name).write_bytes, content)
                 staged[ref] = name
             request["animation_inputs"] = staged
         elif args["format"] == "zip":
@@ -100,14 +127,14 @@ async def _run_operation(store: AssetStore, scope: Scope, operation: str, args: 
                 entries, total = [], 0
                 for entry in payload["files"]:
                     if isinstance(entry, dict) and set(entry) == {"name", "asset_ref"}:
-                        content = store.read(scope, entry["asset_ref"])
+                        content = await _disk(store.read, scope, entry["asset_ref"])
                         total += len(content)
                         if total > 20 * 1024 * 1024:
                             raise AssetError("output_limit", "打包文件总量不能超过 20 MiB。")
                         entry = {"name": entry["name"], "base64": base64.b64encode(content).decode()}
                     entries.append(entry)
                 args["payload"] = {**payload, "files": entries}
-        (root / "request.json").write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+        await _disk((root / "request.json").write_text, json.dumps(request, ensure_ascii=False), encoding="utf-8")
         env = {k: v for k, v in os.environ.items() if k.upper() in {
             "PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",
         }}
@@ -145,12 +172,21 @@ async def _run_operation(store: AssetStore, scope: Scope, operation: str, args: 
         if not result_path.is_file() or result_path.stat().st_size > 128 * 1024:
             raise AssetError("processing_failed", "文件处理达到资源限制，未得到完整结果。")
         try:
-            response = json.loads(result_path.read_text(encoding="utf-8"))
+            response = json.loads(await _disk(result_path.read_text, encoding="utf-8"))
         except (ValueError, OSError):
             raise AssetError("processing_failed", "文件处理未返回有效结果。") from None
         if not response.get("ok"):
             raise AssetError(response.get("error_code", "processing_failed"), response.get("error", "文件处理失败。"))
         result = response["result"]
+        parsed = root / "parsed-output.json"
+        if cache is not None and parsed.is_file() and parsed.stat().st_size <= cache.max_item_bytes:
+            try:
+                document = json.loads(await _disk(parsed.read_text, encoding="utf-8"))
+                await _disk(cache.put, scope.key, cache_key, document)
+            except (ValueError, OSError):
+                pass  # Caching must not turn a successful operation into failure.
+        if cache is not None:
+            result["parse_cache_hit"] = bool(response.get("parse_cache_hit"))
         if operation in {"create", "extract"}:
             output = root / "output"
             if output.is_symlink() or not output.is_file() or output.stat().st_size > 20 * 1024 * 1024:
@@ -160,7 +196,8 @@ async def _run_operation(store: AssetStore, scope: Scope, operation: str, args: 
                 filename = args["member"].replace("\\", "/").rsplit("/", 1)[-1]
             metadata = ({"gif_recipe": args["payload"]}
                         if operation == "create" and args["format"] == "gif" else None)
-            item = store.put(scope, safe_name(filename), output.read_bytes(),
-                             origin="generated" if operation == "create" else "archive", metadata=metadata)
+            content = await _disk(output.read_bytes)
+            item = await _disk(store.put, scope, safe_name(filename), content,
+                               origin="generated" if operation == "create" else "archive", metadata=metadata)
             result = {**result, "artifact": item, "result_refs": [item["asset_ref"]]}
         return {"status": "ok", **result}

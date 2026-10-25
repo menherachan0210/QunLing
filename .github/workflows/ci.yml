@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install public test and document parser dependencies
-        run: python -m pip install pytest pytest-asyncio PyYAML requests qrcode Pillow aiohttp -r qunling/requirements.txt
+        run: python -m pip install pytest pytest-asyncio PyYAML requests qrcode Pillow aiohttp httpx tzdata -r qunling/requirements.txt
       - name: Require JavaScript runtime for console interaction tests
         # ubuntu-24.04 provides Node; fail visibly instead of silently skipping
         # the actual console script's authorization and conflict regressions.
@@ -34,25 +34,17 @@ jobs:
       - name: Check publishable files for private runtime state and credentials
         run: python scripts/Check-Release.py
       - name: Test public setup, files, tasks and fixed-source patches without the SDK
-        # SDK message delivery and the proactive Host bridge run in linux-compose.
-        run: >-
-          python -m pytest tests/test_public*.py tests/test_runtime_patches.py
-          tests/test_release_check.py tests/test_script_paths.py
-          tests/test_update_retention.py
-          tests/test_proactive_config.py tests/test_proactive_engine.py
-          tests/test_proactive_setup.py tests/test_proactive_frontend.py
-          tests/test_proactive_batches.py tests/test_proactive_conversations.py
-          tests/test_proactive_topics.py
-          tests/test_conversation_frontend.py tests/test_qq_status*.py
-          tests/test_task*.py tests/test_file*.py
-          --ignore=tests/test_file_pipeline.py
-          --ignore=tests/test_file_tool_integration.py -q
+        # Dependency-based exclusion only; the real image runs every root test.
+        run: python -m pytest tests --public-only -q
 
   linux-compose:
     name: Linux image and fresh initialization
     needs: public-tests
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
     env:
       COMPOSE_PROJECT_NAME: qqbot-ci-${{ github.run_id }}-${{ github.run_attempt }}
       COMPOSE_FILE: deploy/compose/compose.yaml
@@ -72,6 +64,8 @@ jobs:
           file: deploy/compose/Dockerfile
           platforms: linux/amd64
           tags: qq-ai-bot-local:4.11.0
+          build-args: QQBOT_REVISION=${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           load: true
           push: false
           cache-from: type=gha,scope=qqbot-linux-amd64
@@ -94,8 +88,7 @@ jobs:
             qq-ai-bot-local:4.11.0 -ec '
               uv pip install --python "$VIRTUAL_ENV/bin/python" --no-index --find-links=/wheels pytest pytest-asyncio
               cd /workspace
-              python -m pytest tests/test_task*.py tests/test_file*.py tests/test_attachment_transport_budget.py -q -p no:cacheprovider
-              python -m pytest tests/test_proactive_config.py tests/test_proactive_engine.py tests/test_proactive_setup.py tests/test_proactive_host.py tests/test_proactive_batches.py tests/test_proactive_conversations.py tests/test_proactive_topics.py tests/test_proactive_mode_prompt.py tests/test_group_memory.py tests/test_group_dialogue_integration.py tests/test_qq_dispatch*.py tests/test_qq_sessions.py tests/test_qq_status.py tests/test_qq_status_setup.py -q -p no:cacheprovider
+              python -m pytest tests -q -p no:cacheprovider
               python -m qunling.daemon --once
               for plugin in QQTextReader QQGroupContext QQWebSearch QQComicTranslator AIImagePlugin LongTermMemory; do
                 cd "/workspace/custom-plugins/$plugin"
@@ -109,6 +102,8 @@ jobs:
           file: deploy/updater/Dockerfile
           platforms: linux/amd64
           tags: qunling-updater:1
+          build-args: QQBOT_REVISION=${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           load: true
           push: false
           cache-from: type=gha,scope=qunling-updater
@@ -134,6 +129,19 @@ jobs:
           docker compose exec -T wizard python
           /opt/qq-ai-bot/deploy/compose/smoke.py --timeout 600
           --compare /tmp/qqbot-compose-smoke.json
+      - name: Publish the verified images by exact commit
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          image_root="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker tag qq-ai-bot-local:4.11.0 "$image_root-app:$GITHUB_SHA"
+          docker tag qunling-updater:1 "$image_root-updater:$GITHUB_SHA"
+          docker push "$image_root-app:$GITHUB_SHA"
+          docker push "$image_root-updater:$GITHUB_SHA"
+          docker image inspect "$image_root-app:$GITHUB_SHA" "$image_root-updater:$GITHUB_SHA" --format '{{join .RepoDigests "\n"}}' >> "$GITHUB_STEP_SUMMARY"
+          docker logout ghcr.io
       - name: Report container status without tokens or login QR output
         if: failure()
         run: docker compose ps --all

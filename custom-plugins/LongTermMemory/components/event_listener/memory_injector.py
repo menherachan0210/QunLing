@@ -59,6 +59,7 @@ class MemoryInjector(EventListener):
         )
         api = QueryBasedAPIProxy(
             query_id=event_ctx.query_id,
+            query_uuid=getattr(event_ctx, "query_uuid", None),
             plugin_runtime_handler=self.plugin.plugin_runtime_handler,
         )
 
@@ -129,6 +130,9 @@ class MemoryInjector(EventListener):
                             kb_id,
                             len(texts),
                         )
+                from qunling.memory_recall import MARKER, completed
+                await api.set_query_var(MARKER, completed(event_ctx.query_id,
+                    getattr(event_ctx, "query_uuid", None), kb_id, user_message_text))
             except Exception:
                 logger.exception(
                     "[LongTermMemory] L2 episodic retrieval failed: query_id=%s kb_id=%s",

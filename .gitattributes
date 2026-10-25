@@ -1,3 +1,5 @@
 *.sh text eol=lf
+*.patch text eol=lf
 *.service text eol=lf
 *.service.example text eol=lf
+tests/fixtures/localagent_0_2_1/** text eol=lf

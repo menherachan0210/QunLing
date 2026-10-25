@@ -15,7 +15,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 from bootstrap.api import LangBotAPI, NapCatAPI, SetupError
-from bootstrap import diagnostics, proactive
+from bootstrap import diagnostics, proactive, knowledge
 from bootstrap.configure import (
     configure,
     ensure_plugins,
@@ -25,6 +25,7 @@ from bootstrap.configure import (
 )
 from bootstrap.state import State
 from bootstrap.update_client import REVISION, UpdateClient, UpdateError
+from bootstrap.capabilities import Checks
 
 ROOT = Path(__file__).resolve().parents[1]
 QQ_STATUS_TTL = 30
@@ -41,6 +42,7 @@ class SetupManager:
         self.langbot_url = langbot_url
         self.packages, self.archive = Path(packages), archive
         self.lock = threading.RLock()
+        self.capability_checks = Checks()
         self.updater = UpdateClient(
             os.environ.get("QQBOT_UPDATER_URL", ""), self.secrets["setup_token"]
         )
@@ -129,6 +131,15 @@ class SetupManager:
 
     def proactive_settings(self):
         return proactive.settings(self)
+
+    def test_capabilities(self, values):
+        with self.lock:
+            if self.pending or self.update_inflight or self.update_status()["busy"]:
+                raise SetupError("服务正在变更，请完成后再测试。")
+            config = self.state.read("ai.json", {})
+            if not self.status.get("configured") or not config.get("api_key"):
+                raise SetupError("请先保存 AI 配置，再主动测试能力。")
+            return self.capability_checks.start(config, values)
 
     def request_diagnostics(self, filters):
         return diagnostics.requests(self, filters)
@@ -434,6 +445,8 @@ class Handler(BaseHTTPRequestHandler):
         static = {
             "/": ("index.html", "text/html"),
             "/app.js": ("app.js", "text/javascript"),
+            "/knowledge.js": ("knowledge.js", "text/javascript"),
+            "/capabilities.js": ("capabilities.js", "text/javascript"),
             "/style.css": ("style.css", "text/css"),
         }
         if path in static:
@@ -453,6 +466,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.manager.snapshot())
         if path == "/api/update":
             return self._send(200, self.server.manager.update_status())
+        if path == "/api/capabilities":
+            return self._send(200, self.server.manager.capability_checks.snapshot())
+        if path == "/api/knowledge":
+            try:
+                return self._send(200, knowledge.settings(self.server.manager))
+            except SetupError as exc:
+                return self._send(getattr(exc, "status", 503), {"error": str(exc)})
+            except Exception:
+                return self._send(503, {"error": "知识库设置暂时无法读取。"})
         if path == "/api/requests":
             try:
                 query = urlsplit(self.path).query
@@ -505,6 +527,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.manager.submit(body)
             elif self.path == "/api/proactive":
                 return self._send(200, self.server.manager.save_proactive(body))
+            elif self.path == "/api/knowledge":
+                return self._send(200, knowledge.save(self.server.manager, body))
+            elif self.path == "/api/capabilities":
+                return self._send(202, self.server.manager.test_capabilities(body))
             elif self.path == "/api/qr/refresh":
                 self.server.manager.refresh_qr()
             elif self.path == "/api/update/check":

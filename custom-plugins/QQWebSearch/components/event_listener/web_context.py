@@ -1,6 +1,8 @@
 from langbot_plugin.api.definition.components.common.event_listener import EventListener
 from langbot_plugin.api.entities import events
 from langbot_plugin.api.entities.builtin.provider.message import Message
+from langbot_plugin.api.proxies.query_based_api import QueryBasedAPIProxy
+from pkg.knowledge import prompt_evidence
 
 
 MARKER = "[QQWebSearch 联网工具]"
@@ -34,3 +36,11 @@ class WebContextListener(EventListener):
                     and message.content.startswith(MARKER)
                 )
             ] + [Message(role="system", content=MARKER + "\n" + GUIDANCE)]
+            try:
+                api = QueryBasedAPIProxy(query_id=ctx.query_id, query_uuid=getattr(ctx, "query_uuid", None),
+                                         plugin_runtime_handler=self.plugin.plugin_runtime_handler)
+                evidence = await prompt_evidence(self.plugin, api)
+                if evidence:
+                    ctx.event.prompt.append(Message(role="system", content=evidence))
+            except Exception:
+                pass  # Optional evidence must not prevent the live tool path.

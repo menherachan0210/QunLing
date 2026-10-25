@@ -95,7 +95,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
 /* Settings and connection */
 .dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); align-items: start; gap: 22px; }
 .card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 25px; box-shadow: 0 3px 10px #23304c03; min-width: 0; scroll-margin-top: 28px; }
-.requests-card { grid-column: 1 / -1; }
+.requests-card, #knowledge { grid-column: 1 / -1; }
 .requests-card summary { cursor: pointer; color: var(--ink); font-weight: 600; }
 .requests-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-top: 20px; }
 .requests-filters label { display: flex; flex-direction: column; gap: 8px; flex: 1 1 180px; font-size: 13px; }
@@ -124,6 +124,11 @@ input::placeholder { color: #768197; opacity: 1; }
 input:hover { border-color: #c9cedd; }
 input:focus { outline: none; border-color: #9290ec; box-shadow: 0 0 0 3px #7370dc10; background: #fff; }
 input[type=number] { font-variant-numeric: tabular-nums; }
+#knowledge input[type=checkbox], #capabilities-form input[type=checkbox] { display: inline-block; width: 18px; height: 18px; padding: 0; margin: 0 8px 0 0; vertical-align: middle; accent-color: var(--accent); }
+#capabilities-form > label { display: block; margin: 10px 0; font-size: 14px; }
+#knowledge textarea { width: 100%; min-height: 120px; resize: vertical; padding: 10px 12px; border: 1px solid #e2e6ef; border-radius: 7px; overflow-wrap: anywhere; }
+#knowledge-open > form { margin-top: 18px; }
+#knowledge-status, #capabilities-results { padding-left: 20px; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
 .input-with-action, .input-with-unit { position: relative; }
 .input-with-action > input { padding-right: 43px; }

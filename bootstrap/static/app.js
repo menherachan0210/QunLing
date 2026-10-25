@@ -5,6 +5,8 @@ if (fragment.has("token")) history.replaceState(null, "", location.pathname + lo
 if (token) sessionStorage.setItem("qqbot-setup", token);
 let loaded = false;
 let authenticated = false;
+let resetKnowledge = () => {};
+let resetCapabilities = () => {};
 let authEpoch = 0;
 let setupState = null;
 let qqStatusReceivedAt = 0;
@@ -113,6 +115,8 @@ function hideAdmin() {
   $("admin").setAttribute("aria-expanded", "false");
 }
 function locked(message) {
+  resetKnowledge();
+  resetCapabilities();
   authEpoch += 1;
   clearRequests();
   authenticated = false;
@@ -244,6 +248,16 @@ function renderProactiveRuntime() {
     detail += ` 最近 24 小时有 ${group.handoff_attempts_day} 次续聊转入查询，共用参与额度；入队不代表已回复。`;
   }
   text("proactive-runtime-detail", detail);
+  const timings = group?.performance?.stages;
+  if (timings && typeof timings === "object") {
+    const labels = {judge:"判断", generate:"生成", reconcile:"去重"};
+    const parts = Object.entries(labels).flatMap(([key, label]) => {
+      const item = timings[key];
+      return item && Number.isSafeInteger(item.count) && item.count > 0 && Number.isFinite(item.p50_seconds)
+        ? [`${label} ${item.count} 次，中位 ${item.p50_seconds} 秒，P95 ${item.p95_seconds} 秒`] : [];
+    });
+    if (parts.length) text("proactive-runtime-detail", detail + " 近一小时调用（重启后重计，含准备耗时）：" + parts.join("；") + "。");
+  }
   for (const key of ["judgments_hour", "judgments_day", "replies_hour", "replies_day"]) {
     text(`proactive-${key.replaceAll("_", "-")}`, proactiveUsage(group?.[key], group?.[`${key}_limit`]));
   }
@@ -434,7 +448,7 @@ function renderSetup(state) {
   if (!loaded && state.settings?.base_url) {
     for (const [key, value] of Object.entries(state.settings)) {
       if (key !== "api_key" && $("settings").elements[key]) {
-        const inheritsChat = (key === "vision_model" || key === "search_model") && value === state.settings.chat_model;
+        const inheritsChat = ["vision_model", "search_model", "decision_model"].includes(key) && value === state.settings.chat_model;
         $("settings").elements[key].value = inheritsChat ? "" : value;
       }
     }
@@ -750,7 +764,7 @@ if (typeof IntersectionObserver !== "undefined") {
     const visible = entries.filter((entry) => entry.isIntersecting);
     if (visible.length) selectNav(visible[0].target.id);
   }, {rootMargin: "-10% 0px -65% 0px"});
-  ["overview", "models", "connection", "proactive", "requests", "maintenance", "advanced"].forEach((id) => observer.observe($(id)));
+  ["overview", "models", "connection", "proactive", "requests", "knowledge", "maintenance", "advanced"].forEach((id) => observer.observe($(id)));
 }
 const requestPhases = {received:"收到请求",queued:"排队",preparing:"准备上下文",runtime_wait:"等待功能组件",running:"处理消息",model:"生成回复",tool_wait:"等待工具",tool:"执行工具",retry_wait:"准备有限重试",resuming:"等待继续回复",sending:"发送回复",delivered:"发送已确认",ended:"处理结束"};
 const requestStatuses = {active:"处理中",completed:"回复已发送",processed:"流程已结束",failed:"处理失败",cancelled:"已取消",interrupted:"执行中断",unconfirmed:"结果未确认",rejected:"未能排队"};
@@ -795,6 +809,11 @@ async function showRequest(requestId) {
       events.append(requestNode("li", parts.join(" · ")));
     }
     box.replaceChildren(requestNode("h3", "请求 " + item.request_id), events);
+    if (item.timing?.phase_seconds) {
+      const parts = Object.entries(item.timing.phase_seconds).filter(([, seconds]) => Number.isFinite(seconds) && seconds > 0)
+        .map(([phase, seconds]) => `${requestPhases[phase] || "其他阶段"} ${seconds} 秒`);
+      box.append(requestNode("p", "阶段耗时：" + parts.join("；") + (item.timing.complete ? "。" : "。早期事件已裁剪，统计不完整。")));
+    }
     if (item.operation_unconfirmed) box.append(requestNode("p", "有操作未确认结果。请先核对实际产物，避免重复执行。"));
   } catch (error) {
     if (authenticated && epoch === authEpoch && sequence === requestDetailSequence) box.replaceChildren(requestNode("p", error.message));

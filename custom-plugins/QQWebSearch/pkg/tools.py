@@ -23,6 +23,7 @@ from pkg.media import fetch_image
 from pkg.network import validate_public_url
 from pkg.pages import read_page
 from pkg.page_tools import read_cached_page, source_read_status
+from pkg import knowledge
 from pkg.search import search_web
 from pkg.materials import collect_materials, register_material
 from qunling.assets import AssetError, AssetStore
@@ -380,11 +381,16 @@ async def execute(tool, action, params, query_id, query_uuid):
             )
             context.active += 1
             if action == "search":
-                query = text_param(params, "query", 1000)
+                if not isinstance(params, dict) or set(params) - {"query", "freshness"}:
+                    raise WebError("搜索仅接受 query 和 freshness。")
+                query = text_param({"query": params.get("query")}, "query", 1000)
+                freshness = params.get("freshness", "auto")
+                if freshness not in ("auto", "live"):
+                    raise WebError("freshness 应为 auto 或 live。")
                 context.claim("search", 3)
                 result = {
                     "status": "ok",
-                    **await search_web(tool.plugin.get_config(), query),
+                    **await knowledge.search(tool.plugin, api, query, freshness, search_web),
                 }
                 result["search_ref"] = tool.plugin.web_queries.remember_search(context, query, result)
                 for source in result["sources"]:
@@ -397,7 +403,10 @@ async def execute(tool, action, params, query_id, query_uuid):
                     "概述中的作者、原帖或项目是可追查线索。按证据缺口读取来源或调整下一次查询，不重复近义搜索。",
                 }
             elif action == "page":
-                result = await read_cached_page(tool.plugin, context, params, read_page)
+                from pkg.page_tools import read_pages
+                async def reader(url):
+                    return await knowledge.page(tool.plugin, api, url, params.get("freshness", "auto"), read_page)
+                result = await read_pages(tool.plugin, context, params, reader)
             elif action == "images":
                 query, urls, purpose = image_parameters(params)
                 result = await find_images(

@@ -65,6 +65,7 @@ def main():
     from qunling.files import (FileError, export_file, inspect_file, read_archive_member,
                                read_file, search_file)
     from qunling.assets import safe_name
+    from qunling.files.cache import exchange
     root = Path.cwd()
     raw = (root / "request.json").read_bytes()
     if len(raw) > 60 * 1024 * 1024:
@@ -77,6 +78,30 @@ def main():
         if len(secret_input) > 8192:
             raise FileError("invalid_parameters", "密码输入超过限制。")
         password = json.loads(secret_input)["password"]
+    candidate = None
+    cached = root / "parsed-input.json"
+    if request.get("parsed_cache") and password is None and cached.is_file() and cached.stat().st_size <= 4 * 1024 * 1024:
+        try:
+            candidate = json.loads(cached.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            pass
+    with exchange(candidate) as parsed:
+        result = dispatch(operation, args, request, root, password)
+    if request.get("parsed_cache") and password is None and parsed["result"] is not None:
+        encoded_cache = json.dumps(parsed["result"], ensure_ascii=False).encode()
+        if len(encoded_cache) <= 4 * 1024 * 1024:
+            (root / "parsed-output.json").write_bytes(encoded_cache)
+    encoded = json.dumps({"ok": True, "result": result, "parse_cache_hit": parsed["hit"]}, ensure_ascii=False).encode()
+    if len(encoded) > 128 * 1024:
+        raise FileError("result_limit", "结构结果过大，请分页读取文件。")
+    (root / "result.json").write_bytes(encoded)
+    return handle
+
+
+def dispatch(operation, args, request, root, password):
+    from qunling.files import (FileError, export_file, inspect_file, read_archive_member,
+                               read_file, search_file)
+    from qunling.assets import safe_name
     if operation == "create":
         if args["format"] == "gif":
             from qunling.animation import render
@@ -100,11 +125,7 @@ def main():
             result = {"size": len(content)}
         else:
             raise FileError("invalid_operation", "文件操作无效。")
-    encoded = json.dumps({"ok": True, "result": result}, ensure_ascii=False).encode()
-    if len(encoded) > 128 * 1024:
-        raise FileError("result_limit", "结构结果过大，请分页读取文件。")
-    (root / "result.json").write_bytes(encoded)
-    return handle
+    return result
 
 
 if __name__ == "__main__":

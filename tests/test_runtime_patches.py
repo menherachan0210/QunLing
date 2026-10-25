@@ -278,7 +278,8 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("sdk-transport-recovery.patch", "sdk", False) in patcher.PATCHES
     assert ("host-request-diagnostics.patch", "host", False) in patcher.PATCHES
     assert ("sdk-utf8-chunk-performance.patch", "sdk", False) in patcher.PATCHES
-    assert len(names) == 30
+    assert len(names) == 32
+    assert {"host-web-knowledge.patch", "host-memory-recall.patch"} <= names
     assert "host-animation-vision.patch" in names
 
 

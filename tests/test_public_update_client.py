@@ -3,6 +3,7 @@
 from copy import deepcopy
 from types import SimpleNamespace
 import threading
+import time
 
 import pytest
 import requests
@@ -212,6 +213,8 @@ def manager(tmp_path, monkeypatch):
         tmp_path, "7zz",
     )
     manager.update(stage="ready", plugins_ready=True, configured=True)
+    manager.plugin_sampled_at = time.monotonic()
+    manager.update(plugin_runtime_state="ready")
     # A ready fixture includes a completed, fresh QQ health sample. Historical
     # connection flags alone must not bypass the production freshness check.
     manager._record_qq("online", logged_in=True, connected=True)
@@ -413,6 +416,8 @@ function element(id) {
       add() {}, remove() {}, toggle() {}
     },
     addEventListener(name, fn) { this[name] = fn; },
+    replaceChildren(...children) { this.children = children; },
+    append(...children) { this.children = [...(this.children || []), ...children]; },
     setAttribute(name, value) { this.attributes[name] = value; },
     getAttribute(name) { return this.attributes[name] ?? null; },
     removeAttribute(name) { delete this.attributes[name]; if (name === "src") this.src = ""; },
@@ -431,7 +436,7 @@ let remote = {
 };
 let offline = false, disconnectAfterApply = false, unauthorized = false;
 let setup = {
-  plugins_ready: true, stage:"ready", configured:true, qq_connected:true,
+  plugins_ready: true, plugin_runtime_healthy:true, stage:"ready", configured:true, qq_connected:true,
   qq_logged_in:true, qq_state:"online", qq_status_fresh:true,
   qq_checked_at:Math.floor(Date.now()/1000), settings:{}, message:"已连接"
 };

@@ -1,0 +1,14 @@
+diff --git a/src/langbot/pkg/agent/runner/orchestrator.py b/src/langbot/pkg/agent/runner/orchestrator.py
+--- a/src/langbot/pkg/agent/runner/orchestrator.py
++++ b/src/langbot/pkg/agent/runner/orchestrator.py
+@@ -176,6 +176,10 @@
+             descriptor=descriptor,
+             resources=resources,
+         )
++
++        from qunling.memory_recall import deduplicate as deduplicate_memory_recall
++
++        deduplicate_memory_recall(execution_query, context, descriptor.id)
+ 
+         session_query_id = None
+         if adapter_context:

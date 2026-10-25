@@ -7,7 +7,8 @@ from pathlib import Path
 
 from .archives import open_archive
 from .core import DEFAULT_LIMITS, FileError, FileLimits, digest, integer, load_bytes, strict_keys
-from .formats import MIMES, detect, parse
+from .formats import MIMES, detect
+from .cache import parse_cached as parse
 
 _SELECTORS = {"section", "page", "sheet", "offset", "limit", "text_offset", "member",
               "column_offset", "column_limit", "cell"}

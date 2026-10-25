@@ -413,9 +413,9 @@ async def test_cancelled_send_is_not_retryable():
 def test_tool_schemas_expose_no_credentials_or_arbitrary_send_destination():
     directory = Path(__file__).resolve().parents[1] / "components/tools"
     expected = {
-        "search_web": {"query"},
+        "search_web": {"query", "freshness"},
         "search_web_images": {"query", "source_urls", "purpose"},
-        "read_web_page": {"url", "page_ref", "offset", "find_text"},
+        "read_web_page": {"url", "urls", "page_ref", "offset", "find_text", "freshness"},
         "send_web_images": {"image_refs"},
         "collect_web_materials": {"refs"},
     }
@@ -426,7 +426,7 @@ def test_tool_schemas_expose_no_credentials_or_arbitrary_send_destination():
         schema = document["spec"]["parameters"]
         assert set(schema["properties"]) == properties
         assert set(schema["required"]) == (set() if name == "read_web_page" else {"query"}
-                                           if name == "search_web_images" else properties)
+                                           if name in {"search_web", "search_web_images"} else properties)
         assert schema["additionalProperties"] is False
 
 

@@ -492,7 +492,7 @@ def test_public_settings_uses_allowlist_for_future_private_fields():
     config.update({"onebot_token": "synthetic-private", "credentials": {"password": "synthetic-private"}})
     public = setup.public_settings(config)
     assert set(public) == {
-        "base_url", "chat_model", "vision_model", "image_model", "search_model", "api_key_saved",
+        "base_url", "chat_model", "vision_model", "image_model", "search_model", "decision_model", "api_key_saved",
         "group_context_hours", "group_context_max_messages",
     }
     assert public["api_key_saved"] is True
