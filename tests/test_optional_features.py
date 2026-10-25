@@ -107,3 +107,20 @@ def test_legacy_production_tool_settings_are_migrated_without_losing_preferences
     assert (image['image_size'], image['quality'], image['request_timeout_seconds']) == ('768x1280', 'high', 210)
     assert api.configs['local/QQWebSearch']['request_timeout_seconds'] == 75
     assert settings_from_input({'chat_model':'updated'}, migrated)['image_quality'] == 'high'
+
+
+def test_automatic_restore_keeps_legacy_settings_readable_by_previous_service(tmp_path, monkeypatch):
+    from bootstrap.server import SetupManager
+    from bootstrap.state import State, prepare
+    prepare(tmp_path/'private', tmp_path/'napcat')
+    manager = SetupManager(State(tmp_path/'private'), 'http://app:5300', 'http://napcat:6099', tmp_path, '7zz')
+    manager.api = FakeLangBot()
+    monkeypatch.setattr('bootstrap.server.ensure_plugins', lambda *args, **kwargs: None)
+    legacy = {k:v for k,v in settings().items() if k in {
+        'base_url','api_key','chat_model','vision_model','image_model','search_model',
+        'search_base_url','search_api_key','group_context_hours','group_context_max_messages',
+        'image_size','image_quality','image_timeout_seconds','search_timeout_seconds'}}
+    legacy['search_provider'] = 'shared'
+    manager._apply(legacy)
+    assert manager.state.read('ai.json') == legacy
+    assert manager.snapshot()['configured'] is True

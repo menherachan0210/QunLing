@@ -225,6 +225,7 @@ class SetupManager:
         self._record_qq("waiting_login")
 
     def _apply(self, config):
+        saved_config = config
         config = settings_from_input(config)
         record = self.state.read(default={})
         selected = enabled_plugins(config)
@@ -238,7 +239,10 @@ class SetupManager:
             self.langbot_url,
             self.archive,
         )
-        self.state.write(config, "ai.json")
+        # Startup validates/migrates in memory while preserving the saved format
+        # so an old service can still read it after a failed image update. An
+        # explicit UI submission is already normalized by submit().
+        self.state.write(saved_config, "ai.json")
         self.update(
             configured=True,
             plugins_ready=True,
