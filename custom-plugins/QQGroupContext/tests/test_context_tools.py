@@ -117,6 +117,16 @@ def test_private_chat_and_missing_anchor_rejected():
         plugin.contexts.capture(plugin, ctx, "bot-a")
 
 
+def test_context_expires_at_deadline_despite_float_subtraction_roundoff():
+    plugin, _, variables, item = fixture()
+    item.created = 124.003
+    deadline = item.created + TTL
+    assert deadline - item.created < TTL
+    plugin.contexts.clock = lambda: deadline
+    with pytest.raises(VisionError):
+        plugin.contexts.get(plugin, variables, 10, "query-a")
+
+
 def test_cross_installation_and_workspace_rejected():
     plugin, ctx, variables, _ = fixture()
     binding = SimpleNamespace(

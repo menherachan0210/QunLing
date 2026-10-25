@@ -103,8 +103,9 @@ class ContextStore:
         item.group_data_inflight += 1
 
     def prune(self):
+        now = self.clock()
         for key, value in list(self.entries.items()):
-            if self.clock() - value.created >= TTL:
+            if now >= value.created + TTL:
                 self.entries.pop(key, None)
 
     def save_history(self, item, history):
