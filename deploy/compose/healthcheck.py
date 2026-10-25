@@ -22,11 +22,15 @@ def check(role: str) -> bool:
                 return body.get("status") == "ok"
             resources = body.get("resources")
             runtimes = resources.get("runtimes") if isinstance(resources, dict) else None
+            runtime = body.get("plugin_runtime", {})
             return (
                 body.get("code") == 0
                 and body.get("msg") == "ok"
                 and isinstance(runtimes, dict)
                 and runtimes.get("plugin_runtime_connected") is True
+                and isinstance(runtime, dict)
+                and runtime.get("state") == "ready"
+                and runtime.get("healthy") is True
             )
     except (HTTPError, OSError, ValueError, TypeError):
         return False

@@ -9,7 +9,7 @@ from langbot_plugin.api.proxies.query_based_api import QueryBasedAPIProxy
 
 from main import ImageGenerationError
 from pkg.image_context import query_claim_lock, remember_output
-from pkg.gif_output import prepare_prompt, prepare_context, finish, finish_asset
+from pkg.gif_output import prepare_prompt, prepare_context, finish, finish_asset, finish_static
 from qunling.assets import AssetError
 
 
@@ -20,7 +20,7 @@ INVALID_PROMPT = "请仅提供非空的图片描述 prompt，长度最多 8000 �
 GUARD_UNAVAILABLE = "暂时无法确认本条消息的绘图状态，未发起生成请求；请勿重复调用。"
 GENERATING = "本条消息已提交绘图请求，结果尚未确认；请勿重复调用或重新生成。"
 GENERATION_FAILED = "本条消息的图片生成未成功；请勿重复调用，以免重复计费。"
-SEND_FAILED = "图片已生成，但发送失败；请勿重新生成或重复调用本工具。"
+SEND_FAILED = "图片已生成，QQ 交付未确认；请勿重新生成或自动重复发送。"
 SENT = (
     "图片已生成并发送。本工具没有对成图做像素识别；生成描述是本次要求，不是成图细节已实现的证据。"
     "可以简短说明按哪些要求生成或编辑；若此前确实识别过原图，可保留那次观察，但不能据此断言成图已保留全部特征。"
@@ -35,6 +35,15 @@ _STATE_MESSAGES = {
     "gif_saved": "分镜已生成并进入 GIF 处理流程；用 file_task 或 file_workspace 查看已有任务和素材，不要重新生图或重复发送。",
     "asset_saved": "图片生成请求已执行；使用返回的 asset_ref 或文件工作区查看已保存素材，不要重新生图。",
 }
+
+
+def state_message(variables):
+    state = variables.get(QUERY_STATE_KEY)
+    message = _STATE_MESSAGES.get(state, GENERATING) if isinstance(state, str) else GENERATING
+    ref = variables.get(QUERY_STATE_KEY + ".asset")
+    if state in {"send_failed", "asset_saved"} and isinstance(ref, str):
+        message += f" 已保存 asset_ref={ref}；交付未确认，可在用户明确要求后发送已有文件。"
+    return message
 
 
 class GenerateImage(Tool):
@@ -75,12 +84,7 @@ class GenerateImage(Tool):
                 if not isinstance(variables, dict):
                     return GUARD_UNAVAILABLE
                 if QUERY_STATE_KEY in variables:
-                    state = variables[QUERY_STATE_KEY]
-                    return (
-                        _STATE_MESSAGES.get(state, GENERATING)
-                        if isinstance(state, str)
-                        else GENERATING
-                    )
+                    return state_message(variables)
                 context = await prepare_context(self.plugin, reply_api, plan, deliver=params.get("deliver", True))
                 # Persist before any billable request, including possible timeouts.
                 await reply_api.set_query_var(QUERY_STATE_KEY, "started")
@@ -107,22 +111,9 @@ class GenerateImage(Tool):
             await self._record_state(reply_api, "asset_saved")
             return await finish_asset(context, result)
 
-        try:
-            await asyncio.wait_for(
-                reply_api.reply(
-                    MessageChain(
-                        [Image(base64=result.base64 or "", url=result.url or "")]
-                    )
-                ),
-                timeout=REPLY_TIMEOUT_SECONDS,
-            )
-        except Exception:
-            await self._record_state(reply_api, "send_failed")
-            return SEND_FAILED
-
-        await self._record_state(reply_api, "sent")
-        await remember_output(self.plugin, reply_api, result)
-        return SENT
+        return await finish_static(self.plugin, reply_api, context, result, QUERY_STATE_KEY,
+                                   sent_message=SENT, failed_message=SEND_FAILED,
+                                   timeout=REPLY_TIMEOUT_SECONDS)
 
     @staticmethod
     async def _record_state(reply_api: QueryBasedAPIProxy, state: str) -> None:

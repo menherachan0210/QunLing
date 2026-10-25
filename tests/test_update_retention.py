@@ -229,6 +229,26 @@ def test_current_status_job_is_retained_in_addition_to_newest_backup_quota(deplo
     assert third.exists() and fourth.exists()
 
 
+@pytest.mark.parametrize('phase', ['completed', 'rolled_back'])
+def test_completed_service_history_is_pruned_without_data_archives(deployed, phase):
+    engine, docker = deployed
+    histories = []
+    for number in (1, 2, 3):
+        directory, _, _ = completed_job(engine, docker, number, phase=phase, complete=False)
+        record = json.loads((directory / 'job.json').read_text())
+        record['data_policy'] = 'preserve'
+        engine_module.write(directory / 'job.json', record)
+        for name in engine_module.DATA_VOLUMES:
+            (directory / (name + '.tar')).unlink()
+            (directory / (name + '.tar.json')).unlink()
+        histories.append(directory)
+    report = cleanup(engine)
+    assert report['status'] == 'completed'
+    assert report['removed_jobs'] == [histories[0].name]
+    assert not histories[0].exists() and all(p.is_dir() for p in histories[1:])
+    assert set(docker.live_images.values()).issubset(docker.images)
+
+
 @pytest.mark.parametrize("phase", ["failed", "rolled_back", "recovery_required"])
 def test_failed_and_rolled_back_jobs_keep_data_and_referenced_images(deployed, phase):
     engine, docker = deployed

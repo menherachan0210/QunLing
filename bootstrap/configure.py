@@ -22,6 +22,29 @@ PLUGINS = {
     "local/QQGroupContext",
     "local/QQWebSearch",
 }
+FEATURE_PLUGINS = {
+    "memory": {"langbot-team/LongTermMemory"},
+    "files": {"local/QQTextReader"},
+    "vision": {"local/QQGroupContext"},
+    "image": {"langbot-team/AIImagePlugin", "local/QQTextReader"},
+    "search": {"local/QQWebSearch", "local/QQTextReader"},
+    "comic": {"local/QQComicTranslator", "local/QQTextReader", "local/QQGroupContext"},
+}
+PROVIDER_ROLES = ("vision", "image", "search", "decision", "reconcile")
+
+
+def enabled_plugins(config):
+    result = {"langbot-team/LocalAgent"}
+    for feature in config.get("features", FEATURE_PLUGINS):
+        result.update(FEATURE_PLUGINS[feature])
+    return result
+
+
+def role_settings(config, role):
+    """Empty role endpoint inherits the chat provider; secrets never reach public settings."""
+    endpoint = config.get(role + "_base_url")
+    return {**config, "base_url": endpoint or config["base_url"],
+            "api_key": config.get(role + "_api_key") or config["api_key"]}
 PROMPT = """[QQBOT SETUP v1]
 你是中文QQ助手，自然清楚地回答。区分本轮提问者和其他成员，不把他人经历归给当前人。
 需要群聊背景时用群聊前文工具，当前问题优先；新话题不硬接旧梗。
@@ -73,8 +96,10 @@ def settings_from_input(values, previous=None):
         "image_model",
         "search_model",
         "decision_model",
+        "reconcile_model",
     }
-    allowed = text_fields | GROUP_CONTEXT_SETTINGS.keys()
+    text_fields.update(role + suffix for role in PROVIDER_ROLES for suffix in ("_base_url", "_api_key"))
+    allowed = text_fields | GROUP_CONTEXT_SETTINGS.keys() | {"features"}
     if set(values) - allowed:
         raise SetupError("包含不支持的配置项。")
     config = {}
@@ -82,7 +107,7 @@ def settings_from_input(values, previous=None):
         # Saving only the context controls must not erase the AI configuration.
         value = values.get(key, previous.get(key, ""))
         if not isinstance(value, str) or len(value) > (
-            4096 if key == "api_key" else 1024
+            4096 if key.endswith("api_key") else 1024
         ):
             raise SetupError("AI 配置格式不正确。")
         if any(ord(char) < 32 or ord(char) == 127 for char in value):
@@ -90,8 +115,19 @@ def settings_from_input(values, previous=None):
         config[key] = value.strip()
     if not config["api_key"] and previous:
         config["api_key"] = previous.get("api_key", "")
-    if not config["api_key"] or not config["chat_model"] or not config["image_model"]:
-        raise SetupError("请填写 API Key、聊天模型名和图片模型名，以配置完整功能。")
+    features = values.get("features", previous.get("features", list(FEATURE_PLUGINS) if config["image_model"] else []))
+    if not isinstance(features, list) or any(not isinstance(f, str) or f not in FEATURE_PLUGINS for f in features):
+        raise SetupError("可选功能列表无效。")
+    features = set(features)
+    if features & {"image", "search", "comic"}:
+        features.add("files")
+    if "comic" in features:
+        features.add("vision")
+    config["features"] = sorted(features)
+    if not config["api_key"] or not config["chat_model"]:
+        raise SetupError("请填写聊天 API Key 和聊天模型名。")
+    if "image" in features and not config["image_model"]:
+        raise SetupError("启用图片生成时需要填写图片模型名。")
     try:
         parsed = urlsplit(config["base_url"])
         if (
@@ -109,19 +145,42 @@ def settings_from_input(values, previous=None):
             "AI 地址需为完整 HTTP(S) 接口地址，例如 https://api.example.com/v1。"
         ) from None
     config["base_url"] = config["base_url"].rstrip("/")
+    for role in PROVIDER_ROLES:
+        endpoint, secret = role + "_base_url", role + "_api_key"
+        if config[endpoint]:
+            try:
+                parsed = urlsplit(config[endpoint])
+                if (parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username
+                        or parsed.password or parsed.query or parsed.fragment):
+                    raise ValueError
+                parsed.port
+            except ValueError:
+                raise SetupError("独立服务地址需为完整 HTTP(S) 接口地址。") from None
+            config[endpoint] = config[endpoint].rstrip("/")
+            if config[endpoint] != previous.get(endpoint) and secret not in values:
+                config[secret] = ""
+            if not config[secret] and config[endpoint] == previous.get(endpoint):
+                config[secret] = previous.get(secret, "")
+            if not config[secret]:
+                raise SetupError("独立服务地址需要自己的 API Key，避免将聊天密钥发往其他服务。")
+        else:
+            config[secret] = ""
     config["vision_model"] = config["vision_model"] or config["chat_model"]
     config["search_model"] = config["search_model"] or config["chat_model"]
     config["decision_model"] = config["decision_model"] or config["chat_model"]
+    config["reconcile_model"] = config["reconcile_model"] or config["chat_model"]
     config.update(group_context_settings(values, previous))
     return config
 
 
 def public_settings(config):
-    fields = {"base_url", "chat_model", "vision_model", "image_model", "search_model", "decision_model"}
+    fields = {"base_url", "chat_model", "vision_model", "image_model", "search_model", "decision_model", "reconcile_model", "features"}
+    fields.update(role + "_base_url" for role in PROVIDER_ROLES)
     return {
         **{k: v for k, v in config.items() if k in fields},
         **group_context_settings(config),
         "api_key_saved": bool(config.get("api_key")),
+        **{role + "_api_key_saved": bool(config.get(role + "_api_key")) for role in PROVIDER_ROLES},
     }
 
 
@@ -171,7 +230,7 @@ def wait_for_plugins_initialized(
         sleep(min(2, remaining))
 
 
-def ensure_plugins(api, package_dir, progress=lambda text: None, sleep=time.sleep):
+def ensure_plugins(api, package_dir, progress=lambda text: None, sleep=time.sleep, *, identities=None):
     directory = Path(package_dir)
     manifest = json.loads((directory / "packages.json").read_text(encoding="utf-8"))
     packages = manifest.get("packages", []) if isinstance(manifest, dict) else manifest
@@ -214,15 +273,18 @@ def ensure_plugins(api, package_dir, progress=lambda text: None, sleep=time.slee
         raise SetupError(
             "持久插件安装记录格式无效；未重新安装插件，请检查服务后重试。"
         ) from None
+    selected = PLUGINS if identities is None else set(identities)
+    if not selected <= PLUGINS:
+        raise SetupError("插件选择无效。")
     # Respect intentional disablement even if another package is missing.
-    for identity in sorted(PLUGINS & installed.keys()):
+    for identity in sorted(selected & installed.keys()):
         if not installed[identity]["enabled"]:
             raise SetupError(
                 "插件已禁用：" + identity
                 + "；请在 LangBot 管理页确认并启用后再重试，向导不会自动启用或重装。"
             )
     ordered = sorted(
-        packages,
+        [item for item in packages if item["identity"] in selected],
         key=lambda p: (p["identity"] != "langbot-team/LocalAgent", p["identity"]),
     )
     for item in ordered:
@@ -256,13 +318,14 @@ def ensure_plugins(api, package_dir, progress=lambda text: None, sleep=time.slee
         wait_for_plugins_initialized(
             api, identities={item["identity"]}, sleep=sleep,
         )
-    progress("七个插件已就绪")
+    progress("所选插件已就绪")
 
 
 def configure(api, config, record, persist, onebot_token, langbot_url, archive_path):
     """Only manages resources recorded here; preserves memories and other resources."""
     # Persisted settings from earlier versions have no group-context controls.
     config = settings_from_input(config)
+    selected = enabled_plugins(config)
     record = deepcopy(record)
     fingerprints = record.setdefault("applied_fingerprints", {})
 
@@ -315,81 +378,108 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
         fingerprints["provider"] = provider_digest
         remember("applied_fingerprints", fingerprints)
     model_ids = {}
-    for role in ("chat_model", "vision_model", "decision_model"):
+    for role in ("chat_model", "vision_model", "decision_model", "reconcile_model"):
+        if role == "vision_model" and "vision" not in config["features"]:
+            model_ids[role] = model_ids["chat_model"]
+            continue
         name = config.get(role) or config["chat_model"]
+        role_name = role.removesuffix("_model")
+        role_config = role_settings(config, role_name)
+        role_provider = provider_id
+        if config.get(role_name + "_base_url"):
+            provider_values = {"name": "QQ Bot " + role_name, "requester": "openai-chat-completions",
+                               "base_url": role_config["base_url"], "api_keys": [role_config["api_key"]]}
+            role_provider = resource(role_name + "_provider_uuid", "/api/v1/provider/providers", "providers",
+                                     provider_values, lambda e, n=role_name: e["name"] == "QQ Bot " + n)
+            digest = hashlib.sha256(json.dumps(provider_values, sort_keys=True).encode()).hexdigest()
+            if fingerprints.get(role_name + "_provider") != digest:
+                api.call("PUT", "/api/v1/provider/providers/" + role_provider, provider_values)
+                fingerprints[role_name + "_provider"] = digest
+                remember("applied_fingerprints", fingerprints)
+        abilities = ["func_call"] if role == "chat_model" else []
+        if role == "vision_model" or role == "chat_model" and "vision" in config["features"]:
+            abilities.append("vision")
+        # Several roles can deliberately share one model. Changing a role must
+        # select/create another resource, never rename the shared resource.
+        existing_models = api.call("GET", "/api/v1/provider/models/llm")["models"]
+        previous_model = next((m for m in existing_models if m["uuid"] == record.get(role + "_uuid")), None)
+        if previous_model and (previous_model.get("name") != name or previous_model.get("provider_uuid") != role_provider):
+            record.pop(role + "_uuid", None)
         model_ids[role] = resource(
             role + "_uuid",
             "/api/v1/provider/models/llm",
             "models",
             {
                 "name": name,
-                "provider_uuid": provider_id,
-                "abilities": [] if role == "decision_model" else ["func_call", "vision"],
+                "provider_uuid": role_provider,
+                "abilities": abilities,
                 "extra_args": {},
             },
-            lambda e, name=name: e["name"] == name
-            and e["provider_uuid"] == provider_id,
+            lambda e, name=name, pid=role_provider: e["name"] == name
+            and e["provider_uuid"] == pid,
         )
         models = api.call("GET", "/api/v1/provider/models/llm")["models"]
         actual = next(m for m in models if m["uuid"] == model_ids[role])
-        if role != "decision_model" and not {"func_call", "vision"}.issubset(actual.get("abilities", [])):
+        if not set(abilities).issubset(actual.get("abilities", [])):
             api.call(
                 "PUT",
                 "/api/v1/provider/models/llm/" + model_ids[role],
                 {
                     "abilities": list(
                         dict.fromkeys(
-                            [*actual.get("abilities", []), "func_call", "vision"]
+                            [*actual.get("abilities", []), *abilities]
                         )
                     )
                 },
             )
-    embedding_provider = resource(
-        "embedding_provider_uuid",
-        "/api/v1/provider/providers",
-        "providers",
-        {
-            "name": "QQ Bot local embedding",
-            "requester": "chroma-embedding",
-            "base_url": "",
-            "api_keys": [],
-        },
-        lambda e: e["name"] == "QQ Bot local embedding"
-        and e["requester"] == "chroma-embedding",
-    )
-    embedding = resource(
-        "embedding_uuid",
-        "/api/v1/provider/models/embedding",
-        "models",
-        {
-            "name": "all-MiniLM-L6-v2",
-            "provider_uuid": embedding_provider,
-            "extra_args": {},
-        },
-        lambda e: e["provider_uuid"] == embedding_provider,
-    )
-    memory = resource(
-        "memory_uuid",
-        "/api/v1/knowledge/bases",
-        "bases",
-        {
-            "name": "QQ long-term memory",
-            "description": "Group/private conversation isolated memory",
-            "knowledge_engine_plugin_id": "langbot-team/LongTermMemory",
-            "creation_settings": {
-                "embedding_model_uuid": embedding,
-                "isolation": "session",
-                "recency_half_life_days": 30,
-                "auto_recall_top_k": 3,
-                "retrieval_strategy": "auto",
-                "exact_match_boost": True,
-                "candidate_extraction_enabled": False,
-                "candidate_auto_apply": False,
+    memory = None
+    if "memory" in config["features"]:
+        embedding_provider = resource(
+            "embedding_provider_uuid",
+            "/api/v1/provider/providers",
+            "providers",
+            {
+                "name": "QQ Bot local embedding",
+                "requester": "chroma-embedding",
+                "base_url": "",
+                "api_keys": [],
             },
-            "retrieval_settings": {"top_k": 5},
-        },
-        lambda e: e["name"] == "QQ long-term memory",
-    )
+            lambda e: e["name"] == "QQ Bot local embedding"
+            and e["requester"] == "chroma-embedding",
+        )
+        embedding = resource(
+            "embedding_uuid",
+            "/api/v1/provider/models/embedding",
+            "models",
+            {
+                "name": "all-MiniLM-L6-v2",
+                "provider_uuid": embedding_provider,
+                "extra_args": {},
+            },
+            lambda e: e["provider_uuid"] == embedding_provider,
+        )
+        memory = resource(
+            "memory_uuid",
+            "/api/v1/knowledge/bases",
+            "bases",
+            {
+                "name": "QQ long-term memory",
+                "description": "Group/private conversation isolated memory",
+                "knowledge_engine_plugin_id": "langbot-team/LongTermMemory",
+                "creation_settings": {
+                    "embedding_model_uuid": embedding,
+                    "isolation": "session",
+                    "recency_half_life_days": 30,
+                    "auto_recall_top_k": 3,
+                    "retrieval_strategy": "auto",
+                    "exact_match_boost": True,
+                    "candidate_extraction_enabled": False,
+                    "candidate_auto_apply": False,
+                },
+                "retrieval_settings": {"top_k": 5},
+            },
+            lambda e: e["name"] == "QQ long-term memory",
+        )
     pipeline_id = resource(
         "pipeline_uuid",
         "/api/v1/pipelines",
@@ -408,23 +498,26 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
         }
     ai = pipeline_config.setdefault("ai", {})
     ai["qunling_decision_model"] = model_ids["decision_model"]
+    ai["qunling_reconcile_model"] = model_ids["reconcile_model"]
     ai.setdefault("runner", {})["id"] = RUNNER
     runner = ai.setdefault("runner_config", {}).setdefault(RUNNER, {})
+    # The wizard owns the primary model, not the operator's fallback policy.
+    model_config = deepcopy(runner.get("model", {}))
+    model_config["primary"] = model_ids["chat_model"]
+    model_config.setdefault("fallbacks", [])
+    model_config.setdefault("reasoning", {})
     runner.update(
         {
-            "model": {
-                "primary": model_ids["chat_model"],
-                "fallbacks": [],
-                "reasoning": {},
-            },
+            "model": model_config,
             "knowledge-bases": list(
-                dict.fromkeys([*runner.get("knowledge-bases", []), memory])
+                dict.fromkeys([kb for kb in [*runner.get("knowledge-bases", []), memory]
+                               if kb and ("memory" in config["features"] or kb != record.get("memory_uuid"))])
             ),
-            "box-enabled": False,
-            "max-tool-iterations": 24,
-            "timeout": max(600, int(runner.get("timeout", 300))),
         }
     )
+    runner.setdefault("box-enabled", False)
+    runner.setdefault("max-tool-iterations", 24)
+    runner.setdefault("timeout", 600)
     prompts = [
         p
         for p in runner.get("prompt", [])
@@ -437,8 +530,20 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
     if not record.get("configured"):
         prompts = []
     runner["prompt"] = styled_prompts([{"role": "system", "content": PROMPT}, *prompts])
-    if pipeline_config != pipeline["config"]:
-        api.call("PUT", "/api/v1/pipelines/" + pipeline_id, {"config": pipeline_config})
+    preferences = deepcopy(pipeline.get("extensions_preferences", {}))
+    external = [p for p in preferences.get("plugins", []) if p.get("author", "") + "/" + p.get("name", "") not in PLUGINS]
+    if record.get("configured") and preferences.get("enable_all_plugins"):
+        # Preserve third-party tools the operator already enabled under the old
+        # all-plugins setting when migrating to explicit capability selection.
+        for plugin in api.call("GET", "/api/v1/plugins")["plugins"]:
+            identity = plugin_identity(plugin)
+            binding = dict(zip(("author", "name"), identity.split("/", 1)))
+            if identity not in PLUGINS and plugin.get("enabled") is not False and binding not in external:
+                external.append(binding)
+    preferences.update(enable_all_plugins=False, plugins=external + [
+        {"author": identity.split("/")[0], "name": identity.split("/")[1]} for identity in sorted(selected)])
+    if pipeline_config != pipeline["config"] or preferences != pipeline.get("extensions_preferences"):
+        api.call("PUT", "/api/v1/pipelines/" + pipeline_id, {"config": pipeline_config, "extensions_preferences": preferences})
 
     plugin_configs = {
         "langbot-team/AIImagePlugin": {
@@ -469,6 +574,13 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
         },
     }
     for identity, values in plugin_configs.items():
+        if identity not in selected:
+            continue
+        role_name = {"langbot-team/AIImagePlugin": "image", "local/QQWebSearch": "search"}.get(identity)
+        if role_name:
+            provider_config = role_settings(config, role_name)
+            values["api_base_url"] = provider_config["base_url"]
+            values["openai_api_key" if role_name == "image" else "api_key"] = provider_config["api_key"]
         path = "/api/v1/plugins/" + identity + "/config"
         old = api.call("GET", path)["config"]
         needs_update, digest = changed(
@@ -480,12 +592,14 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
             remember("applied_fingerprints", fingerprints)
     # Config PUT schedules a replacement worker; its success does not mean that
     # Runner discovery or tool execution is ready for the new revision yet.
-    wait_for_plugins_initialized(api)
+    wait_for_plugins_initialized(api, identities=selected)
     processors = []
     for name, label in [
         ("QQTextReader", "QQ TXT 文件捕获"),
         ("QQComicTranslator", "QQ 漫画文件捕获"),
     ]:
+        if "local/" + name not in selected:
+            continue
         component = "plugin:local/" + name + "/group_upload"
         identifier = resource(
             name + "_processor_uuid",
@@ -532,10 +646,11 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
     old_processors = [
         p
         for p in bot.get("plugin_processors", [])
-        if p["processor_uuid"] not in {v["processor_uuid"] for v in processors}
+        if p["processor_uuid"] not in {record.get("QQTextReader_processor_uuid"), record.get("QQComicTranslator_processor_uuid")}
     ]
     desired_bot = {
-        "enable": True,
+        # Restoring credentials is not an instruction to resume a stopped bot.
+        "enable": bot.get("enable", True),
         "plugin_processors": [*old_processors, *processors],
         "adapter_config": {
             **bot["adapter_config"],

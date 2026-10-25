@@ -95,8 +95,10 @@ def _complete_job(directory, project, update_volume):
 
     job = _json(directory / "job.json")
     if (job.get("id") != directory.name or not JOB_ID.fullmatch(directory.name)
-            or job.get("finished") is not True or job.get("terminal_phase") != "completed"
-            or job.get("backup_complete") is not True
+            or job.get("finished") is not True
+            or job.get("terminal_phase") not in {"completed", "rolled_back"}
+            or (job.get("data_policy") != "preserve" and job.get("terminal_phase") != "completed")
+            or (job.get("data_policy") != "preserve" and job.get("backup_complete") is not True)
             or not isinstance(job.get("revision"), str) or not REVISION.fullmatch(job["revision"])):
         raise UnsafeInventory()
     completed = _timestamp(job.get("completed_at", job.get("created_at")))
@@ -111,7 +113,7 @@ def _complete_job(directory, project, update_volume):
     refs.add(worker)
     owned_refs.add(worker)
     allowed = {"job.json", "old-compose.json", "new-compose.json", "private.log", "source"}
-    for name in DATA_VOLUMES:
+    for name in (() if job.get("data_policy") == "preserve" else DATA_VOLUMES):
         archive = directory / (name + ".tar")
         manifest = _json(directory / (name + ".tar.json"))
         if (archive.is_symlink() or not archive.is_file()
@@ -128,7 +130,8 @@ def _complete_job(directory, project, update_volume):
     size = _tree_size(directory, directory.parent)
     return {"id": directory.name, "path": directory, "time": completed,
             "refs": refs, "owned_refs": owned_refs, "size": size,
-            "coverage": tuple(sorted(DATA_VOLUMES)), "maintenance": False}
+            "coverage": ("service-history",) if job.get("data_policy") == "preserve" else tuple(sorted(DATA_VOLUMES)),
+            "maintenance": False}
 
 
 def _maintenance_snapshot(directory, project, update_volume, journal_name):

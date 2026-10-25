@@ -17,7 +17,8 @@ TOOL_PATH = Path(__file__).resolve().parents[1] / "components/tools/generate_ima
 
 
 @pytest.fixture
-def tool_env(monkeypatch):
+def tool_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path))
     class ImageGenerationError(Exception):
         pass
 
@@ -44,6 +45,10 @@ def tool_env(monkeypatch):
                 raise RuntimeError("private read failure")
             # Yield to expose an unprotected check/set race deterministically.
             state = dict(self.handler.variables.setdefault(self.ref, {}))
+            from qunling.integration import CONTEXT_KEY, descriptor
+            state.setdefault(CONTEXT_KEY, descriptor(self.handler.plugin, SimpleNamespace(
+                bot_uuid="bot", launcher_type="group", launcher_id="group", sender_id="member"),
+                self.query_uuid))
             await asyncio.sleep(0)
             return state
 
@@ -100,7 +105,8 @@ def tool_env(monkeypatch):
             "MessageChain": MessageChain,
         },
         "langbot_plugin.api.proxies.query_based_api": {"QueryBasedAPIProxy": Proxy},
-        "main": {"ImageGenerationError": ImageGenerationError},
+        "main": {"ImageGenerationError": ImageGenerationError,
+                 "image_data_url": AsyncMock(return_value="data:image/png;base64,c2F2ZWQgb3V0cHV0")},
         "pkg.image_context": {
             "query_claim_lock": query_claim_lock,
             "remember_output": remember_output,
@@ -144,6 +150,7 @@ def tool_env(monkeypatch):
     tool.plugin = SimpleNamespace(
         plugin_runtime_handler=handler, generate_image=generator, edit_image=editor
     )
+    handler.plugin = tool.plugin
     edit_tool = edit_module.EditImage()
     edit_tool.plugin = tool.plugin
     return SimpleNamespace(
@@ -209,7 +216,7 @@ async def test_sends_one_image_to_current_query_and_returns_only_status(
     assert len(env.handler.delivered) == 1
     assert len(env.handler.delivered[0]) == 1
     sent = env.handler.delivered[0][0]
-    assert (sent.base64, sent.url) == (image.base64 or "", image.url or "")
+    assert (sent.base64, sent.url) == ("c2F2ZWQgb3V0cHV0", "")
     assert "https://" not in result and "data:" not in result
     assert env.handler.variables[(1, "query-one")][env.module.QUERY_STATE_KEY] == "sent"
 
@@ -331,8 +338,18 @@ async def test_unexpected_error_and_empty_result_are_sanitized(tool_env):
 async def test_delivery_failure_never_retries_or_regenerates(tool_env):
     env = tool_env
     env.handler.send_error = True
-    assert await call(env) == env.module.SEND_FAILED
-    assert await call(env) == env.module.SEND_FAILED
+    result = await call(env)
+    assert result.startswith(env.module.SEND_FAILED) and "asset_ref=asset_" in result
+    assert await call(env) == result
+    from qunling.assets import AssetStore
+    from qunling.scope import Scope
+    from qunling.integration import workspace_key
+    scope = Scope(workspace_key(env.tool.plugin), "bot", "group:group", "member")
+    ref = env.handler.variables[(1, "query-one")][env.module.QUERY_STATE_KEY + ".asset"]
+    # A fresh store/process can recover the paid artifact after a QQ failure.
+    store = AssetStore.from_env()
+    assert store.read(scope, ref) == b"saved output"
+    assert store.delivery(scope, "query-one", ref) == "unconfirmed"
     env.generator.assert_awaited_once()
     assert len(env.handler.attempts) == 1
     assert env.handler.delivered == []
@@ -372,11 +389,12 @@ async def test_new_component_reads_existing_host_claim(tool_env):
 
 
 @pytest.mark.asyncio
-async def test_edit_uses_selected_image_and_remembers_only_after_delivery(tool_env):
+async def test_edit_saves_and_remembers_selected_image_before_delivery(tool_env):
     env = tool_env
 
     async def remember(plugin, api, image):
-        assert len(env.handler.delivered) == 1
+        assert len(env.handler.delivered) == 0
+        assert env.handler.variables[(1, "query-one")][env.module.QUERY_STATE_KEY + ".asset"].startswith("asset_")
         assert image is env.editor.return_value
 
     env.remember_output.side_effect = remember
@@ -453,17 +471,18 @@ async def test_parallel_multi_edit_and_generate_issue_at_most_one_request(tool_e
 
 
 @pytest.mark.asyncio
-async def test_edit_delivery_failure_does_not_remember_regenerate_or_send_twice(
+async def test_edit_delivery_failure_keeps_output_without_regenerating_or_sending_twice(
     tool_env,
 ):
     env = tool_env
     env.handler.send_error = True
-    assert await call(env, edit=True) == env.module.SEND_FAILED
-    assert await call(env, edit=True) == env.module.SEND_FAILED
-    assert await call(env) == env.module.SEND_FAILED
+    result = await call(env, edit=True)
+    assert result.startswith(env.module.SEND_FAILED) and "asset_ref=asset_" in result
+    assert await call(env, edit=True) == result
+    assert await call(env) == result
     env.editor.assert_awaited_once()
     env.generator.assert_not_awaited()
-    env.remember_output.assert_not_awaited()
+    env.remember_output.assert_awaited_once()
     assert len(env.handler.attempts) == 1
 
 
@@ -491,10 +510,11 @@ async def test_delivery_timeout_does_not_trigger_second_charge(
     monkeypatch.setattr(
         env.edit_module if edit else env.module, "REPLY_TIMEOUT_SECONDS", 0.01
     )
-    assert await call(env, edit=edit) == env.module.SEND_FAILED
-    assert await call(env, edit=edit) == env.module.SEND_FAILED
+    result = await call(env, edit=edit)
+    assert result.startswith(env.module.SEND_FAILED)
+    assert await call(env, edit=edit) == result
     assert env.generator.await_count + env.editor.await_count == 1
-    env.remember_output.assert_not_awaited()
+    env.remember_output.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -572,7 +592,7 @@ async def test_bad_frame_plans_never_charge(tool_env, options):
 
 @pytest.mark.asyncio
 async def test_missing_animation_route_fails_before_charge(tool_env):
-    assert "失效" in await call(tool_env, {"prompt": "猫", "gif_frames": ["睁眼", "闭眼"]})
+    assert "尚未发起" in await call(tool_env, {"prompt": "猫", "gif_frames": ["睁眼", "闭眼"]})
     tool_env.generator.assert_not_awaited()
     assert tool_env.handler.writes == []
 

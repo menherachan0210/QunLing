@@ -1,0 +1,11 @@
+diff --git a/src/langbot/pkg/provider/modelmgr/requester.py b/src/langbot/pkg/provider/modelmgr/requester.py
+--- a/src/langbot/pkg/provider/modelmgr/requester.py
++++ b/src/langbot/pkg/provider/modelmgr/requester.py
+@@ -39,5 +39,7 @@
+ def _store_llm_usage(query: pipeline_query.Query | None, usage_info: dict | None) -> None:
+     """Store the latest provider usage on the query for upstream action handlers."""
++    from qunling.performance import capture_usage
++    capture_usage(usage_info)
+     if query is None or not usage_info:
+         return
+     if query.variables is None:

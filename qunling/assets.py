@@ -78,6 +78,8 @@ class AssetStore:
     def __init__(
         self, root: Path, *, max_bytes=MAX_STORE_BYTES, max_assets=MAX_ASSETS,
         retention=RETENTION_SECONDS, clock=time.time,
+        member_bytes=128 * 1024 * 1024, member_assets=512,
+        conversation_bytes=256 * 1024 * 1024, conversation_assets=1024,
     ):
         self.root = Path(root).absolute()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -92,6 +94,8 @@ class AssetStore:
             raise AssetError("invalid_storage", "文件索引不可用。")
         self.max_bytes, self.max_assets = max_bytes, max_assets
         self.retention, self.clock = retention, clock
+        self.member_bytes, self.member_assets = member_bytes, member_assets
+        self.conversation_bytes, self.conversation_assets = conversation_bytes, conversation_assets
         with self._connect() as connection:
             connection.executescript("""
                 CREATE TABLE IF NOT EXISTS assets(
@@ -110,6 +114,10 @@ class AssetStore:
                     scope TEXT NOT NULL, request_key TEXT NOT NULL, asset_ref TEXT NOT NULL,
                     created REAL NOT NULL, PRIMARY KEY(scope,request_key,asset_ref)
                 );
+                CREATE TABLE IF NOT EXISTS asset_owners(
+                    scope TEXT PRIMARY KEY, conversation TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS asset_conversations ON asset_owners(conversation);
             """)
 
     @classmethod
@@ -162,12 +170,24 @@ class AssetStore:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._prune(db)
+            owner = {k: v for k, v in scope.as_dict().items() if k != "actor_id"}
+            conversation = hashlib.sha256(json.dumps(owner, sort_keys=True).encode()).hexdigest()
+            db.execute("INSERT OR IGNORE INTO asset_owners VALUES(?,?)", (scope.key, conversation))
             existing = db.execute(
                 "SELECT * FROM assets WHERE scope=? AND digest=? AND name=? AND metadata=? ORDER BY created DESC LIMIT 1",
                 (scope.key, digest, name, encoded),
             ).fetchone()
             if existing:
                 return self._public(existing)
+            member = db.execute("SELECT COUNT(*),COALESCE(SUM(size),0) FROM assets WHERE scope=?",
+                                (scope.key,)).fetchone()
+            if member[0] >= self.member_assets or member[1] + len(data) > self.member_bytes:
+                raise AssetError("member_quota", "你在当前会话的文件额度已满，请删除不用的文件后继续。")
+            group = db.execute("SELECT COUNT(*),COALESCE(SUM(a.size),0) FROM assets a "
+                               "LEFT JOIN asset_owners o ON a.scope=o.scope WHERE o.conversation=? OR o.scope IS NULL",
+                               (conversation,)).fetchone()
+            if group[0] >= self.conversation_assets or group[1] + len(data) > self.conversation_bytes:
+                raise AssetError("conversation_quota", "当前会话的文件总额度已满，请清理后继续。")
             rows = db.execute("SELECT COUNT(*),COALESCE(SUM(size),0) FROM assets").fetchone()
             if rows[0] >= self.max_assets or rows[1] + len(data) > self.max_bytes:
                 raise AssetError("storage_full", "文件存储空间已满，可删除不再使用的文件后继续。")
@@ -177,6 +197,8 @@ class AssetStore:
                 try:
                     with temporary.open("xb") as stream:
                         stream.write(data)
+                        stream.flush()
+                        os.fsync(stream.fileno())
                     temporary.chmod(0o600)
                     os.replace(temporary, path)
                 finally:

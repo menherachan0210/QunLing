@@ -29,12 +29,15 @@ class LangBotAPI:
 
     def runtime_health(self):
         """Read the cached probe without waiting on plugin RPC or Workspace locks."""
+        self.runtime_probe = None
         try:
             response = self.http.get(self.url + "/healthz", timeout=(2, 3))
             response.raise_for_status()
             value = response.json().get("plugin_runtime", {})
             if (isinstance(value, dict) and value.get("healthy") is True
                     and value.get("state") == "ready"):
+                probe = value.get("probe_id")
+                self.runtime_probe = probe if isinstance(probe, str) and len(probe) <= 80 else None
                 return "ready"
             return "recovering" if isinstance(value, dict) and value.get("state") == "recovering" else "unknown"
         except (requests.RequestException, ValueError, TypeError, AttributeError):

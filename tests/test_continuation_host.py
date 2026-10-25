@@ -11,6 +11,35 @@ from qunling.proactive.engine import Decision
 from test_proactive_host import bridge, event, query_for
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("length,mutated", [(2000, False), (2100, False), (5000, False), (5000, True)])
+async def test_long_ingress_uses_full_text_identity_not_prompt_clipping(bridge, monkeypatch, length, mutated):
+    from langbot_plugin.api.entities.builtin.platform.message import Plain, MessageChain
+    monkeypatch.setattr(bridge, "_active", AsyncMock())
+    incoming = event("请查询这个问题：" + "文" * length, message_id="long")
+    bridge.observe(incoming)
+    arguments = dict(bot_uuid="bot", adapter=bridge.bot.adapter, launcher_id="30000",
+        launcher_type=NS(value="group"), sender_id="20000", message_event=incoming,
+        message_chain=incoming.message_chain, pipeline_uuid="pipeline", routed_by_rule=False,
+        variables={}, execution_context=bridge.bot.execution_context)
+    bridge.remember_ingress(incoming, arguments)
+    assert ("30000", "long") in bridge._continuation_ingress
+    state = bridge.engine._groups["30000"]
+    context = bridge.engine._context("30000", state, state.lanes["20000"], bridge.configuration().groups["30000"])
+    assert len(next(item for item in context.messages if item.message_id == "long").text) == 2000
+    if mutated:
+        incoming.message_chain = MessageChain([Plain(text="请查询这个问题：" + "文" * (length - 1) + "改")])
+    async def accept(ap, original, *, validate, allow_actions=False):
+        assert await validate() and not allow_actions
+        assert original["message_event"] is incoming
+        return NS(query_uuid="accepted")
+    admission = AsyncMock(side_effect=accept)
+    monkeypatch.setattr(qq_dispatch, "admit_continuation", admission)
+    assert await bridge.handoff(context, Decision("research", "long", ("long",))) is (not mutated)
+    assert admission.await_count == (0 if mutated else 1)
+    await bridge.engine.close()
+
+
 def setup_followup(bridge):
     request = event("你怎么看这张漫画", explicit=True, message_id="ask")
     request.timestamp -= 4

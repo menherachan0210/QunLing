@@ -431,6 +431,7 @@ async def test_nested_serialized_episode_write_does_not_self_lock():
         embedding_model_uuid="emb-1",
         user_key="user-1",
         content="Alice lives in Berlin",
+        sender_id="alice", fact_key="city",
         importance=2,
     )
 
@@ -442,6 +443,7 @@ async def test_nested_serialized_episode_write_does_not_self_lock():
             embedding_model_uuid="emb-1",
             user_key="user-1",
             content="Alice lives in Munich",
+            sender_id="alice", fact_key="city", replaces_episode_id=original["id"],
             tags=["correction"],
             importance=3,
         ),

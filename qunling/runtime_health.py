@@ -1,11 +1,26 @@
 """Bounded plugin transport probes; cached health never certifies a replacement."""
 import asyncio
+import os
 import time
 
 PING_TIMEOUT = 5.0
 HEALTH_TTL = 50.0
 WORKER_READY_TIMEOUT = 120.0
 AVAILABILITY_TIMEOUT = 90.0
+OPTIONAL_PLUGINS = {('local', 'QQTextReader'), ('local', 'QQGroupContext'),
+                    ('local', 'QQWebSearch'), ('local', 'QQComicTranslator'),
+                    ('langbot-team', 'AIImagePlugin'), ('langbot-team', 'LongTermMemory')}
+
+
+def core_worker(plugin):
+    """In managed deployments the wizard checks selected feature readiness.
+
+    Optional worker initialization must not deadlock base chat or the management
+    API needed to deselect a failed feature. Unknown/third-party workers retain
+    the original strict barrier.
+    """
+    metadata = plugin.get('manifest', {}).get('manifest', {}).get('metadata', {})
+    return not os.environ.get('QUNLING_DATA_DIR') or (metadata.get('author'), metadata.get('name')) not in OPTIONAL_PLUGINS
 
 
 def transport_closed(handler):
@@ -36,7 +51,7 @@ async def wait_workers_ready(connector, handler):
                 # Retain exact installation authority, including Workspace and revision.
                 with handler.installation_scope(state.binding):
                     plugins = await handler.list_plugins()
-                if not plugins or any(p.get('status') != 'initialized' for p in plugins):
+                if not plugins or any(p.get('status') != 'initialized' for p in plugins if core_worker(p)):
                     ready = False
                     break
             if ready:
@@ -95,4 +110,4 @@ def snapshot(connector):
                    and getattr(connector, '_qunling_workers_ready', None) is handler
                    and not transport_closed(handler))
     return {"state": "ready" if healthy else "recovering" if fresh else "unknown",
-            "healthy": healthy}
+            "healthy": healthy, **({"probe_id": str(checked)} if healthy else {})}

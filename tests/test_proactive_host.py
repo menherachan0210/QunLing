@@ -36,6 +36,9 @@ async def test_decision_model_does_not_replace_reply_or_reconciliation_model(bri
     model_ids = [call.args[1] for call in bridge.bot.ap.model_mgr.get_model_by_uuid.await_args_list]
     assert model_ids == ["fast-decision", "chat-model", "chat-model"]
     assert all(item.kwargs["funcs"] == [] for item in bridge.bot.ap.model_mgr.get_model_by_uuid.return_value.provider.invoke_llm.await_args_list)
+    pipeline.pipeline_entity.config["ai"]["qunling_reconcile_model"] = "review-model"
+    await bridge._complete(host.RECONCILE_PROMPT, {"context": {"group_id": "30000"}})
+    assert bridge.bot.ap.model_mgr.get_model_by_uuid.await_args.args[1] == "review-model"
 
 
 @pytest.fixture
@@ -509,7 +512,8 @@ async def test_actual_pinned_provider_query_none_and_message_content(bridge, mon
     # assembly and RuntimeProvider response/usage conversion execute normally.
     network = AsyncMock(return_value=NS(choices=[NS(message=NS(model_dump=lambda: {
         "role": "assistant", "content": "自然接话",
-    }))], usage=None))
+    }))], usage=NS(prompt_tokens=12, completion_tokens=3, total_tokens=15,
+                   model_dump=lambda: {'prompt_tokens':12, 'completion_tokens':3, 'total_tokens':15})))
     monkeypatch.setattr(litellmchat, "acompletion", network)
     context = bridge.bot.execution_context
     provider = RuntimeProvider(context, NS(uuid="provider", workspace_uuid="workspace", requester="openai-chat-completions"),
@@ -520,6 +524,8 @@ async def test_actual_pinned_provider_query_none_and_message_content(bridge, mon
     model = RuntimeLLMModel(context, entity, provider)
     bridge.bot.ap.model_mgr.get_model_by_uuid.return_value = model
     assert await bridge._complete("rules", {"messages": []}) == "自然接话"
+    usage = bridge.performance.snapshot()['usage']['stages']['generate']
+    assert usage['input_tokens'] == 12 and usage['output_tokens'] == 3 and usage['unknown_usage'] == 0
     args = network.await_args.kwargs
     assert args["tools"] is None and args["tool_choice"] is None
     assert args["functions"] is None and args["function_call"] is None

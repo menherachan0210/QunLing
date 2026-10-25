@@ -24,7 +24,7 @@ Long-term memory plugin for LangBot with a dual-layer design:
 - Provides `!memory audit [page|export]` to inspect scoped memory change history
 - Provides `!memory consolidate preview|run` for preview-first scoped L2 cleanup
 - Provides optional `!memory candidates` and `!memory candidate accept|reject` review workflow for extracted memory candidates
-- Automatically supersedes related older episodes when a correction/fact-update/clarification is stored
+- Supersedes an episode only when an explicit replacement ID, matching fact key, authenticated speaker and conversation all agree; similarity and correction tags alone never replace another record
 
 ## Overall Design
 

@@ -133,24 +133,26 @@ class TaskWorker:
         async with self._pump_lock:
             self._active = {job for job in self._active if not job.done()}
             count = 0
+            candidates = []
             for scope in await asyncio.to_thread(self.store.scopes):
                 await asyncio.to_thread(self.store.recover_expired, scope)
-                for task in await asyncio.to_thread(self.store.schedulable, scope, limit=1000):
-                    if len(self._active) >= self.concurrency:
-                        return count
-                    if task.status not in {TaskStatus.PENDING, TaskStatus.WAITING}:
-                        continue
-                    # Only safe registered job kinds may be recovered after a
-                    # lease loss; explicit foreground retry remains available.
-                    if task.attempts and task.kind not in self.retry_safe_kinds:
-                        continue
-                    lease = await asyncio.to_thread(
-                        self.store.claim, scope, task.id, self.worker_id, lease_seconds=self.lease_seconds,
-                    )
-                    if lease is not None:
-                        job = asyncio.create_task(self._run(task, lease))
-                        self._active.add(job)
-                        count += 1
+                candidates.extend(await asyncio.to_thread(self.store.schedulable, scope, limit=1000))
+            # Persisted creation order across all members, not scope-hash order.
+            # A continuously active member cannot overtake an older waiting job.
+            for task in sorted(candidates, key=lambda item: (item.created_at, item.id)):
+                if len(self._active) >= self.concurrency:
+                    return count
+                if task.status not in {TaskStatus.PENDING, TaskStatus.WAITING}:
+                    continue
+                if task.attempts and task.kind not in self.retry_safe_kinds:
+                    continue
+                lease = await asyncio.to_thread(
+                    self.store.claim, task.scope, task.id, self.worker_id, lease_seconds=self.lease_seconds,
+                )
+                if lease is not None:
+                    job = asyncio.create_task(self._run(task, lease))
+                    self._active.add(job)
+                    count += 1
             return count
 
     async def wait_idle(self) -> None:

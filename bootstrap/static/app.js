@@ -70,7 +70,7 @@ let pollPromise = null;
 const terminalPhases = new Set(["completed", "rolled_back", "failed"]);
 const phaseNames = {
   idle: "已是最新", checking: "检查中", available: "发现更新", updating: "更新中", queued: "等待更新",
-  backing_up: "备份中", building: "构建中", restarting: "重启中", verifying: "验证中",
+  backing_up: "旧版更新中", stopping: "切换中", building: "准备中", restarting: "重启中", verifying: "验证中",
   completed: "更新完成", rolling_back: "回滚中", rolled_back: "已回滚", failed: "更新失败",
   recovery_required: "需要恢复", unsupported: "未启用", unavailable: "等待连接"
 };
@@ -165,7 +165,7 @@ async function api(path, body, timeout = 15000) {
 }
 function controls() {
   const updating = updateAction || Boolean(updateExpected) || Boolean(updateState?.busy);
-  $("save").disabled = !authenticated || configAction || proactiveAction || updating || !setupState?.plugins_ready || setupState.stage === "configuring";
+  $("save").disabled = !authenticated || configAction || proactiveAction || updating || !setupState || ["starting", "configuring"].includes(setupState.stage);
   text("save-label", configAction || setupState?.stage === "configuring" ? "正在应用配置…" : "保存并启用");
   $("check-update").disabled = !authenticated || updating || !updateState?.available;
   $("apply-update").disabled = !authenticated || configAction || proactiveAction || updating || !updateState?.available || !updateState.update_available || !updateState.latest_revision || !setupState || ["starting", "configuring"].includes(setupState.stage);
@@ -256,7 +256,15 @@ function renderProactiveRuntime() {
       return item && Number.isSafeInteger(item.count) && item.count > 0 && Number.isFinite(item.p50_seconds)
         ? [`${label} ${item.count} 次，中位 ${item.p50_seconds} 秒，P95 ${item.p95_seconds} 秒`] : [];
     });
-    if (parts.length) text("proactive-runtime-detail", detail + " 近一小时调用（重启后重计，含准备耗时）：" + parts.join("；") + "。");
+    if (parts.length) {
+      const usage = group?.performance?.usage?.stages;
+      const counters = usage ? Object.entries(labels).flatMap(([key, label]) => {
+        const item = usage[key];
+        return item && Number.isSafeInteger(item.with_usage) && item.with_usage > 0
+          ? [`${label}已知输入/输出 ${item.input_tokens}/${item.output_tokens} token（${item.unknown_usage} 次用量未知${Number.isFinite(item.estimated_cost) ? `，估算费用 ${item.estimated_cost}` : "，费用未配置或不完整"}）`] : [];
+      }) : [];
+      text("proactive-runtime-detail", detail + " 近一小时调用（重启后重计，含准备耗时）：" + [...parts, ...counters].join("；") + "。");
+    }
   }
   for (const key of ["judgments_hour", "judgments_day", "replies_hour", "replies_day"]) {
     text(`proactive-${key.replaceAll("_", "-")}`, proactiveUsage(group?.[key], group?.[`${key}_limit`]));
@@ -423,8 +431,8 @@ function summary(name, label, detail, state = "neutral") {
 function renderSetup(state) {
   const qq = qqHealth(state);
   const runtimeReady = state.plugin_runtime_healthy === true;
-  const recovering = state.configured && state.plugins_ready && !runtimeReady;
-  const ready = state.stage === "ready" && state.configured && qq.connected && runtimeReady;
+  const recovering = state.configured && (!state.plugins_ready || !runtimeReady);
+  const ready = state.stage === "ready" && state.configured && state.plugins_ready && qq.connected && runtimeReady;
   const failed = state.stage === "error";
   const label = failed ? "需要处理" : ready ? "运行就绪" : state.stage === "configuring" ? "配置中" : recovering ? "组件恢复中" : !state.plugins_ready ? "初始化中" : !state.configured ? "等待配置" : qq.label;
   text("global-state", label);
@@ -446,14 +454,21 @@ function renderSetup(state) {
   if (!showQR) $("qr").removeAttribute("src");
   text("qq-status", qq.connected ? runtimeReady ? "QQ 已连接，随时可以开始聊" : "QQ 已连接，功能组件正在恢复" : showQR ? qq.code === "offline" ? "QQ 已离线，请重新扫码并在手机上确认" : "使用手机 QQ 扫码，并在手机上确认" : qq.code === "waiting_login" ? "正在等待登录二维码…" : qq.detail);
   if (!loaded && state.settings?.base_url) {
+    for (const element of $("settings").querySelectorAll('input[name="features"]')) {
+      element.checked = (state.settings.features || ["memory", "files", "vision", "image", "search", "comic"]).includes(element.value);
+    }
     for (const [key, value] of Object.entries(state.settings)) {
-      if (key !== "api_key" && $("settings").elements[key]) {
-        const inheritsChat = ["vision_model", "search_model", "decision_model"].includes(key) && value === state.settings.chat_model;
+      if (key !== "api_key" && key !== "features" && $("settings").elements[key]) {
+        const inheritsChat = ["vision_model", "search_model", "decision_model", "reconcile_model"].includes(key) && value === state.settings.chat_model;
         $("settings").elements[key].value = inheritsChat ? "" : value;
       }
     }
     $("settings").elements.api_key.placeholder = "已保存 · 留空保留原密钥";
     loaded = true;
+  }
+  if ($("feature-status") && state.capabilities) {
+    const names = {memory:"记忆", files:"文件", vision:"视觉", image:"图片", search:"联网", comic:"漫画"};
+    text("feature-status", Object.entries(names).map(([key, label]) => `${label}：${state.capabilities[key] === "ready" ? "配置就绪" : state.capabilities[key] === "error" ? "需要检查" : "未启用"}`).join(" · "));
   }
 }
 function renderCleanup(value) {
@@ -465,9 +480,9 @@ function renderCleanup(value) {
   }
   const names = {completed: "自动维护正常", partial: "已保留受保护的历史", failed: "清理需要检查", skipped: "暂未执行清理"};
   text("cleanup-status", names[value.status] || "等待维护记录");
-  const count = Number.isInteger(value.keep_backups) ? `保留最近 ${value.keep_backups} 次成功更新的备份` : "保留必要的回滚资料";
+  const count = Number.isInteger(value.keep_backups) ? `保留最近 ${value.keep_backups} 次更新的部署记录` : "保留必要的部署记录";
   const hasCounts = [value.removed_jobs, value.removed_images].every(Number.isInteger);
-  const removed = hasCounts ? `；本次清理 ${value.removed_jobs} 份历史备份、${value.removed_images} 个镜像` : "";
+  const removed = hasCounts ? `；本次清理 ${value.removed_jobs} 份历史记录、${value.removed_images} 个镜像` : "";
   const needsReview = value.status === "failed" || (value.warnings || []).some((code) => code !== "unmanaged_or_unresolved_history_preserved");
   text("cleanup-detail", count + removed + (needsReview ? "。部分项目暂未清理，请查看更新器维护记录。" : "。运行中的服务与回滚依赖会保留。"));
   const date = new Date(value.checked_at);
@@ -497,7 +512,7 @@ function renderUpdate(value, authoritative = false) {
   text("update-message", updateExpected && !value.available ? "更新期间连接暂时中断，正在等待服务恢复；尚未确认更新完成。" : confirming ? "正在确认本次更新结果，请稍候。" : value.message || "点击检查更新，获取仓库中的最新版本。");
   $("update-error").hidden = !value.error;
   text("update-error", value.error || "");
-  const steps = {queued: 0, building: 0, updating: 0, backing_up: 1, restarting: 2, verifying: 3};
+  const steps = {queued: 0, building: 0, updating: 0, backing_up: 1, stopping: 1, restarting: 1, verifying: 2};
   const step = steps[value.phase];
   $("update-progress").hidden = !value.busy || step === undefined;
   document.querySelectorAll("[data-update-step]").forEach((element, index) => {
@@ -654,7 +669,11 @@ $("settings").addEventListener("submit", async (event) => {
   text("form-message", "");
   configAction = true; controls();
   try {
-    await api("/api/configure", Object.fromEntries(new FormData(form)));
+    const data = new FormData(form);
+    const config = Object.fromEntries(data);
+    config.features = data.getAll("features");
+    await api("/api/configure", config);
+    for (const element of form.querySelectorAll('input[type="password"]')) element.value = "";
     form.elements.api_key.value = "";
     form.elements.api_key.type = "password";
     $("show-key").setAttribute("aria-pressed", "false");
@@ -686,7 +705,7 @@ $("check-update").addEventListener("click", async () => {
 $("apply-update").addEventListener("click", async () => {
   if ($("apply-update").disabled) return;
   const revision = updateState.latest_revision;
-  if (!window.confirm(`更新到 ${revision.slice(0, 12)}？\n\n切换版本会短暂停机并中断正在进行的任务，请在空闲时更新。更新前会备份配置和数据，验证失败时尝试回滚。请等待页面恢复并确认结果。`)) return;
+  if (!window.confirm(`更新到 ${revision.slice(0, 12)}？\n\n切换版本会短暂停机并中断正在进行的任务，请在空闲时更新。更新不会备份业务数据；验证失败时尝试恢复旧版服务，业务数据不会回退。请等待页面恢复并确认结果。`)) return;
   updateAction = true;
   updateExpected = revision;
   sessionStorage.setItem("qunling-update-pending", revision);

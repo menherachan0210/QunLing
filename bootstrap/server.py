@@ -22,6 +22,7 @@ from bootstrap.configure import (
     link_napcat,
     public_settings,
     settings_from_input,
+    enabled_plugins, FEATURE_PLUGINS, plugin_identity,
 )
 from bootstrap.state import State
 from bootstrap.update_client import REVISION, UpdateClient, UpdateError
@@ -79,6 +80,7 @@ class SetupManager:
                             and 0 <= time.monotonic() - plugin_sampled_at <= QQ_STATUS_TTL)
             if not plugin_fresh:
                 result["plugin_runtime_state"] = "unknown"
+                result["plugin_runtime_probe"] = None
             result["plugin_runtime_healthy"] = (plugin_fresh and result.get("plugin_runtime_state") == "ready")
             fresh = (self.qq_sampled_at is not None
                      and 0 <= time.monotonic() - self.qq_sampled_at <= QQ_STATUS_TTL)
@@ -88,9 +90,9 @@ class SetupManager:
                               qq_connected=False, qr_image="")
                 if result["stage"] == "ready":
                     result.update(stage="waiting_qq", message="QQ 状态检查已过期，正在重新确认连接。")
-            if (result["configured"] and result["plugins_ready"]
+            if (result["configured"]
                     and result["stage"] in {"ready", "waiting_qq"}
-                    and not result["plugin_runtime_healthy"]):
+                    and (not result["plugin_runtime_healthy"] or not result["plugins_ready"])):
                 result.update(stage="recovering", message="功能组件暂时没有响应，正在检测并自动恢复；QQ 登录状态单独显示。")
             return result
 
@@ -119,10 +121,7 @@ class SetupManager:
         with self.lock:
             if self.update_inflight or self.update_status()["busy"]:
                 raise SetupError("版本更新正在进行，完成后再保存 AI 配置。")
-            if (
-                not self.status["plugins_ready"]
-                or self.status["stage"] == "configuring"
-            ):
+            if self.status["stage"] in {"starting", "configuring"} or self.pending:
                 raise SetupError("初始化或配置仍在进行，请稍候。")
             self.pending = config
             self.status.update(
@@ -227,6 +226,8 @@ class SetupManager:
 
     def _apply(self, config):
         record = self.state.read(default={})
+        selected = enabled_plugins(config)
+        ensure_plugins(self.api, self.packages, lambda text: self.update(message=text), identities=selected)
         result = configure(
             self.api,
             config,
@@ -239,9 +240,12 @@ class SetupManager:
         self.state.write(config, "ai.json")
         self.update(
             configured=True,
+            plugins_ready=True,
+            capabilities={name: "ready" if name in config.get("features", FEATURE_PLUGINS) else "disabled"
+                          for name in FEATURE_PLUGINS},
             settings=public_settings(config),
             stage="waiting_qq",
-            message="AI 和全部插件已配置，请用 QQ 扫码登录。",
+            message="聊天与所选功能已配置，请用 QQ 扫码登录。",
         )
         return result
 
@@ -308,7 +312,8 @@ class SetupManager:
             return
         try:
             ensure_plugins(
-                self.api, self.packages, lambda text: self.update(message=text)
+                self.api, self.packages, lambda text: self.update(message=text),
+                identities={"langbot-team/LocalAgent"},
             )
             self.update(
                 plugins_ready=True,
@@ -355,9 +360,28 @@ class SetupManager:
             except Exception:
                 self._record_qq("unknown")
             runtime_state = self.api.runtime_health()
+            saved = self.state.read("ai.json")
+            feature_status = None
+            if saved:
+                try:
+                    plugins = {plugin_identity(p): p for p in self.api.call("GET", "/api/v1/plugins")["plugins"]}
+                    healthy = {identity for identity, p in plugins.items()
+                               if p.get("status") == "initialized" and p.get("enabled") is not False}
+                    selected = enabled_plugins(saved)
+                    feature_status = {name: "disabled" if name not in saved.get("features", FEATURE_PLUGINS)
+                                      else "ready" if required <= healthy else "error"
+                                      for name, required in FEATURE_PLUGINS.items()}
+                    plugins_ready = selected <= healthy
+                except Exception:
+                    plugins_ready = False
             with self.lock:
                 self.status["plugin_runtime_state"] = runtime_state
+                self.status["plugin_runtime_probe"] = getattr(self.api, "runtime_probe", None)
                 self.plugin_sampled_at = time.monotonic()
+                if saved:
+                    self.status["plugins_ready"] = plugins_ready
+                if feature_status is not None:
+                    self.status["capabilities"] = feature_status
             self.stopping.wait(4)
 
 

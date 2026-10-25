@@ -191,7 +191,7 @@ class MemoryStore:
             parts.append(hint)
         if profile.get("notes"):
             parts.append(f"Notes: {profile['notes']}")
-        return "\n".join(parts)
+        return "\n".join(parts)[:4000]
 
     @staticmethod
     def _now_timestamp() -> str:
@@ -234,7 +234,7 @@ class MemoryStore:
         normalized: list[str] = []
         seen: set[str] = set()
         for item in values:
-            text = str(item).strip()
+            text = str(item).strip()[:500]
             if not text or text in seen:
                 continue
             seen.add(text)
@@ -252,7 +252,7 @@ class MemoryStore:
             if not slot_key or not isinstance(raw_slot, dict):
                 continue
 
-            value = str(raw_slot.get("value", "") or "").strip()
+            value = str(raw_slot.get("value", "") or "").strip()[:500]
             updated_at = str(raw_slot.get("updated_at", "") or "")
             history_items = raw_slot.get("history", [])
             history: list[dict[str, str]] = []
@@ -326,7 +326,7 @@ class MemoryStore:
         raw_profile = profile if isinstance(profile, dict) else {}
         normalized = _default_profile()
 
-        normalized["name"] = str(raw_profile.get("name", "") or "").strip()
+        normalized["name"] = str(raw_profile.get("name", "") or "").strip()[:160]
         normalized["notes"] = str(raw_profile.get("notes", "") or "")[:self._MAX_NOTES_LENGTH]
         normalized["updated_at"] = str(raw_profile.get("updated_at", "") or "")
 
@@ -1238,8 +1238,11 @@ class MemoryStore:
         new_episode_id: str,
         similarity_threshold: float = 0.85,
         max_candidates: int = 5,
+        sender_id: str = "",
+        fact_key: str = "",
+        replaces_episode_id: str = "",
     ) -> int:
-        """Find similar older episodes and mark them as superseded.
+        """Replace an explicitly identified record of the same speaker and fact.
 
         Superseding means re-upserting the old vector with:
         - importance reduced by _SUPERSEDE_IMPORTANCE_FACTOR
@@ -1248,13 +1251,14 @@ class MemoryStore:
 
         Returns the number of superseded episodes.
         """
-        filters: dict[str, Any] = {"user_key": user_key}
-        results = await self.plugin.vector_search(
-            collection_id=collection_id,
-            query_vector=query_vector,
-            top_k=max_candidates + 1,  # +1 because the new episode itself may appear
-            filters=filters,
-        )
+        # Similar text is not evidence of the same subject or the same fact.
+        # Legacy correction tags only append history; replacement is explicit.
+        if not (sender_id and fact_key and replaces_episode_id):
+            return 0
+        episode = await self.get_episode_by_id(collection_id, replaces_episode_id, user_key)
+        if not episode:
+            return 0
+        results = [episode]
 
         superseded = 0
         for r in results:
@@ -1262,6 +1266,9 @@ class MemoryStore:
             if rid == new_episode_id:
                 continue
             meta = r.get("metadata", {})
+            if (meta.get("user_key") != user_key or meta.get("sender_id") != sender_id
+                    or meta.get("fact_key") != fact_key):
+                return 0
             # Already superseded — skip
             if (
                 meta.get("superseded_by")
@@ -1270,11 +1277,7 @@ class MemoryStore:
             ):
                 continue
 
-            # Check similarity: distance is cosine distance (lower = more similar)
-            distance = r.get("distance", 1.0)
-            similarity = 1.0 - distance
-            if similarity < similarity_threshold:
-                continue
+            similarity = 1.0  # Explicit, validated reference; never inferred from a vector.
 
             # Re-upsert with reduced importance and superseded_by marker
             old_importance = int(meta.get("importance", "2"))
@@ -1332,8 +1335,22 @@ class MemoryStore:
         sender_id: str = "",
         sender_name: str = "",
         bot_uuid: str = "",
+        fact_key: str = "",
+        replaces_episode_id: str = "",
     ) -> dict[str, Any]:
         """Store an episodic memory into vector DB."""
+        if not isinstance(content, str) or not content.strip() or len(content) > 8000:
+            raise ValueError("Episode content must contain 1–8000 characters")
+        fact_key = str(fact_key).strip()
+        if len(fact_key) > 120:
+            raise ValueError("fact_key exceeds 120 characters")
+        if replaces_episode_id:
+            old = await self.get_episode_by_id(collection_id, replaces_episode_id, user_key)
+            meta = (old or {}).get("metadata", {})
+            if (not sender_id or not fact_key or meta.get("sender_id") != sender_id
+                    or meta.get("user_key") != user_key or meta.get("fact_key") != fact_key
+                    or self.episode_status_from_metadata(meta) != self.EPISODE_STATUS_ACTIVE):
+                raise ValueError("Replacement requires an active record with the same speaker, scope and fact_key")
         episode_id = uuid.uuid4().hex[:12]
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         importance = max(1, min(5, importance))
@@ -1360,6 +1377,7 @@ class MemoryStore:
             "sender_name": sender_name,
             "bot_uuid": bot_uuid,
             "status": self.EPISODE_STATUS_ACTIVE,
+            "fact_key": fact_key,
         }
 
         vectors = await self.plugin.invoke_embedding(embedding_model_uuid, [content])
@@ -1383,10 +1401,8 @@ class MemoryStore:
             timestamp,
         )
 
-        # Auto-supersede: when the new episode is a correction / fact-update /
-        # clarification, search for similar older episodes in the same scope and
-        # mark them as superseded by lowering their importance.
-        if _SUPERSEDE_TAGS & set(tags):
+        # Tags and vector similarity never authorize a replacement.
+        if replaces_episode_id:
             try:
                 await self._auto_supersede(
                     collection_id=collection_id,
@@ -1395,6 +1411,7 @@ class MemoryStore:
                     user_key=user_key,
                     new_episode_id=episode_id,
                     similarity_threshold=0.85,
+                    sender_id=sender_id, fact_key=fact_key, replaces_episode_id=replaces_episode_id,
                 )
             except Exception:
                 logger.warning(
@@ -1561,6 +1578,7 @@ class MemoryStore:
                 "source": meta.get("source", ""),
                 "status": self.episode_status_from_metadata(meta),
                 "superseded_by": meta.get("superseded_by", ""),
+                "fact_key": meta.get("fact_key", ""),
                 "score": r.get("score"),
                 "_exact_match_score": exact_score,
             })
@@ -1643,6 +1661,7 @@ class MemoryStore:
                     "source": meta.get("source", ""),
                     "status": self.episode_status_from_metadata(meta),
                     "superseded_by": meta.get("superseded_by", ""),
+                    "fact_key": meta.get("fact_key", ""),
                 })
 
             raw_offset += len(items)
@@ -2074,6 +2093,7 @@ class MemoryStore:
             "source": meta.get("source", ""),
             "status": self.episode_status_from_metadata(meta),
             "superseded_by": meta.get("superseded_by", ""),
+            "fact_key": meta.get("fact_key", ""),
             "metadata": meta,
         }
 
@@ -2176,7 +2196,8 @@ class MemoryStore:
         if profile.get("updated_at"):
             parts.append(f"- Last updated: {profile['updated_at']}")
 
-        return "\n".join(parts)
+        rendered = "\n".join(parts)
+        return rendered if len(rendered) <= 4000 else rendered[:3970] + "\n[Profile truncated]"
 
     # ======================== health probe ========================
 

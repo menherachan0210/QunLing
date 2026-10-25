@@ -489,10 +489,15 @@ class MemoryConsolePage(Page):
         blocks every memory scope of the installation.
         """
         identities: list[str | None] = []
+        from store.serialization import episode_scope
         for key in ("scope_key", "collection_id"):
             identity = self._string(body, key)
             if identity and identity not in identities:
                 identities.append(identity)
+        collection, user_key = self._string(body, "collection_id"), self._string(body, "user_key")
+        if collection and user_key:
+            identities = [identity for identity in identities if identity != collection]
+            identities.append(episode_scope(collection, user_key))
         if bool(body.get("installation")):
             identities.append(None)
         if not identities:

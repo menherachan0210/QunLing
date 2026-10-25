@@ -270,6 +270,7 @@ class ProactiveEngine:
         semaphore: asyncio.Semaphore | None = None,
         debounce_scale: float = 1.0,
         model_timeout: float = 25.0,
+        generation_timeout: float | None = None,
         send_timeout: float = 10.0,
         state_dir: str | Path | None = None,
     ):
@@ -284,6 +285,7 @@ class ProactiveEngine:
         self._semaphore = semaphore if semaphore is not None else asyncio.Semaphore(2)
         self._debounce_scale = max(0.0, debounce_scale)
         self._model_timeout = model_timeout
+        self._generation_timeout = model_timeout if generation_timeout is None else generation_timeout
         self._send_timeout = send_timeout
         self._groups: dict[str, _Group] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -1303,7 +1305,7 @@ class ProactiveEngine:
                     return
                 if decision.action not in ("tool_followup", "research", "task_request"):
                     self._record(state, "generating")
-                    text = await asyncio.wait_for(self._generate(context, decision), self._model_timeout)
+                    text = await asyncio.wait_for(self._generate(context, decision), self._generation_timeout)
                     if isinstance(text, Decision):
                         # The draft can discover missing visual/source evidence
                         # after participation was judged. It may only promote

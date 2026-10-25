@@ -4,7 +4,7 @@ Usage (Docker CLI + Compose required; helper image must already exist):
     python -m deploy.updater.smoke run --helper-image qunling-updater:test
 
 Only checkout and wizard readiness are synthetic. Image builds, Compose service
-replacement, standalone workers, five named-volume backups and restores use the
+replacement, standalone workers and preservation of five live volumes use the
 production engine. All created resources carry a unique test project label and
 are removed in ``finally``; existing deployments are never selected.
 """
@@ -80,6 +80,8 @@ class SmokeEngine(UpdateEngine):
             directory=ROOT, project=project_name(os.environ.get("QQBOT_PROJECT")),
             repository="qunling-smoke/offline-fixture", branch="main",
         )
+        self.image_mode = "build"
+        self.channel = "development"
 
     def checkout(self, revision, directory):
         if revision not in {GOOD, BAD}:
@@ -109,8 +111,8 @@ class SmokeEngine(UpdateEngine):
             and self.current_revision() == BAD
         ):
             # Simulate a new plugin/schema writing data before readiness fails.
-            # All writes occur through real mounts, so rollback must remove new
-            # files as well as restoring overwritten content in all five volumes.
+            # All writes occur through real mounts. Service rollback must retain
+            # both new files and overwritten content in all five volumes.
             for logical in DATA_VOLUMES:
                 volume = job["volumes"][logical]
                 self.run(
@@ -119,7 +121,8 @@ class SmokeEngine(UpdateEngine):
                     self.project + "-fixture:base", "mutate",
                 )
             return {"stage": "error", "configured": False, "plugins_ready": False}
-        return {"stage": "ready", "configured": True, "plugins_ready": True}
+        return {"stage": "ready", "configured": True, "plugins_ready": True,
+                "plugin_runtime_healthy": True, "plugin_runtime_probe": str(time.monotonic())}
 
 
 def run_command(*args, timeout=300, env=None):
@@ -181,11 +184,14 @@ def helper(project, *args, volume=None, control=False):
     return run_command(*command)
 
 
-def assert_data(project):
+def assert_data(project, mutated=False):
     result = {}
     for logical in DATA_VOLUMES:
         actual = json.loads(helper(project, "read-data", volume=logical))
         expected = {"sentinel.txt": project + "/" + logical, "nested/original.bin": "000102ff"}
+        if mutated:
+            expected.update({"sentinel.txt": "overwritten-by-failed-version",
+                             "new-file-from-failed-version.txt": "preserve-on-rollback"})
         if actual != expected:
             raise AssertionError(f"Volume data changed or new files survived: {logical}: {actual}")
         result[logical] = hashlib.sha256(
@@ -339,14 +345,15 @@ def run_smoke(helper_image):
             rollback = transaction(project, BAD)
             if image_ids(project) != good_images:
                 raise AssertionError("Rollback did not restore exact previous image IDs")
-            if assert_data(project) != original_data:
-                raise AssertionError("Rollback did not restore all five original volumes")
+            assert_data(project, mutated=True)
+            if success["job"]["backup_complete"] or rollback["job"]["backup_complete"]:
+                raise AssertionError("Updates must not create data backups")
             report.update(
                 success_phase=success["status"]["phase"],
                 rollback_phase=rollback["status"]["phase"],
                 current_revision=rollback["actual_revision"],
                 verified_volumes=list(DATA_VOLUMES), exact_images_restored=True,
-                workers_survived=True, new_files_removed=True,
+                workers_survived=True, new_data_preserved=True, backups_created=False,
                 success_worker=success["worker_id"], rollback_worker=rollback["worker_id"],
             )
     finally:
@@ -377,7 +384,7 @@ def container_role(role, arguments):
         if not Path("/data").is_mount():
             raise RuntimeError("Invalid mutation mount")
         Path("/data/sentinel.txt").write_text("overwritten-by-failed-version", encoding="utf-8")
-        Path("/data/new-file-from-failed-version.txt").write_text("remove-on-rollback", encoding="utf-8")
+        Path("/data/new-file-from-failed-version.txt").write_text("preserve-on-rollback", encoding="utf-8")
     elif role == "read-data":
         if not Path("/data").is_mount():
             raise RuntimeError("Invalid data read mount")

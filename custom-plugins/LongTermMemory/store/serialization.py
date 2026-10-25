@@ -7,7 +7,9 @@ memory scope never blocks the other scopes that share the installation.
 
 The identity is the dimension :class:`store.memory_store.MemoryStore` groups its
 records by: ``scope_key`` for the L1 records (session/subject scope, see
-``MemoryStore.get_scope_key``) and the collection id for the L2 episodes.  The
+``MemoryStore.get_scope_key``) and ``(collection_id, user_key)`` for L2 episodes.
+L2 locks still coordinate collection-wide maintenance; an uncertain group write
+fences only that group's records. Legacy collection fences remain effective. The
 installation-wide ``kb_configs`` map carries no per-object identity, so it is
 serialized on the installation scope instead.
 
@@ -35,6 +37,21 @@ _INSTALLATION_FENCE_KEY = FENCE_KEY_PREFIX + "installation"
 # The arguments that carry the dimension MemoryStore groups records by, in
 # priority order: the L1 scope_key first, then the L2 collection arguments.
 _IDENTITY_ARGUMENTS = ("scope_key", "collection_id", "kb_id", "knowledge_base_id")
+
+
+def episode_scope(collection_id, user_key):
+    return "episode:" + json.dumps([collection_id, user_key], ensure_ascii=True, separators=(",", ":"))
+
+
+def collection_scope(identity):
+    if isinstance(identity, str) and identity.startswith("episode:"):
+        try:
+            value = json.loads(identity[8:])
+            if isinstance(value, list) and len(value) == 2 and all(isinstance(v, str) for v in value):
+                return value[0]
+        except ValueError:
+            pass
+    return identity
 
 
 class AmbiguousMutationError(RuntimeError):
@@ -86,6 +103,9 @@ def _scope_identity(method, instance, args, kwargs):
     for name in _IDENTITY_ARGUMENTS:
         value = bound.arguments.get(name)
         if isinstance(value, str) and value:
+            user_key = bound.arguments.get("user_key")
+            if name == "collection_id" and isinstance(user_key, str) and user_key:
+                return episode_scope(value, user_key)
             return value
     return None
 
@@ -108,6 +128,8 @@ class BindingWrites:
         # scope -> task holding that scope's lock, so a serialized write that
         # nests another serialized write for the same scope does not self-lock.
         self._owners = {}
+        self._active = {}
+        self._children = {}
 
     @staticmethod
     def binding(plugin):
@@ -132,6 +154,8 @@ class BindingWrites:
             return False
         return (
             _fence_key(identity) in fenced
+            or _fence_key(collection_scope(identity)) in fenced
+            or bool(self._children.get((binding, identity), set()) & fenced)
             or _INSTALLATION_FENCE_KEY in fenced
         )
 
@@ -156,6 +180,10 @@ class BindingWrites:
                     marker = {'reason': 'unreadable fence record'}
                 if marker is not None:
                     fenced.add(key)
+                    identity = marker.get('scope') if isinstance(marker, dict) else None
+                    parent = collection_scope(identity)
+                    if parent != identity:
+                        self._children.setdefault((binding, parent), set()).add(key)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -172,12 +200,19 @@ class BindingWrites:
         the scope needs reconciliation.
         """
         binding = self.binding(plugin)
-        scope = self._scope(binding, identity)
+        scope = self._scope(binding, collection_scope(identity))
         task = asyncio.current_task()
         if self._owners.get(scope) is task:
             # Re-entrant call from inside this task's serialized write (for
             # example add_episode -> _auto_supersede): the lock is already held.
-            return await operation()
+            if not allow_fenced and self.is_fenced(binding, identity):
+                raise RuntimeError("Memory scope fenced; reconciliation is required before retrying")
+            previous = self._active.get(task)
+            self._active[task] = identity
+            try:
+                return await operation()
+            finally:
+                self._active[task] = previous
         lock = self._locks.get(scope)
         if lock is None:
             lock = self._locks[scope] = asyncio.Lock()
@@ -190,6 +225,8 @@ class BindingWrites:
                     "before retrying"
                 )
             self._owners[scope] = task
+            previous = self._active.get(task)
+            self._active[task] = identity
             try:
                 return await operation()
             except AmbiguousMutationError:
@@ -197,6 +234,10 @@ class BindingWrites:
                 raise
             finally:
                 self._owners.pop(scope, None)
+                if previous is None:
+                    self._active.pop(task, None)
+                else:
+                    self._active[task] = previous
 
     async def mutate(self, plugin, identity, operation, reason):
         """Run a mutation that was dispatched to the Host.
@@ -205,6 +246,9 @@ class BindingWrites:
         caller cancellation cancels the caller only after the dispatched call has
         settled, so the lock is never released over an unknown outcome.
         """
+        active = self._active.get(asyncio.current_task())
+        if active is not None and collection_scope(active) == identity:
+            identity = active
         task = asyncio.create_task(operation())
         cancelled, failure = await _settle_commit(task)
         if failure is not None:
@@ -224,6 +268,9 @@ class BindingWrites:
         binding = self.binding(plugin)
         fence_key = _fence_key(identity)
         self._fenced_keys(binding).add(fence_key)
+        parent = collection_scope(identity)
+        if parent != identity:
+            self._children.setdefault((binding, parent), set()).add(fence_key)
         payload = json.dumps({
             'scope': identity if identity is not None else 'installation',
             'reason': reason,
@@ -245,16 +292,17 @@ class BindingWrites:
         """
         binding = self.binding(plugin)
         fence_key = _fence_key(identity)
-        fenced = self._fenced.get(binding)
-        if fenced is not None:
-            fenced.discard(fence_key)
-            if not fenced:
-                self._fenced.pop(binding, None)
         cancelled, failure = await _settle_commit(
             asyncio.create_task(plugin.set_plugin_storage(fence_key, b'null'))
         )
         if failure is not None:
             logger.warning("Could not clear fence for %r: %r", identity, failure)
+            raise RuntimeError("Could not persist reconciliation; memory scope remains fenced") from failure
+        fenced = self._fenced.get(binding)
+        if fenced is not None:
+            fenced.discard(fence_key)
+            if not fenced:
+                self._fenced.pop(binding, None)
         if cancelled:
             raise asyncio.CancelledError
 
@@ -271,6 +319,8 @@ class BindingWrites:
             self._owners.pop(scope, None)
         self._fenced.pop(binding, None)
         self._fence_loaded.discard(binding)
+        for key in [key for key in self._children if key[0] == binding]:
+            self._children.pop(key, None)
 
 
 def serialized_write(method=None, *, scope=None, allow_fenced=False):

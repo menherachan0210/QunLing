@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 from dataclasses import asdict
+import hashlib
 import json
 import os
 import time
@@ -146,6 +147,15 @@ def _plain(chain) -> str:
     return "".join(str(getattr(item, "text", "")) for item in chain or [] if getattr(item, "type", None) == "Plain")[:4000]
 
 
+def _text_digest(chain):
+    """Authenticate the complete observed text independently of prompt clipping."""
+    digest = hashlib.sha256()
+    for item in chain or []:
+        if getattr(item, "type", None) == "Plain":
+            digest.update(str(getattr(item, "text", "")).encode("utf-8"))
+    return digest.hexdigest()
+
+
 def _is_explicit(chain, bot_id: str) -> bool:
     return any(getattr(item, "type", None) == "At" and str(item.target) == bot_id for item in chain or []) or _plain(chain).lstrip().startswith("/ai")
 
@@ -165,17 +175,26 @@ class HostBridge:
         # Host receipt times avoid QQ's integer-second cutoff losing evidence
         # published earlier in the same second. No message content is retained.
         self._received_at: dict[tuple[str, str], float] = {}
+        self._received_text_hashes: dict[tuple[str, str], str] = {}
         self._sent_receipts: dict[tuple[str, str], None] = {}
         # Real ingress arguments, retained only briefly for a single, scoped
         # continuation admission. No synthetic mention or client-side grant.
         self._continuation_ingress: dict[tuple[str, str], tuple] = {}
         self.last_error = None
+        def timeout_setting(name, default, maximum):
+            try:
+                return max(5, min(maximum, int(os.environ.get(name, default))))
+            except ValueError:
+                return default
+        self.decision_timeout = timeout_setting("QUNLING_DECISION_TIMEOUT_SECONDS", 25, 60)
+        self.reply_timeout = timeout_setting("QUNLING_REPLY_TIMEOUT_SECONDS", 60, 90)
         if getattr(bot.ap, "_qunling_proactive_semaphore", None) is None:
             bot.ap._qunling_proactive_semaphore = asyncio.Semaphore(2)
         self.engine = (engine_factory or ProactiveEngine)(
             bot_id=str(bot.bot_entity.uuid), config=self.configuration,
             judge=self.judge, generate=self.generate, send=self.send, handoff=self.handoff, reconcile=self.reconcile,
             semaphore=bot.ap._qunling_proactive_semaphore,
+            model_timeout=self.decision_timeout, generation_timeout=self.reply_timeout,
             state_dir=self.store.root / (self.store.key + "-usage"),
         )
 
@@ -232,8 +251,11 @@ class HostBridge:
         self._prune_request_contexts()
         if accepted:
             self._received_at[key] = time.time()
+            self._received_text_hashes[key] = _text_digest(chain)
             while len(self._received_at) > 2048:
-                self._received_at.pop(next(iter(self._received_at)))
+                oldest = next(iter(self._received_at))
+                self._received_at.pop(oldest)
+                self._received_text_hashes.pop(oldest, None)
         if explicit and accepted:
             snapshot = self.engine.snapshot(key[0], before_message_id=key[1], before_timestamp=getattr(event, "timestamp", 0))
             focus = self.engine.focus_message_ids(key[0], sender_id, snapshot, reply_to)
@@ -264,7 +286,7 @@ class HostBridge:
                 or str(arguments.get("bot_uuid")) != str(self.bot.bot_entity.uuid)
                 or str(arguments.get("launcher_id")) != key[0]
                 or str(arguments.get("sender_id")) != target.sender_id
-                or _plain(event.message_chain) != target.text):
+                or _text_digest(event.message_chain) != self._received_text_hashes.get(key)):
             return
         snapshot = self.engine.snapshot(key[0], before_message_id=key[1], before_timestamp=target.timestamp)
         now = time.monotonic()
@@ -317,7 +339,7 @@ class HostBridge:
                 and (current.instance_uuid, current.workspace_uuid, current.placement_generation, current.bot_uuid) == binding
                 and arguments.get("adapter") is self.bot.adapter and arguments.get("message_event") is event
                 and _event_key(event) == key and str(getattr(event.sender, "id", "")) == target.sender_id
-                and _plain(event.message_chain) == target.text
+                and _text_digest(event.message_chain) == self._received_text_hashes.get(key)
                 and not _is_explicit(event.message_chain, str(self.bot.adapter.bot_account_id)))
 
         if not await valid():
@@ -418,7 +440,7 @@ class HostBridge:
 
         await run_in_workspace_uow(bot.ap, context.workspace_uuid, resolve)
 
-    async def _model(self, *, decision=False):
+    async def _model(self, *, decision=False, reconcile=False):
         from langbot.pkg.agent.runner.config_resolver import RunnerConfigResolver
         from langbot.pkg.core.task_boundary import run_in_workspace_uow
 
@@ -438,6 +460,8 @@ class HostBridge:
             model_id = runner.get("model", {}).get("primary")
             if decision:
                 model_id = config.get("ai", {}).get("qunling_decision_model") or model_id
+            elif reconcile:
+                model_id = config.get("ai", {}).get("qunling_reconcile_model") or model_id
             if not isinstance(model_id, str) or not model_id:
                 raise ProactiveUnavailable("尚未配置聊天模型。")
             return await bot.ap.model_mgr.get_model_by_uuid(context, model_id)
@@ -448,26 +472,40 @@ class HostBridge:
         stage = 'judge' if system == JUDGE_PROMPT else 'reconcile' if system == RECONCILE_PROMPT else 'generate'
         group = content.get('context', content).get('group_id', '')
         started, success = time.monotonic(), False
+        from qunling.performance import USAGE_CONTEXT
+        usage = {'usage': None, 'model_id': ''}
+        token = USAGE_CONTEXT.set(usage)
         try:
             result = await self._complete_raw(system, content)
             success = True
             return result
         finally:
-            self.performance.record(group, stage, time.monotonic() - started, success)
+            USAGE_CONTEXT.reset(token)
+            member = content.get('target_author', {}).get('sender_id') or content.get('context', content).get('participant_id', '')
+            self.performance.record(group, stage, time.monotonic() - started, success,
+                                    usage=usage['usage'], model_id=usage['model_id'], member=member)
 
     async def _complete_raw(self, system: str, content: dict) -> str:
         from langbot_plugin.api.entities.builtin.provider.message import Message
 
-        model = await self._model(decision=True) if system == JUDGE_PROMPT else await self._model()
+        model = (await self._model(decision=True) if system == JUDGE_PROMPT else
+                 await self._model(reconcile=True) if system == RECONCILE_PROMPT else await self._model())
+        from qunling.performance import USAGE_CONTEXT, capture_usage
+        usage = USAGE_CONTEXT.get()
+        if usage is not None:
+            usage['model_id'] = str(getattr(getattr(model, 'model_entity', None), 'uuid', ''))
         # No plugin/runner invocation, no tool registry, no function dispatch.
         # Explicitly override provider-level tool settings for this call only.
-        async with asyncio.timeout(25):
+        async with asyncio.timeout(self.decision_timeout if system in {JUDGE_PROMPT, RECONCILE_PROMPT} else self.reply_timeout):
             response = await model.provider.invoke_llm(
                 query=None, model=model,
                 messages=[Message(role="system", content=system), Message(role="user", content=json.dumps(content, ensure_ascii=False))],
                 funcs=[], extra_args={"tools": None, "tool_choice": None, "functions": None, "function_call": None},
                 remove_think=True, execution_context=self.bot.execution_context,
             )
+        returned_usage = getattr(response, 'usage', None)
+        if returned_usage is not None:
+            capture_usage(returned_usage.model_dump() if hasattr(returned_usage, 'model_dump') else returned_usage)
         if getattr(response, "tool_calls", None):
             raise ProactiveUnavailable("主动聊天只接受纯文字回复。")
         text = getattr(response, "content", None)
@@ -482,7 +520,8 @@ class HostBridge:
             **asdict(context), "bot_account_id": str(self.bot.adapter.bot_account_id),
         })
         try:
-            decision = json.loads(text)
+            from .structured import decode_object
+            decision = decode_object(text)
         except ValueError as exc:
             raise ProactiveUnavailable("参与判断格式不符合要求。") from exc
         if not isinstance(decision, dict):
@@ -552,7 +591,8 @@ class HostBridge:
                         "tools_available": False, "read_only_handoff_available": True},
         })
         try:
-            result = json.loads(output)
+            from .structured import decode_object
+            result = decode_object(output)
         except (ValueError, TypeError) as exc:
             raise ProactiveUnavailable("接话草稿格式不符合要求。") from exc
         if result == {"action": "research"}:
@@ -571,7 +611,8 @@ class HostBridge:
         evidence = {"group_id": context.group_id, "messages": [asdict(message)
                     for message in context.messages
                     if not (message.is_bot and message.message_id in receipts)]}
-        return json.loads(await self._complete(RECONCILE_PROMPT, {
+        from .structured import decode_object
+        return decode_object(await self._complete(RECONCILE_PROMPT, {
             "context": evidence, "decision": asdict(decision),
             "draft": draft, "delivered": delivered,
         }))
@@ -812,6 +853,7 @@ async def shutdown(bot):
     if bridge:
         bridge._request_contexts.clear()
         bridge._received_at.clear()
+        bridge._received_text_hashes.clear()
         bridge._sent_receipts.clear()
         await bridge.engine.close()
 

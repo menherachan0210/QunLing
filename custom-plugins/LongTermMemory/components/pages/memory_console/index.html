@@ -702,6 +702,7 @@
       const body = {};
       if (scope.scopeKey) body.scope_key = scope.scopeKey;
       if (kb.collectionId) body.collection_id = kb.collectionId;
+      if (scope.userKey) body.user_key = scope.userKey;
       if (!body.scope_key && !body.collection_id) {
         renderNotice(target, text.fenceRequired, true);
         return;

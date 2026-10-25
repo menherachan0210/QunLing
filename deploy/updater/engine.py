@@ -74,6 +74,9 @@ class UpdateEngine:
         self.repository = repository or os.environ.get("QQBOT_UPDATE_REPOSITORY", "menherachan0210/QunLing")
         self.branch = branch or os.environ.get("QQBOT_UPDATE_BRANCH", "main")
         self.image_mode = os.environ.get("QQBOT_IMAGE_MODE", "auto")
+        self.channel = os.environ.get("QQBOT_UPDATE_CHANNEL", "stable")
+        if self.channel not in {"stable", "development"}:
+            raise UpdateError("QQBOT_UPDATE_CHANNEL 应为 stable 或 development。")
         if self.image_mode not in {"auto", "pull", "build"}:
             raise UpdateError("QQBOT_IMAGE_MODE 应为 auto、pull 或 build。")
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}", self.project):
@@ -92,7 +95,7 @@ class UpdateEngine:
         self._cleanup_generation = None
         self.retention_valid = True
         try:
-            self.keep_backups = int(os.environ.get("QQBOT_UPDATE_KEEP_BACKUPS", "2"))
+            self.keep_backups = int(os.environ.get("QQBOT_UPDATE_KEEP_RELEASES", os.environ.get("QQBOT_UPDATE_KEEP_BACKUPS", "2")))
             if not 1 <= self.keep_backups <= 10:
                 raise ValueError()
         except ValueError:
@@ -132,7 +135,7 @@ class UpdateEngine:
             "current_revision": current, "latest_revision": value.get("latest_revision", ""),
             "update_available": bool(value.get("latest_revision") and value["latest_revision"] != current),
             "phase": phase, "busy": phase not in TERMINAL,
-            "image_mode": self.image_mode,
+            "image_mode": self.image_mode, "channel": self.channel,
             "message": value.get("message", "点击检查 GitHub 更新。"),
             "checked_at": value.get("checked_at", ""),
             "cleanup": self.cleanup_snapshot(),
@@ -207,6 +210,12 @@ class UpdateEngine:
         return state
 
     def remote_revision(self):
+        if self.channel == "stable":
+            from deploy.updater.releases import verified_revision
+            try:
+                return verified_revision(self.repository, self.branch)
+            except Exception as exc:
+                raise UpdateError("没有可用的已验收版本，或无法核实 GitHub CI 状态。") from exc
         ref = "refs/heads/" + self.branch
         output = self.run("git", "ls-remote", "--exit-code", self.remote, ref, timeout=45)
         rows = [line.split() for line in output.splitlines()]
@@ -255,7 +264,7 @@ class UpdateEngine:
                 raise UpdateError("初始化或 AI 配置正在进行，请完成后再更新。")
             job_id = secrets.token_hex(12)
             job = {"id": job_id, "revision": revision, "phase": "queued",
-                   "mutation_started": False, "backup_complete": False, "created_at": now()}
+                   "mutation_started": False, "data_policy": "preserve", "backup_complete": False, "created_at": now()}
             write(self.root / "jobs" / job_id / "job.json", job)
             self.publish(phase="queued", job_id=job_id, message="更新任务已排队，开始准备新版本。")
             try:
@@ -292,8 +301,9 @@ class UpdateEngine:
             "-e", "QQBOT_PROJECT=" + self.project,
             "-e", "QQBOT_UPDATE_REPOSITORY=" + self.repository,
             "-e", "QQBOT_UPDATE_BRANCH=" + self.branch,
+            "-e", "QQBOT_UPDATE_CHANNEL=" + self.channel,
             "-e", "QQBOT_IMAGE_MODE=" + self.image_mode,
-            "-e", "QQBOT_UPDATE_KEEP_BACKUPS=" + (str(self.keep_backups) if self.retention_valid else "disabled"),
+            "-e", "QQBOT_UPDATE_KEEP_RELEASES=" + (str(self.keep_backups) if self.retention_valid else "disabled"),
             info["Image"], "worker", job_id,
         )
 
@@ -381,7 +391,7 @@ class UpdateEngine:
             raise UpdateError("GitHub 分支已有新的提交，请重新检查后更新。")
         self.run("git", "init", str(directory))
         self.run("git", "-C", str(directory), "remote", "add", "origin", self.remote)
-        self.run("git", "-C", str(directory), "fetch", "--depth=1", "origin", "refs/heads/" + self.branch,
+        self.run("git", "-C", str(directory), "fetch", "--depth=1", "origin", revision,
                  timeout=300)
         actual = self.run("git", "-C", str(directory), "rev-parse", "FETCH_HEAD").strip()
         if actual != revision:
@@ -389,6 +399,8 @@ class UpdateEngine:
         self.run("git", "-C", str(directory), "checkout", "--detach", revision)
         if read(directory / "deploy/updater/protocol.json", {}).get("version") != 1:
             raise UpdateError("该版本不支持当前自动更新协议，请使用启动脚本手动升级。")
+        if read(directory / "deploy/updater/protocol.json", {}).get("data_epoch", 1) != 1:
+            raise UpdateError("该版本需要不兼容的数据迁移，不能通过无快照的在线更新安装。")
 
     def backup(self, volume, backup, image, update_volume, job_id, restore=False):
         # The helper mounts named volumes only; paths inside this updater are
@@ -409,19 +421,32 @@ class UpdateEngine:
 
     def wait_ready(self, timeout=900):
         deadline = time.monotonic() + timeout
+        previous_probe = None
+        consecutive = 0
         while time.monotonic() < deadline:
             try:
                 status = self.wizard_status()
                 if status.get("stage") == "error":
                     raise UpdateError("新版插件或配置初始化失败。")
-                if status.get("plugins_ready") and status.get("configured"):
+                if (status.get("plugins_ready") is True and status.get("configured") is True
+                        and status.get("plugin_runtime_healthy") is True
+                        and status.get("stage") in {"ready", "waiting_qq"}):
+                    probe = status.get("plugin_runtime_probe")
+                    # Older releases expose no probe id; require separated healthy
+                    # observations when restoring them. New releases must advance.
+                    if probe is None or probe != previous_probe:
+                        consecutive += 1
+                        previous_probe = probe
                     # QQ may require a new-device confirmation; successful setup
                     # recovery is distinct from QQ account login availability.
-                    return
+                    if consecutive >= 2:
+                        return
+                else:
+                    consecutive, previous_probe = 0, None
             except UpdateError:
                 raise
             except Exception:
-                pass
+                consecutive, previous_probe = 0, None
             time.sleep(5)
         raise UpdateError("等待新版服务恢复超时。")
 
@@ -448,6 +473,9 @@ class UpdateEngine:
         try:
             if job.get("phase") != "queued":
                 raise UpdateError("更新任务被中断，正在恢复上次部署。")
+            # New updates retain live volumes in place. Never create a data copy.
+            # Interrupted legacy transactions still use their original recovery contract.
+            job.update(data_policy="preserve", backup_complete=False)
             phase("building", "正在准备新版本镜像，机器人暂时继续运行。")
             source = directory / "source"
             self.checkout(job["revision"], source)
@@ -492,18 +520,22 @@ class UpdateEngine:
             new["services"]["updater"].setdefault("environment", {}).update(
                 QQBOT_PROJECT=self.project, QQBOT_UPDATE_REPOSITORY=self.repository,
                 QQBOT_UPDATE_BRANCH=self.branch,
+                QQBOT_UPDATE_CHANNEL=self.channel,
                 QQBOT_IMAGE_MODE=self.image_mode,
-                QQBOT_UPDATE_KEEP_BACKUPS=str(self.keep_backups) if self.retention_valid else "disabled")
+                QQBOT_UPDATE_KEEP_RELEASES=str(self.keep_backups) if self.retention_valid else "disabled")
+            new["services"]["updater"]["environment"].pop("QQBOT_UPDATE_KEEP_BACKUPS", None)
+            old_env = old["services"]["app"].get("environment", {})
+            for key in ("QUNLING_DECISION_TIMEOUT_SECONDS", "QUNLING_REPLY_TIMEOUT_SECONDS", "QUNLING_MODEL_PRICES"):
+                if key in old_env:
+                    new["services"]["app"].setdefault("environment", {})[key] = old_env[key]
             write(new_path, new)
             # Pull a changed QQ image before interrupting the running deployment.
             self.run("docker", "image", "inspect", new["services"]["napcat"]["image"]) \
                 if new["services"]["napcat"]["image"] == old["services"]["napcat"]["image"] \
                 else self.run("docker", "pull", new["services"]["napcat"]["image"], timeout=1200, log=log)
-            phase("backing_up", "正在暂停机器人并备份 QQ、配置和记忆。", services_stopped=True)
+            phase("stopping", "正在暂停旧服务，业务数据保留在原数据卷中。", services_stopped=True)
             self.stop(old_path)
-            for name in DATA_VOLUMES:
-                self.backup(volumes[name], name + ".tar", worker_image, volumes["update-data"], job_id)
-            phase("restarting", "备份完成，正在切换到新版本。", backup_complete=True, mutation_started=True)
+            phase("restarting", "正在切换到新版本，不创建业务数据备份。", mutation_started=True)
             self.start_compose(new_path, log)
             phase("verifying", "正在检查新版插件和配置恢复。")
             self.wait_ready()
@@ -517,9 +549,10 @@ class UpdateEngine:
         except Exception as exc:
             try:
                 if job.get("services_stopped"):
-                    phase("rolling_back", "更新未完成，正在恢复旧版本和原有数据。")
+                    phase("rolling_back", "更新未完成，正在恢复旧版服务；业务数据不会回退。"
+                          if job.get("data_policy") == "preserve" else "旧更新任务中断，正在按原记录恢复。")
                     self.stop(new_path if new_path.exists() else old_path)
-                    if job.get("mutation_started"):
+                    if job.get("mutation_started") and job.get("data_policy") != "preserve":
                         if not job.get("backup_complete"):
                             raise UpdateError("没有完整备份，停止自动恢复以保护现有数据。")
                         for name in DATA_VOLUMES:
@@ -535,12 +568,16 @@ class UpdateEngine:
                     self.start_compose(old_path, log)
                     self.wait_ready()
                     write(self.active_path, read(old_path))
+                    recovery_message = ("更新失败，已恢复旧版服务，业务数据保持当前状态，未回退。"
+                                        if job.get("data_policy") == "preserve"
+                                        else "旧更新任务失败，已按原记录恢复旧版本和数据。")
                     job.update(finished=True, terminal_phase="rolled_back",
+                               completed_at=now(),
                                terminal_revision=job.get("old_revision", ""),
-                               terminal_message="更新失败，已恢复旧版本和原有数据。可检查日志后重试。")
+                               terminal_message=recovery_message)
                     write(directory / "job.json", job)
                     self.publish(phase="rolled_back", current_revision=job.get("old_revision", ""),
-                                 message="更新失败，已恢复旧版本和原有数据。可检查日志后重试。")
+                                 message=recovery_message)
                 else:
                     job.update(finished=True, terminal_phase="failed",
                                terminal_revision=job.get("old_revision", ""),
@@ -551,4 +588,4 @@ class UpdateEngine:
                                  else "更新准备失败，原服务和数据未改动。")
             except Exception:
                 self.publish(phase="recovery_required",
-                             message="自动恢复未完成，备份已保留。请按运维文档恢复，勿删除数据卷。")
+                             message="服务自动恢复未完成，业务数据卷保留。请按运维文档排查，勿删除数据卷。")

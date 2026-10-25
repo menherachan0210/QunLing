@@ -523,7 +523,7 @@ def test_real_init_and_access_commands_agree_with_bootstrap_and_preserve_state(
         (
             "app",
             200,
-            b'{"code":0,"msg":"ok","resources":{"runtimes":{"plugin_runtime_connected":true}}}',
+            b'{"code":0,"msg":"ok","resources":{"runtimes":{"plugin_runtime_connected":true}},"plugin_runtime":{"state":"ready","healthy":true}}',
             True,
         ),
         (

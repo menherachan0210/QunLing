@@ -179,19 +179,20 @@ async def test_include_superseded_can_inspect_hidden_records():
 
 
 @pytest.mark.asyncio
-async def test_auto_supersede_marks_old_episode_status():
+async def test_explicit_replacement_marks_only_same_speaker_and_fact():
     plugin = FakeVectorPlugin()
     plugin.records = {
         "old-1": _record("old-1", status="active", content="User prefers tea"),
     }
     store = MemoryStore(plugin)
-
+    plugin.records["old-1"]["metadata"].update(sender_id="alice", fact_key="drink")
     await store.add_episode(
         collection_id="kb-1",
         embedding_model_uuid="emb-1",
         user_key="user-1",
         content="Correction: user prefers coffee",
         tags=["correction"],
+        sender_id="alice", fact_key="drink", replaces_episode_id="old-1",
     )
 
     assert plugin.records["old-1"]["metadata"]["status"] == "superseded"

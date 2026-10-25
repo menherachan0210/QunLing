@@ -266,6 +266,8 @@ class DockerModel:
 @pytest.fixture
 def transaction(tmp_path, monkeypatch):
     monkeypatch.setenv("QQBOT_IMAGE_MODE", "build")
+    monkeypatch.setenv("QQBOT_UPDATE_CHANNEL", "development")
+    monkeypatch.setattr(module.time, "sleep", lambda _: None)
     driver = DockerModel(tmp_path)
     engine = module.UpdateEngine(
         tmp_path,
@@ -278,7 +280,8 @@ def transaction(tmp_path, monkeypatch):
     def wizard():
         if driver.active == "new" and driver.fail in {"new_ready", "restore", "verify"}:
             return {"stage": "error", "configured": False, "plugins_ready": False}
-        return {"stage": "ready", "configured": True, "plugins_ready": True}
+        return {"stage": "ready", "configured": True, "plugins_ready": True,
+                "plugin_runtime_healthy": True}
 
     monkeypatch.setattr(engine, "wizard_status", wizard)
     job = {
@@ -311,7 +314,7 @@ def test_success_builds_before_downtime_and_reuses_exact_project_volumes(transac
     first_stop = docker.events.index(("stop", "old"))
     assert all(event[0] in {"build", "pull"} for event in docker.events[:first_stop])
     backups = [name for operation, name in docker.events if operation == "backup"]
-    assert backups == list(module.DATA_VOLUMES)
+    assert backups == []
     assert not any(operation == "restore" for operation, _ in docker.events)
     old = module.read(engine.root / "jobs" / JOB / "old-compose.json")
     active = module.read(engine.active_path)
@@ -374,48 +377,51 @@ def test_candidate_data_volume_changes_are_rejected_before_downtime(
     )
 
 
-def test_partial_backup_restarts_old_services_without_restoring_partial_data(
+def test_new_update_never_calls_backup_even_when_backup_helper_is_broken(
     transaction,
 ):
     engine, docker = transaction
-    before = deepcopy(docker.data)
     docker.fail = "backup"
     engine.execute(JOB)
-    assert state(engine)["phase"] == "rolled_back"
-    assert docker.data == before
-    assert ("start", "old") in docker.events
-    assert ("start", "new") not in docker.events
+    assert state(engine)["phase"] == "completed"
+    assert docker.backup_count == 0
+    assert ("start", "new") in docker.events
     assert not any(operation == "restore" for operation, _ in docker.events)
     assert not module.read(engine.root / "jobs" / JOB / "job.json")["backup_complete"]
 
 
 @pytest.mark.parametrize("failure", ["new_start", "new_ready"])
-def test_failure_after_full_backup_restores_all_volumes_before_old_start(
+def test_failed_version_restores_images_and_preserves_current_data(
     transaction, failure
 ):
     engine, docker = transaction
-    before = deepcopy(docker.data)
     docker.fail = failure
     engine.execute(JOB)
     assert state(engine)["phase"] == "rolled_back"
     assert state(engine)["current_revision"] == OLD
-    assert docker.data == before
+    assert all(value.startswith(b"new-version-") for value in docker.data.values())
     restores = [name for operation, name in docker.events if operation == "restore"]
-    assert restores == list(module.DATA_VOLUMES)
+    assert restores == []
     verified = [name for operation, name in docker.events if operation == "verify"]
-    assert verified == list(module.DATA_VOLUMES)
-    first_restore = docker.events.index(("restore", module.DATA_VOLUMES[0]))
-    assert all(
-        docker.events.index(("verify", name)) < first_restore
-        for name in module.DATA_VOLUMES
-    )
-    old_start = docker.events.index(("start", "old"))
-    assert all(
-        docker.events.index(("restore", name)) < old_start
-        for name in module.DATA_VOLUMES
-    )
+    assert verified == []
+    assert docker.backup_count == 0
+    assert ("start", "old") in docker.events
     active = module.read(engine.active_path)
     assert active["services"]["app"]["image"] == docker.images["app"]
+
+
+def legacy_interrupted(engine, docker):
+    directory = engine.root / "jobs" / JOB
+    old, volumes = engine.capture_current(directory)
+    module.write(directory / "new-compose.json", old)
+    job = module.read(directory / "job.json")
+    job.update(phase="verifying", services_stopped=True, mutation_started=True,
+               backup_complete=True, volumes=volumes, worker_image=old["services"]["updater"]["image"],
+               old_revision=OLD)
+    module.write(directory / "job.json", job)
+    docker.backups = deepcopy(docker.data)
+    docker.data = {name: b"new-version-" + name.encode() for name in module.DATA_VOLUMES}
+    docker.active = "new"
 
 
 def test_any_bad_archive_prevents_all_volume_restores_and_old_service_restart(
@@ -423,6 +429,7 @@ def test_any_bad_archive_prevents_all_volume_restores_and_old_service_restart(
 ):
     engine, docker = transaction
     docker.fail = "verify"
+    legacy_interrupted(engine, docker)
     engine.execute(JOB)
     assert state(engine)["phase"] == "recovery_required"
     assert engine.snapshot()["busy"]
@@ -444,6 +451,7 @@ def test_restore_failure_keeps_business_stopped_and_disallows_another_update(
 ):
     engine, docker = transaction
     docker.fail = "restore"
+    legacy_interrupted(engine, docker)
     engine.execute(JOB)
     assert ("start", "old") not in docker.events
     assert docker.events[-1] == ("restore", module.DATA_VOLUMES[1])
@@ -462,6 +470,7 @@ def test_interrupted_partial_restore_can_recover_without_new_build_or_new_backup
     engine, docker = transaction
     original = deepcopy(docker.data)
     docker.fail = "restore"
+    legacy_interrupted(engine, docker)
     engine.execute(JOB)
     assert engine.snapshot()["busy"]
     docker.fail = None
@@ -519,13 +528,14 @@ def test_candidate_host_mounts_are_rejected(transaction, service, source, target
 
 def test_volume_helper_uses_named_volumes_and_never_host_checkout_paths(transaction):
     engine, docker = transaction
+    legacy_interrupted(engine, docker)
     engine.execute(JOB)
     helpers = [
         args
         for args, _ in docker.calls
         if args[:2] == ["docker", "run"] and "volume" in args
     ]
-    assert len(helpers) == 5
+    assert len(helpers) == 10
     for args in helpers:
         assert args[args.index("--network") + 1] == "none"
         mounts = [args[i + 1] for i, value in enumerate(args) if value == "--mount"]
@@ -579,7 +589,7 @@ def test_checkout_detaches_only_the_previously_checked_sha(transaction):
         "fetch",
         "--depth=1",
         "origin",
-        "refs/heads/main",
+        NEW,
     ] in commands
     assert [
         "git",

@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from bootstrap.api import LangBotAPI, NapCatAPI, SetupError  # noqa: E402
-from bootstrap.configure import PLUGINS, RUNNER, plugin_identity  # noqa: E402
+from bootstrap.configure import PLUGINS, RUNNER, plugin_identity, settings_from_input  # noqa: E402
 from bootstrap.state import State  # noqa: E402
 from scripts.chat_style import styled_prompts  # noqa: E402
 
@@ -32,14 +32,14 @@ class SmokeError(RuntimeError):
     pass
 
 
-SYNTHETIC_AI = {
+SYNTHETIC_AI = settings_from_input({
     "base_url": "http://127.0.0.1:1/v1",
     "api_key": "offline-ci-no-real-api-key",
     "chat_model": "offline-ci-chat",
     "vision_model": "offline-ci-vision",
     "image_model": "offline-ci-image",
     "search_model": "offline-ci-search",
-}
+})
 
 
 def fetch_json(url, token=None):
@@ -167,7 +167,7 @@ def inspect_configuration(state, api):
         require(
             model["name"] == SYNTHETIC_AI[role]
             and model["provider_uuid"] == provider["uuid"]
-            and {"func_call", "vision"}.issubset(model.get("abilities", [])),
+            and ({"func_call", "vision"} if role == "chat_model" else {"vision"}).issubset(model.get("abilities", [])),
             role,
         )
     require(chat["uuid"] != vision["uuid"], "distinct model roles")
@@ -211,7 +211,8 @@ def inspect_configuration(state, api):
     )
     require(
         config["output"]["misc"]["quote-origin"] is True
-        and pipeline["extensions_preferences"]["enable_all_plugins"] is True,
+        and pipeline["extensions_preferences"]["enable_all_plugins"] is False
+        and {p["author"] + "/" + p["name"] for p in pipeline["extensions_preferences"]["plugins"]} == set(PLUGINS),
         "pipeline output and plugin enablement",
     )
     managed("bots", "bot_uuid")

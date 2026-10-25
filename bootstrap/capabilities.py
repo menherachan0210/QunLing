@@ -44,6 +44,8 @@ def _red_image():
 
 
 async def probe(config, kind):
+    from bootstrap.configure import role_settings
+    config = role_settings(config, kind)
     async with asyncio.timeout(95 if kind == "image" else 70):
         if kind == "search":
             from qunling.web_search import search_web
@@ -106,6 +108,8 @@ class Checks:
                 or not isinstance(values["request_id"], str) or not re.fullmatch(r"[a-zA-Z0-9_-]{16,64}", values["request_id"])):
             raise SetupError("请选择测试项目并确认可能产生的服务费用。")
         key = values["request_id"]
+        if any(kind != "chat" and kind not in config.get("features", CHECKS) for kind in values["checks"]):
+            raise SetupError("请先启用对应功能，再进行能力测试。")
         with self.lock:
             if key in self.jobs:
                 if self.jobs[key]["checks"] != values["checks"]:

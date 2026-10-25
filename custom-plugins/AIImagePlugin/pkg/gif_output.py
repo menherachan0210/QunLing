@@ -19,15 +19,67 @@ def prepare_prompt(params):
 
 
 async def prepare_context(plugin, api, plan, *, deliver=True):
-    if plan is None and deliver:
-        return None
     context = await query_context(plugin, api)
     from qunling.assets import AssetStore
     AssetStore.from_env()
     route = context.get("host_route")
-    if deliver and (not isinstance(route, dict) or not all(route.get(key) for key in ("instance_uuid", "workspace_uuid", "placement_generation"))):
+    if plan is not None and deliver and (not isinstance(route, dict) or not all(route.get(key) for key in ("instance_uuid", "workspace_uuid", "placement_generation"))):
         raise AssetError("scope_unavailable", "动画交付服务暂不可用，尚未发起生图请求。")
     return context
+
+
+async def persist_image(context, image):
+    import asyncio
+    from main import image_data_url
+    from qunling.assets import AssetStore, image_name
+    from qunling.scope import Scope
+    data = await image_data_url(image)
+    raw = base64.b64decode(data.split(",", 1)[1], validate=True)
+    scope, store = Scope(**context["scope"]), AssetStore.from_env()
+    asset = await asyncio.to_thread(store.put, scope, image_name(raw), raw,
+                                   origin="generated", metadata={"media_type": "image",
+                                                                "request_key": context["request_key"]})
+    store.grant(scope, context["request_key"], asset["asset_ref"])
+    return scope, store, asset, raw
+
+
+async def finish_static(plugin, api, context, image, state_key, *, sent_message, failed_message, timeout):
+    """Durably save billed output before any QQ send; ambiguous delivery is not retried."""
+    import asyncio
+    from langbot_plugin.api.entities.builtin.platform.message import Image, MessageChain
+    from pkg.image_context import remember_output
+    try:
+        scope, store, asset, raw = await persist_image(context, image)
+    except Exception:
+        return "图片生成接口已返回，但共享素材保存失败；未发送图片。请勿重新生图，以免重复计费。"
+    ref, request = asset["asset_ref"], context["request_key"]
+    try:
+        await api.set_query_var(state_key + ".asset", ref)
+        await api.set_query_var(state_key, "asset_saved")
+        await remember_output(plugin, api, image)
+    except Exception:
+        pass  # Shared asset remains discoverable after the query disappears.
+    if not store.reserve_delivery(scope, request, ref):
+        return f"图片已保存：{ref}。本轮交付已有记录，不重复发送；请用文件工作区查看。"
+    try:
+        await asyncio.wait_for(api.reply(MessageChain([
+            Image(base64=base64.b64encode(raw).decode(), url="")
+        ])), timeout=timeout)
+    except BaseException as exc:
+        store.mark_delivery(scope, request, ref, "unconfirmed")
+        try:
+            await api.set_query_var(state_key, "send_failed")
+        except Exception:
+            pass
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        return failed_message + f" 已保存 asset_ref={ref}；交付未确认，可在用户明确要求后发送已有文件。"
+    store.mark_delivery(scope, request, ref, "sent")
+    try:
+        await api.set_query_var(state_key, "sent")
+    except Exception:
+        pass
+    return sent_message
 
 
 async def finish(context, plan, image):
@@ -51,12 +103,7 @@ async def finish_asset(context, image):
     from qunling.integration import task_hint
     from qunling.scope import Scope
     try:
-        data = await image_data_url(image)
-        raw = base64.b64decode(data.split(",", 1)[1], validate=True)
-        scope, store = Scope(**context["scope"]), AssetStore.from_env()
-        asset = await asyncio.to_thread(store.put, scope, image_name(raw), raw,
-                                        origin="generated", metadata={"media_type": "image"})
-        store.grant(scope, context["request_key"], asset["asset_ref"])
+        scope, store, asset, raw = await persist_image(context, image)
         result = {"status": "created", **asset, "delivery_status": "not_requested",
                   "instruction": "图片已保存为中间素材，尚未发到QQ。使用asset_ref继续改图、合成GIF、整理或打包；"
                                  "只交付用户需要的最终成品。生成要求不是成图已核验的证据，不要重复调用生图。",

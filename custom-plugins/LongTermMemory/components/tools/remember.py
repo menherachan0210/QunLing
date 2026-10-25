@@ -80,6 +80,8 @@ class Remember(Tool):
             sender_id=sender_id,
             sender_name=sender_name,
             bot_uuid=bot_uuid,
+            fact_key=params.get("fact_key", ""),
+            replaces_episode_id=params.get("replaces_episode_id", ""),
         )
 
         logger.info(

@@ -19,10 +19,11 @@ from components.tools.generate_image import (
     SENT,
     GenerateImage,
     _STATE_MESSAGES,
+    state_message,
 )
 from main import ImageGenerationError
 from pkg.image_context import query_claim_lock, remember_output, select_image
-from pkg.gif_output import prepare_prompt, prepare_context, finish, finish_asset
+from pkg.gif_output import prepare_prompt, prepare_context, finish, finish_asset, finish_static
 from qunling.assets import AssetError
 
 
@@ -65,12 +66,7 @@ class EditImage(Tool):
                 if not isinstance(variables, dict):
                     return GUARD_UNAVAILABLE
                 if QUERY_STATE_KEY in variables:
-                    state = variables[QUERY_STATE_KEY]
-                    return (
-                        _STATE_MESSAGES.get(state, GENERATING)
-                        if isinstance(state, str)
-                        else GENERATING
-                    )
+                    return state_message(variables)
                 if "asset_refs" in params:
                     from pkg.asset_input import select_assets
                     image = await select_assets(self.plugin, reply_api, params["asset_refs"])
@@ -112,18 +108,6 @@ class EditImage(Tool):
         if params.get("deliver", True) is False:
             await GenerateImage._record_state(reply_api, "asset_saved")
             return await finish_asset(context, result)
-        try:
-            await asyncio.wait_for(
-                reply_api.reply(
-                    MessageChain(
-                        [Image(base64=result.base64 or "", url=result.url or "")]
-                    )
-                ),
-                timeout=REPLY_TIMEOUT_SECONDS,
-            )
-        except Exception:
-            await GenerateImage._record_state(reply_api, "send_failed")
-            return SEND_FAILED
-        await GenerateImage._record_state(reply_api, "sent")
-        await remember_output(self.plugin, reply_api, result)
-        return SENT
+        return await finish_static(self.plugin, reply_api, context, result, QUERY_STATE_KEY,
+                                   sent_message=SENT, failed_message=SEND_FAILED,
+                                   timeout=REPLY_TIMEOUT_SECONDS)

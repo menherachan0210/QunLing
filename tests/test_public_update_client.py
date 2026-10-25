@@ -421,7 +421,8 @@ function element(id) {
     setAttribute(name, value) { this.attributes[name] = value; },
     getAttribute(name) { return this.attributes[name] ?? null; },
     removeAttribute(name) { delete this.attributes[name]; if (name === "src") this.src = ""; },
-    closest() { return element(this.id + "-card"); }
+    closest() { return element(this.id + "-card"); },
+    querySelectorAll() { return []; }
   });
   return nodes.get(id);
 }
@@ -453,7 +454,7 @@ const context = vm.createContext({
   },
   window: {confirm() { return true; }},
   URLSearchParams, AbortController, setTimeout, clearTimeout,
-  setInterval() {}, FormData: class { *[Symbol.iterator]() {} },
+  setInterval() {}, FormData: class { *[Symbol.iterator]() {} getAll() { return []; } },
   fetch: async(path, opts) => {
     if (offline) throw new Error("offline");
     if (path === "/api/status") setupCount += 1;
@@ -647,7 +648,7 @@ def test_browser_maintenance_summary_distinguishes_unknown_completed_and_failed(
   await vm.runInContext("poll()", context);
   assert.equal(element("cleanup-status").textContent, "自动维护正常");
   assert.match(element("cleanup-detail").textContent, /保留最近 2 次/);
-  assert.match(element("cleanup-detail").textContent, /清理 0 份历史备份、0 个镜像/);
+  assert.match(element("cleanup-detail").textContent, /清理 0 份历史记录、0 个镜像/);
   remote = {...remote, cleanup:{
     checked_at:"2026-10-21T01:02:03Z", status:"failed", warnings:["cleanup_inventory_failed"]
   }};

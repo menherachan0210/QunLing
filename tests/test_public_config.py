@@ -186,7 +186,7 @@ def test_configure_waits_after_put_before_creating_processors(monkeypatch):
 
     monkeypatch.setattr(
         setup, "wait_for_plugins_initialized",
-        lambda api: waiter(api, sleep=advance, clock=clock.monotonic),
+        lambda api, **kwargs: waiter(api, sleep=advance, clock=clock.monotonic, **kwargs),
     )
     result = run_configure(api)
     assert result["configured"]
@@ -203,7 +203,7 @@ def test_readiness_timeout_preserves_progress_and_retry_does_not_rewrite_plugins
     waiter = setup.wait_for_plugins_initialized
     monkeypatch.setattr(
         setup, "wait_for_plugins_initialized",
-        lambda api: waiter(api, timeout=3, sleep=clock.sleep, clock=clock.monotonic),
+        lambda api, **kwargs: waiter(api, timeout=3, sleep=clock.sleep, clock=clock.monotonic, **kwargs),
     )
     saved = []
     with pytest.raises(SetupError, match="等待插件启动超时"):
@@ -241,7 +241,8 @@ def test_empty_install_configures_distinct_model_roles_memory_processors_and_bot
         "at": True, "prefix": ["/ai"], "regexp": [], "random": 0.0,
     }
     assert pipeline["config"]["output"]["misc"]["quote-origin"] is True
-    assert pipeline["extensions_preferences"]["enable_all_plugins"] is True
+    assert pipeline["extensions_preferences"]["enable_all_plugins"] is False
+    assert {p["author"] + "/" + p["name"] for p in pipeline["extensions_preferences"]["plugins"]} == setup.PLUGINS
     memory = row(api, "/api/v1/knowledge/bases", result["memory_uuid"])
     assert memory["knowledge_engine_plugin_id"] == "langbot-team/LongTermMemory"
     assert memory["creation_settings"]["embedding_model_uuid"] == result["embedding_uuid"]
@@ -282,7 +283,10 @@ def test_rerun_reuses_resources_keeps_memories_and_preserves_custom_settings():
     runner = config["ai"]["runner_config"][setup.RUNNER]
     runner["knowledge-bases"].append("unrelated-memory-uuid")
     runner["prompt"].append({"role": "system", "content": "Synthetic custom instruction."})
+    runner["model"].update(fallbacks=["operator-fallback"], reasoning={"effort": "low"})
+    runner.update({"max-tool-iterations": 9, "timeout": 321, "box-enabled": True})
     bot = row(api, "/api/v1/platform/bots", first["bot_uuid"])
+    bot["enable"] = False
     bot["plugin_processors"].append({"processor_uuid": "unrelated-processor", "enabled": False})
     original_record = deepcopy(first)
     result = run_configure(api, record=first)
@@ -293,6 +297,10 @@ def test_rerun_reuses_resources_keeps_memories_and_preserves_custom_settings():
     config = row(api, "/api/v1/pipelines", result["pipeline_uuid"])["config"]
     assert config["trigger"]["group-respond-rules"]["prefix"] == ["/custom"]
     runner = config["ai"]["runner_config"][setup.RUNNER]
+    assert row(api, "/api/v1/platform/bots", first["bot_uuid"])["enable"] is False
+    assert runner["model"]["fallbacks"] == ["operator-fallback"]
+    assert runner["model"]["reasoning"] == {"effort": "low"}
+    assert runner["max-tool-iterations"] == 9 and runner["timeout"] == 321 and runner["box-enabled"] is True
     assert runner["knowledge-bases"].count(first["memory_uuid"]) == 1
     assert "unrelated-memory-uuid" in runner["knowledge-bases"]
     assert {"role": "system", "content": "Synthetic custom instruction."} in runner["prompt"]
@@ -375,7 +383,8 @@ def test_input_retains_saved_key_but_requires_complete_image_configuration():
     assert result["api_key"] == previous["api_key"]
     assert result["vision_model"] == result["search_model"] == result["chat_model"]
     with pytest.raises(SetupError):
-        settings(image_model="")
+        settings(image_model="", features=["image"])
+    assert settings(image_model="", features=[])["features"] == []
 
 
 @pytest.mark.parametrize("hours,messages", [(1, 100), (168, 1000), ("48", "750")])
@@ -457,6 +466,7 @@ def test_context_setting_persistence_and_redacted_status_roundtrip(tmp_path, mon
         tmp_path, "7zz",
     )
     manager.api = FakeLangBot()
+    monkeypatch.setattr("bootstrap.server.ensure_plugins", lambda *args, **kwargs: None)
     original = settings()
     manager._apply(original)
     manager.update(stage="ready", plugins_ready=True)
@@ -493,8 +503,8 @@ def test_public_settings_uses_allowlist_for_future_private_fields():
     public = setup.public_settings(config)
     assert set(public) == {
         "base_url", "chat_model", "vision_model", "image_model", "search_model", "decision_model", "api_key_saved",
-        "group_context_hours", "group_context_max_messages",
-    }
+        "group_context_hours", "group_context_max_messages", "features", "reconcile_model",
+    } | {role + suffix for role in setup.PROVIDER_ROLES for suffix in ("_base_url", "_api_key_saved")}
     assert public["api_key_saved"] is True
     assert "synthetic-private" not in json.dumps(public)
     assert config["api_key"] not in json.dumps(public)

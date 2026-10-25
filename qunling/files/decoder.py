@@ -135,7 +135,7 @@ class NativeArchive:
                 # An omitted -p prompts on stdin; a bare -p supplies an empty
                 # password. Never expose a supplied credential in process argv.
                 command = [self.decoder, operation, "-sccUTF-8", "-bd", "-bse2", "-bsp0",
-                           "-smemx512m", "-mmt=1", *(["-p"] if self._password is None else []),
+                           "-mmt=1", *(["-p"] if self._password is None else []),
                            "-t" + self.kind, *switches,
                            "--", str(archive)]
                 if member is not None:

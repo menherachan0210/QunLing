@@ -13,8 +13,16 @@ spec:
   parameters:
     type: object
     properties:
+      fact_key:
+        type: string
+        maxLength: 120
+        description: A stable key for this speaker's one specific fact. Use the same key for an explicit correction.
+      replaces_episode_id:
+        type: string
+        description: Exact existing episode ID to replace, only for an explicit correction by the same speaker and with the same fact_key. Omit if uncertain; tags or similarity alone never replace records.
       content:
         type: string
+        maxLength: 8000
         description: The information to remember. Be specific and factual.
       tags:
         type: array

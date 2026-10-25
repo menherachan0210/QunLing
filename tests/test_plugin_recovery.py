@@ -341,6 +341,23 @@ async def test_events_wait_for_enabled_workers_and_current_handler(monkeypatch):
         await runtime_health.wait_available(connector)
 
 
+@pytest.mark.asyncio
+async def test_managed_chat_can_start_while_unselected_optional_worker_is_broken(monkeypatch):
+    from contextlib import nullcontext
+    monkeypatch.setenv('QUNLING_DATA_DIR', '/synthetic-managed-deployment')
+    plugin = {'manifest': {'manifest': {'metadata': {'author': 'local', 'name': 'QQComicTranslator'}}},
+              'status': 'error'}
+    handler = NS(list_plugins=AsyncMock(return_value=[plugin]), installation_scope=Mock(return_value=nullcontext()))
+    connector = NS(handler=handler, _closing=False, _known_desired_states={'optional': NS(enabled=True, binding=object())})
+    monkeypatch.setattr(runtime_health, 'WORKER_READY_TIMEOUT', .02)
+    await runtime_health.wait_workers_ready(connector, handler)
+    assert connector._qunling_workers_ready is handler
+    plugin['manifest']['manifest']['metadata'] = {'author': 'langbot-team', 'name': 'LocalAgent'}
+    with pytest.raises(TimeoutError):
+        await runtime_health.wait_workers_ready(connector, handler)
+    assert connector._qunling_workers_ready is None
+
+
 @pytest.mark.parametrize('name,component', [
     ('sdk-transport-recovery.patch', 'sdk'), ('host-plugin-health.patch', 'host')])
 def test_upgrade_previous_complete_recovery_patch(tmp_path, name, component):
