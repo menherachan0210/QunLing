@@ -192,13 +192,10 @@ def inspect_configuration(state, api):
     config = pipeline["config"]
     require(config["ai"]["runner"]["id"] == RUNNER, "LocalAgent runner")
     runner = config["ai"]["runner_config"][RUNNER]
-    require(
-        runner["model"]["primary"] == chat["uuid"]
-        and runner["knowledge-bases"].count(memory["uuid"]) == 1
-        and runner["box-enabled"] is False
-        and runner["max-tool-iterations"] >= 24,
-        "runner bindings",
-    )
+    require(runner["model"]["primary"] == chat["uuid"], "runner primary model")
+    require(runner["knowledge-bases"].count(memory["uuid"]) == 1, "runner memory binding")
+    require(runner["box-enabled"] is False, "runner box disabled")
+    require(runner["max-tool-iterations"] >= 24, "runner initial tool budget")
     require(
         config["trigger"]["group-respond-rules"]
         == {

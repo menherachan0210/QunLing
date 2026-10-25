@@ -124,7 +124,10 @@ input::placeholder { color: #768197; opacity: 1; }
 input:hover { border-color: #c9cedd; }
 input:focus { outline: none; border-color: #9290ec; box-shadow: 0 0 0 3px #7370dc10; background: #fff; }
 input[type=number] { font-variant-numeric: tabular-nums; }
-#knowledge input[type=checkbox], #capabilities-form input[type=checkbox] { display: inline-block; width: 18px; height: 18px; padding: 0; margin: 0 8px 0 0; vertical-align: middle; accent-color: var(--accent); }
+#settings input[type=checkbox], #knowledge input[type=checkbox], #capabilities-form input[type=checkbox] { display: inline-block; width: 18px; height: 18px; padding: 0; margin: 0 8px 0 0; vertical-align: middle; accent-color: var(--accent); }
+#settings fieldset { min-width: 0; padding: 10px 0 0; }
+#settings fieldset legend { padding: 0 8px; margin-left: 8px; font-size: 14px; color: #566178; }
+#settings fieldset label { display: inline-flex; align-items: center; margin: 0 16px 12px 0; font-size: 14px; }
 #capabilities-form > label { display: block; margin: 10px 0; font-size: 14px; }
 #knowledge textarea { width: 100%; min-height: 120px; resize: vertical; padding: 10px 12px; border: 1px solid #e2e6ef; border-radius: 7px; overflow-wrap: anywhere; }
 #knowledge-open > form { margin-top: 18px; }

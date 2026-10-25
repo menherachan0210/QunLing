@@ -69,3 +69,23 @@ def test_migration_from_all_plugins_preserves_existing_third_party_tools():
     run_configure(api, settings(features=[]), record)
     assert pipeline['extensions_preferences']['plugins'] == [
         {'author': 'operator', 'name': 'custom'}, {'author': 'langbot-team', 'name': 'LocalAgent'}]
+
+
+def test_fresh_setup_replaces_upstream_defaults_but_restart_preserves_user_budget():
+    from bootstrap.configure import RUNNER
+    class WithUpstreamDefaults(FakeLangBot):
+        def call(self, method, path, data=None):
+            result = super().call(method, path, data)
+            if method == 'POST' and path == '/api/v1/pipelines':
+                pipeline = row(self, path, result['uuid'])
+                pipeline['config']['ai']['runner_config'][RUNNER] = {
+                    'max-tool-iterations': 10, 'box-enabled': True, 'timeout': 180}
+            return result
+    api = WithUpstreamDefaults()
+    record = run_configure(api)
+    runner = row(api, '/api/v1/pipelines', record['pipeline_uuid'])['config']['ai']['runner_config'][RUNNER]
+    assert runner['max-tool-iterations'] == 24 and runner['timeout'] == 600
+    assert runner['box-enabled'] is False
+    runner['max-tool-iterations'], runner['timeout'] = 9, 123
+    run_configure(api, record=record)
+    assert runner['max-tool-iterations'] == 9 and runner['timeout'] == 123

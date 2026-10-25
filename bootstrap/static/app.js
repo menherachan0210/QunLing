@@ -260,10 +260,13 @@ function renderProactiveRuntime() {
       const usage = group?.performance?.usage?.stages;
       const counters = usage ? Object.entries(labels).flatMap(([key, label]) => {
         const item = usage[key];
-        return item && Number.isSafeInteger(item.with_usage) && item.with_usage > 0
+        return item && Number.isSafeInteger(item.requests) && item.requests > 0
           ? [`${label}已知输入/输出 ${item.input_tokens}/${item.output_tokens} token（${item.unknown_usage} 次用量未知${Number.isFinite(item.estimated_cost) ? `，估算费用 ${item.estimated_cost}` : "，费用未配置或不完整"}）`] : [];
       }) : [];
-      text("proactive-runtime-detail", detail + " 近一小时调用（重启后重计，含准备耗时）：" + [...parts, ...counters].join("；") + "。");
+      const members = Object.entries(group?.performance?.usage?.members || {})
+        .sort((a, b) => b[1].requests - a[1].requests).slice(0, 8)
+        .map(([member, item]) => `成员 ${member}：${item.requests} 次，已知输入/输出 ${item.input_tokens}/${item.output_tokens} token，${item.unknown_usage} 次用量未知`);
+      text("proactive-runtime-detail", detail + " 近一小时调用（重启后重计，含准备耗时）：" + [...parts, ...counters, ...members].join("；") + "。");
     }
   }
   for (const key of ["judgments_hour", "judgments_day", "replies_hour", "replies_day"]) {

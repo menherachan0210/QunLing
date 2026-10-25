@@ -515,9 +515,11 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
             ),
         }
     )
-    runner.setdefault("box-enabled", False)
-    runner.setdefault("max-tool-iterations", 24)
-    runner.setdefault("timeout", 600)
+    for key, default in (("box-enabled", False), ("max-tool-iterations", 24), ("timeout", 600)):
+        if not record.get("configured"):
+            runner[key] = default
+        else:
+            runner.setdefault(key, default)
     prompts = [
         p
         for p in runner.get("prompt", [])
