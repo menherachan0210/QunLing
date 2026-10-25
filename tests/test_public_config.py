@@ -504,7 +504,7 @@ def test_public_settings_uses_allowlist_for_future_private_fields():
     assert set(public) == {
         "base_url", "chat_model", "vision_model", "image_model", "search_model", "decision_model", "api_key_saved",
         "group_context_hours", "group_context_max_messages", "features", "reconcile_model",
-    } | {role + suffix for role in setup.PROVIDER_ROLES for suffix in ("_base_url", "_api_key_saved")}
+    } | set(setup.TOOL_CHOICES) | set(setup.TOOL_LIMITS) | {role + suffix for role in setup.PROVIDER_ROLES for suffix in ("_base_url", "_api_key_saved")}
     assert public["api_key_saved"] is True
     assert "synthetic-private" not in json.dumps(public)
     assert config["api_key"] not in json.dumps(public)

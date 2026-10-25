@@ -31,6 +31,42 @@ FEATURE_PLUGINS = {
     "comic": {"local/QQComicTranslator", "local/QQTextReader", "local/QQGroupContext"},
 }
 PROVIDER_ROLES = ("vision", "image", "search", "decision", "reconcile")
+TOOL_CHOICES = {
+    "image_size": ("1024x1024", {"1024x1024", "1280x1280", "768x1280", "1280x768", "720x1280", "1280x720", "1024x768", "768x1024"}),
+    "image_quality": ("auto", {"auto", "low", "medium", "high", "xhigh", "max"}),
+}
+TOOL_LIMITS = {"image_timeout_seconds": (300, 30, 300), "search_timeout_seconds": (65, 30, 90)}
+
+
+def legacy_search_settings(values):
+    """Migrate the previously deployed shared/independent selector explicitly."""
+    values = dict(values)
+    mode = values.pop("search_provider", None)
+    if mode is not None and (not isinstance(mode, str) or mode not in {"shared", "independent"}):
+        raise SetupError("搜索服务选项无效。")
+    if mode == "shared":
+        values.update(search_base_url="", search_api_key="")
+    elif mode == "independent" and not values.get("search_base_url"):
+        raise SetupError("独立搜索服务需要填写地址。")
+    return values
+
+
+def tool_settings(values, previous=None):
+    previous = previous or {}
+    result = {}
+    for key, (default, choices) in TOOL_CHOICES.items():
+        value = values.get(key, previous.get(key, default))
+        if not isinstance(value, str) or value not in choices:
+            raise SetupError("图片尺寸或画质选项无效。")
+        result[key] = value
+    for key, (default, minimum, maximum) in TOOL_LIMITS.items():
+        value = values.get(key, previous.get(key, default))
+        if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 3:
+            value = int(value)
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise SetupError(f"工具请求超时需为 {minimum}–{maximum} 秒之间的整数。")
+        result[key] = value
+    return result
 
 
 def enabled_plugins(config):
@@ -87,6 +123,9 @@ def group_context_settings(values, previous=None):
 def settings_from_input(values, previous=None):
     if not isinstance(values, dict):
         raise SetupError("请填写 AI 配置。")
+    values = legacy_search_settings(values)
+    if previous:
+        previous = legacy_search_settings(previous)
     previous = previous or {}
     text_fields = {
         "base_url",
@@ -99,7 +138,7 @@ def settings_from_input(values, previous=None):
         "reconcile_model",
     }
     text_fields.update(role + suffix for role in PROVIDER_ROLES for suffix in ("_base_url", "_api_key"))
-    allowed = text_fields | GROUP_CONTEXT_SETTINGS.keys() | {"features"}
+    allowed = text_fields | GROUP_CONTEXT_SETTINGS.keys() | TOOL_CHOICES.keys() | TOOL_LIMITS.keys() | {"features"}
     if set(values) - allowed:
         raise SetupError("包含不支持的配置项。")
     config = {}
@@ -170,15 +209,18 @@ def settings_from_input(values, previous=None):
     config["decision_model"] = config["decision_model"] or config["chat_model"]
     config["reconcile_model"] = config["reconcile_model"] or config["chat_model"]
     config.update(group_context_settings(values, previous))
+    config.update(tool_settings(values, previous))
     return config
 
 
 def public_settings(config):
+    config = legacy_search_settings(config)
     fields = {"base_url", "chat_model", "vision_model", "image_model", "search_model", "decision_model", "reconcile_model", "features"}
     fields.update(role + "_base_url" for role in PROVIDER_ROLES)
     return {
         **{k: v for k, v in config.items() if k in fields},
         **group_context_settings(config),
+        **tool_settings(config),
         "api_key_saved": bool(config.get("api_key")),
         **{role + "_api_key_saved": bool(config.get(role + "_api_key")) for role in PROVIDER_ROLES},
     }
@@ -552,9 +594,9 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
             "api_base_url": config["base_url"],
             "openai_api_key": config["api_key"],
             "model_name": config["image_model"],
-            "image_size": "1024x1024",
-            "quality": "auto",
-            "request_timeout_seconds": 300,
+            "image_size": config["image_size"],
+            "quality": config["image_quality"],
+            "request_timeout_seconds": config["image_timeout_seconds"],
             "history_hours": config["group_context_hours"],
             "history_max_messages": config["group_context_max_messages"],
         },
@@ -563,7 +605,7 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
             "api_key": config["api_key"],
             "model_name": config["search_model"],
             "vision_model_uuid": model_ids["vision_model"],
-            "request_timeout_seconds": 65,
+            "request_timeout_seconds": config["search_timeout_seconds"],
         },
         "local/QQGroupContext": {
             "model_uuid": model_ids["vision_model"],

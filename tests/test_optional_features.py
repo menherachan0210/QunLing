@@ -89,3 +89,21 @@ def test_fresh_setup_replaces_upstream_defaults_but_restart_preserves_user_budge
     runner['max-tool-iterations'], runner['timeout'] = 9, 123
     run_configure(api, record=record)
     assert runner['max-tool-iterations'] == 9 and runner['timeout'] == 123
+
+
+@pytest.mark.parametrize('mode', ['shared', 'independent'])
+def test_legacy_production_tool_settings_are_migrated_without_losing_preferences(mode):
+    values = settings(image_size='768x1280', image_quality='high', image_timeout_seconds=210,
+                      search_timeout_seconds=75, search_base_url='https://search.example/v1',
+                      search_api_key='synthetic-search')
+    values['search_provider'] = mode
+    migrated = settings_from_input(values)
+    assert 'search_provider' not in migrated
+    assert role_settings(migrated, 'search')['base_url'] == (
+        'https://search.example/v1' if mode == 'independent' else values['base_url'])
+    api = FakeLangBot()
+    run_configure(api, migrated)
+    image = api.configs['langbot-team/AIImagePlugin']
+    assert (image['image_size'], image['quality'], image['request_timeout_seconds']) == ('768x1280', 'high', 210)
+    assert api.configs['local/QQWebSearch']['request_timeout_seconds'] == 75
+    assert settings_from_input({'chat_model':'updated'}, migrated)['image_quality'] == 'high'

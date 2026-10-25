@@ -166,7 +166,7 @@ async function api(path, body, timeout = 15000) {
 function controls() {
   const updating = updateAction || Boolean(updateExpected) || Boolean(updateState?.busy);
   $("save").disabled = !authenticated || configAction || proactiveAction || updating || !setupState || ["starting", "configuring"].includes(setupState.stage);
-  text("save-label", configAction || setupState?.stage === "configuring" ? "正在应用配置…" : "保存并启用");
+  text("save-label", configAction || setupState?.stage === "configuring" ? "正在应用配置…" : "保存所选功能");
   $("check-update").disabled = !authenticated || updating || !updateState?.available;
   $("apply-update").disabled = !authenticated || configAction || proactiveAction || updating || !updateState?.available || !updateState.update_available || !updateState.latest_revision || !setupState || ["starting", "configuring"].includes(setupState.stage);
   $("refresh").disabled = !authenticated || qrAction || updating || !setupState || qqHealth(setupState).loggedIn;

@@ -225,6 +225,7 @@ class SetupManager:
         self._record_qq("waiting_login")
 
     def _apply(self, config):
+        config = settings_from_input(config)
         record = self.state.read(default={})
         selected = enabled_plugins(config)
         ensure_plugins(self.api, self.packages, lambda text: self.update(message=text), identities=selected)

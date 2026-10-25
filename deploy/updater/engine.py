@@ -427,7 +427,9 @@ class UpdateEngine:
             try:
                 status = self.wizard_status()
                 if status.get("stage") == "error":
-                    raise UpdateError("新版插件或配置初始化失败。")
+                    detail = status.get("message", "")
+                    detail = detail[:500] if isinstance(detail, str) else ""
+                    raise UpdateError("新版插件或配置初始化失败。" + detail)
                 if (status.get("plugins_ready") is True and status.get("configured") is True
                         and status.get("plugin_runtime_healthy") is True
                         and status.get("stage") in {"ready", "waiting_qq"}):
@@ -547,6 +549,8 @@ class UpdateEngine:
                          message="更新完成。QQ 如需重新确认登录，请在上方扫码。",
                          latest_revision=job["revision"], completed_at=now())
         except Exception as exc:
+            job["failure_reason"] = str(exc)[:1000] if isinstance(exc, UpdateError) else "更新执行失败：" + type(exc).__name__
+            write(directory / "job.json", job)
             try:
                 if job.get("services_stopped"):
                     phase("rolling_back", "更新未完成，正在恢复旧版服务；业务数据不会回退。"
