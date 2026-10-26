@@ -49,6 +49,7 @@ spec:
       - value
 
   llm_prompt: |
+    In QQ groups, lasting agreements about WHEN the bot may reply (such as only when actually mentioned) must use reply_preference when available. Profile storage cannot enforce participation; do not claim that recording it here activates a reply restriction. Current group personality/default style remains the only source of tone.
     Update the session profile — shared context about this conversation (group chat or private chat).
     Profile memory is L1: use it for stable, low-frequency, currently valid facts.
     This tool can update either:

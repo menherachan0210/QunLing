@@ -1,0 +1,12 @@
+[
+  {"name":"own_no_mention", "text":"以后我不@你，你就别接我的话，@了再正常回。记住这个。", "mode":"mention_only"},
+  {"name":"own_paraphrase", "text":"咱约好了啊，今后我在群里闲扯的时候别搭腔，我点你的QQ提醒你了你再说。", "mode":"mention_only"},
+  {"name":"own_cancel", "text":"前面不@就别回我的那个约定取消，之后正常聊就行。", "mode":"normal", "existing":"mention_only"},
+  {"name":"own_condition", "text":"以后我和其他人对线时别掺和，只有我主动问你意见你再接话，把这条留着。", "mode":"conditional"},
+  {"name":"technical_discussion", "text":"我想做的很简单，用自然语言给AI两个长期逻辑判断：回消息前判断发消息的是不是CCCD，消息里有没有@AI。", "mode":null},
+  {"name":"third_person", "text":"以后CCCD没@你你就别回他，我替他要求的。", "mode":null},
+  {"name":"quoted_example", "text":"他上次说“以后我没@你就别回我”，这种话你能理解吗？", "mode":null},
+  {"name":"no_change_smalltalk", "text":"还以为你又不理我了，今天这游戏给我气笑了。", "mode":null},
+  {"name":"blocked_followup", "text":"@机器人 你怎么不说话了，我改了个昵称。", "mode":null, "existing":"mention_only", "action":"silence"},
+  {"name":"conditional_not_met", "text":"小王你昨晚那操作又送了吧，我是在跟小王说话。", "mode":null, "existing":"conditional", "rule":"仅在我主动询问机器人意见时参与。", "action":"silence"}
+]

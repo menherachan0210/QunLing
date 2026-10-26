@@ -118,6 +118,10 @@ async def replay(case, provider, label):
              enable=True, execution_context=execution, adapter=NS(bot_account_id="10000"))
     bridge = host.HostBridge.__new__(host.HostBridge)
     bridge.bot, bridge._received_at = bot, {}
+    bridge._preference_versions, bridge._preference_subjects = {}, {}
+    bridge.store = NS(read_valid=True, read=lambda: {'revision': 'synthetic', 'enabled': True,
+        'groups': {group_id: {'mode': mode}}})
+    bridge._active = AsyncMock()
     bridge.engine = NS(context_metadata=lambda group, history, participant, reply_to: metadata(
         bot_id, group, history, participant_id=participant, reply_to=reply_to, ignored_terms=("群灵",)))
     bridge.decision_timeout = bridge.reply_timeout = 90
@@ -155,6 +159,9 @@ async def replay(case, provider, label):
     result = {"id": case["id"], "criteria": case["criteria"], "label": label, "turns": []}
     with patch.object(group_memory, "recall_group_memory", AsyncMock(return_value={})), \
             patch.object(knowledge_host, "recall", AsyncMock(return_value={})), \
+            patch.object(host.reply_preferences, "get", side_effect=lambda scope, sender: {
+                "sender_id": sender, "mode": "normal", "rule": "", "revision": "0"}), \
+            patch.object(host.reply_preferences, "save", side_effect=RuntimeError("Style replay cannot persist member agreements")), \
             patch.object(host, "_shared_knowledge", return_value=evidence), \
             patch.object(host, "_bridge", return_value=bridge):
         for turn_index in range(1 + len(case.get("followups", []))):

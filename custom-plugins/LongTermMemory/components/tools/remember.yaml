@@ -54,7 +54,7 @@ spec:
 
     Do NOT use this for stable identity information — use "update_profile" instead:
     - Name, job title, personality traits → update_profile
-    - Communication preferences → update_profile
+    - Stable personal preferences → update_profile; participation agreements about when to reply → reply_preference when available
 
     Do NOT store:
     - one-off greetings, jokes, or small talk

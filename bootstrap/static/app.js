@@ -1293,7 +1293,7 @@ function clearMemoryView() {
   memorySequence += 1;
   memorySelected = null; memoryDirty = false; memoryGroup = ""; memoryOffset = 0; memoryNext = null;
   $("memory-list").replaceChildren(); $("memory-editor").hidden = true;
-  for (const id of ["memory-name", "memory-traits", "memory-preferences", "memory-notes", "memory-content"]) $(id).value = "";
+  for (const id of ["memory-name", "memory-traits", "memory-preferences", "memory-notes", "memory-content", "memory-reply-rule"]) $(id).value = "";
   $("memory-prev").hidden = $("memory-next").hidden = true;
   text("memory-note", "点击查询读取本群记忆。");
 }
@@ -1303,7 +1303,7 @@ function leaveMemory() {
   return true;
 }
 function memoryControls() {
-  for (const id of ["memory-save", "memory-delete", "memory-cancel", "memory-name", "memory-traits", "memory-preferences", "memory-notes", "memory-content", "memory-refresh", "memory-prev", "memory-next", "memory-export", "memory-kind", "memory-query"]) {
+  for (const id of ["memory-save", "memory-delete", "memory-cancel", "memory-name", "memory-traits", "memory-preferences", "memory-notes", "memory-content", "memory-refresh", "memory-prev", "memory-next", "memory-export", "memory-kind", "memory-query", "memory-reply-mode", "memory-reply-rule"]) {
     $(id).disabled = memoryBusy || !authenticated;
   }
   $("memory-save").disabled ||= !memoryDirty;
@@ -1312,12 +1312,15 @@ function openMemory(item) {
   if (memoryBusy || memoryDirty && !window.confirm("放弃当前记忆的未保存修改，打开另一条？")) return;
   memorySelected = {...item, group: proactiveSelected}; memoryDirty = false;
   $("memory-editor").hidden = false;
-  text("memory-editor-title", item.kind === "profile" ? "编辑「" + item.title + "」" : "编辑长期事件记忆");
+  text("memory-editor-title", item.kind !== "episode" ? "编辑「" + item.title + "」" : "编辑长期事件记忆");
+  $("memory-interaction-fields").hidden = item.kind !== "interaction";
   $("memory-profile-fields").hidden = item.kind !== "profile";
   $("memory-episode-fields").hidden = item.kind !== "episode";
   if (item.kind === "profile") {
     for (const [id, field] of [["memory-name", "name"], ["memory-traits", "traits"], ["memory-preferences", "preferences"], ["memory-notes", "notes"]])
       $(id).value = Array.isArray(item.value[field]) ? item.value[field].join("\n") : item.value[field] || "";
+  } else if (item.kind === "interaction") {
+    $("memory-reply-mode").value = item.value.mode; $("memory-reply-rule").value = item.value.rule;
   } else $("memory-content").value = item.value;
   text("memory-editor-message", "修改只影响这条记忆。保存前会检查它是否被更新。"); tone("memory-editor-message", "neutral");
   memoryControls();
@@ -1335,9 +1338,9 @@ async function loadMemory(offset = 0) {
     if (!authenticated || epoch !== authEpoch || group !== proactiveSelected || sequence !== memorySequence) return;
     for (const item of data.items || []) {
       const row = requestNode("article", ""); row.className = "memory-row";
-      const button = requestNode("button", (item.kind === "profile" ? "资料 · " : "事件 · ") + item.title);
+      const button = requestNode("button", ({profile: "资料 · ", interaction: "互动约定 · ", episode: "事件 · "}[item.kind] || "") + item.title);
       button.type = "button"; button.className = "memory-open"; button.addEventListener("click", () => openMemory(item));
-      const preview = item.kind === "profile" ? [item.value.name, ...(item.value.traits || []), ...(item.value.preferences || []), item.value.notes].filter(Boolean).join(" · ") : item.value;
+      const preview = item.kind === "profile" ? [item.value.name, ...(item.value.traits || []), ...(item.value.preferences || []), item.value.notes].filter(Boolean).join(" · ") : item.kind === "interaction" ? ({mention_only: "仅真正 @ 时回复", conditional: "按接话条件判断"}[item.value.mode] || "正常参与") + " · " + item.value.rule : item.value;
       const status = {active: "使用中", superseded: "已被新记忆替代", archived: "已归档", deleted: "已停用"};
       row.append(button, requestNode("p", preview.slice(0, 240)), requestNode("small", [item.updated_at, status[item.status]].filter(Boolean).join(" · ")));
       $("memory-list").append(row);
@@ -1355,13 +1358,13 @@ async function changeMemory(action) {
   if (action === "delete" && !window.confirm(`删除「${item.title}」这条记忆？此操作不可撤销。`)) return;
   const epoch = authEpoch;
   const body = {group_id: item.group, action, kind: item.kind, revision: item.revision};
-  if (item.kind === "profile") body.sender_id = item.sender_id;
+  if (item.kind !== "episode") body.sender_id = item.sender_id;
   else { body.collection_id = item.collection_id; body.id = item.id; }
   if (action === "save") body.value = item.kind === "profile" ? {
     name: $("memory-name").value, notes: $("memory-notes").value,
     traits: $("memory-traits").value.split("\n").map(value => value.trim()).filter(Boolean),
     preferences: $("memory-preferences").value.split("\n").map(value => value.trim()).filter(Boolean)
-  } : $("memory-content").value;
+  } : item.kind === "interaction" ? {mode: $("memory-reply-mode").value, rule: $("memory-reply-mode").value === "normal" ? "" : $("memory-reply-rule").value} : $("memory-content").value;
   memoryBusy = proactiveAction = true; controls(); memoryControls();
   text("memory-editor-message", action === "save" ? "正在保存这条记忆…" : "正在删除这条记忆…");
   let success = false;
@@ -1387,7 +1390,7 @@ async function exportMemory() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], {type: "application/json;charset=utf-8"}));
     const link = document.createElement("a"); link.href = url; link.download = `qunling-memory-${group}-${new Date().toISOString().slice(0, 10)}.json`;
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-    text("memory-note", `已导出 ${data.count} 条记忆。文件包含本群资料和长期事件，不含性格设置或 QQ 历史消息。`);
+    text("memory-note", `已导出 ${data.count} 条记忆及 ${(data.reply_preferences || []).length} 条互动约定。文件不含性格设置或 QQ 历史消息。`);
   } catch (error) { if (authenticated && epoch === authEpoch && group === proactiveSelected) text("memory-note", error.message); }
   finally { memoryBusy = false; memoryControls(); }
 }
@@ -1401,7 +1404,7 @@ $("memory-save").addEventListener("click", () => changeMemory("save"));
 $("memory-delete").addEventListener("click", () => changeMemory("delete"));
 $("memory-cancel").addEventListener("click", () => { if (leaveMemory()) loadMemory(); });
 $("memory-export").addEventListener("click", exportMemory);
-for (const id of ["memory-name", "memory-traits", "memory-preferences", "memory-notes", "memory-content"]) $(id).addEventListener("input", () => { memoryDirty = true; memoryControls(); });
+for (const id of ["memory-name", "memory-traits", "memory-preferences", "memory-notes", "memory-content", "memory-reply-rule", "memory-reply-mode"]) $(id).addEventListener("input", () => { memoryDirty = true; memoryControls(); });
 
 const taskStatuses = {pending:"排队中", running:"处理中", waiting:"等待继续", partial:"部分完成", completed:"处理完成", failed:"处理失败", cancelled:"已取消"};
 const deliveryStatuses = {not_scheduled:"未安排自动发送", queued:"等待发送", claimed:"等待发送", started:"正在发送", sent:"QQ 发送已确认", unconfirmed:"QQ 发送未确认", cancelled:"发送已取消", failed:"发送失败", expired:"发送已过期"};

@@ -64,6 +64,7 @@ class QueryContext:
     shown_images: set[str] = field(default_factory=set)
     shown_messages: dict[str, dict] = field(default_factory=dict, repr=False)
     current_question: str = field(default="", repr=False)
+    reply_preference_revision: str | None = None
     vision_used: bool = False
     vision_inflight: bool = False
     image_read_attempts: int = 0
@@ -152,6 +153,13 @@ class ContextStore:
             int(source.time.timestamp()),
             self.clock(),
         )
+        if binding is not None:
+            try:
+                from qunling import reply_preferences
+                item.reply_preference_revision = reply_preferences.get(
+                    reply_preferences.key(binding, item.bot, item.group), item.sender)["revision"]
+            except Exception:
+                pass  # Keep unrelated context tools available; preference writes fail closed.
         self.prune()
         while len(self.entries) >= 256:
             victim = next(

@@ -184,6 +184,8 @@ def purge_cached(ap, runtime, bridge, group):
     context, bot = runtime.execution_context, str(runtime.bot_entity.uuid)
     clear_group(workspace_id=group_reset.scope(context, bot, group)[0], bot_id=bot, group_id=group)
     clear_batches(group_reset.scope(context, bot, group)[0], bot, group)
+    from qunling.reply_preferences import clear_group as clear_preferences
+    clear_preferences(group_reset.scope(context, bot, group))
     from qunling.qq_operation_store import OperationStore, scope_key
     OperationStore().clear_events(scope_key(context.instance_uuid, context.workspace_uuid, bot), f"group:{group}")
     bridge.engine.reset_group_context(group)
@@ -191,6 +193,10 @@ def purge_cached(ap, runtime, bridge, group):
         for key in list(mapping):
             if key[0] == group:
                 mapping.pop(key, None)
+    for key in list(getattr(bridge, "_preference_versions", {})):
+        if key[0] == group:
+            bridge._preference_versions.pop(key, None)
+            getattr(bridge, "_preference_subjects", {}).pop(key, None)
     dispatch = getattr(ap, "_qq_dispatch", None)
     if dispatch:
         for key, record in list(dispatch.continuations.items()):

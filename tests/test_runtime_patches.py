@@ -281,7 +281,8 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("host-group-memory-reset.patch", "host", False) in patcher.PATCHES
     assert ("host-admin-console.patch", "host", False) in patcher.PATCHES
     assert ("host-qq-actions.patch", "host", False) in patcher.PATCHES
-    assert len(names) == 36
+    assert ("host-reply-preferences.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 37
     assert "host-model-usage.patch" in names
     assert {"host-web-knowledge.patch", "host-memory-recall.patch"} <= names
     assert "host-animation-vision.patch" in names

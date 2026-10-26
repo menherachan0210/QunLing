@@ -77,6 +77,8 @@ def continuation_tool_allowed(name, parameters=None):
         return continuation_allowed(parameters)
     if not isinstance(parameters, dict):
         return False
+    if name == "reply_preference":
+        return parameters == {"action": "get"}
     if name == "file_workspace":
         return (set(parameters) <= {"operation", "arguments", "deliver"}
                 and parameters.get("operation") in {"list", "import", "inspect", "read", "search", "extract"}
@@ -282,6 +284,8 @@ async def forward_ingress(ap, arguments):
 
 
 async def _authorized_notice(ap, query):
+    if not await delivery_allowed(query):
+        raise RuntimeError("Member participation preference disallows this response")
     from langbot.pkg.pipeline.pool import get_query_execution_context
     from langbot.pkg.core.task_boundary import run_in_workspace_uow
     ctx = get_query_execution_context(query)
@@ -631,6 +635,7 @@ async def intercept_add(pool, arguments):
                 replacement = query.message_chain
                 query.message_chain = original
             if continuation is not None:
+                _attr(query, "_qq_continuation", continuation)
                 await _authorized_notice(ap, query)
                 if not await _validate_grant(continuation, query):
                     raise RuntimeError("QQ continuation authorization changed")
@@ -651,6 +656,8 @@ async def intercept_add(pool, arguments):
         service.preparing.pop(sequence, None)
         service.observation_changed.set()
         raise
+    if matched and continuation is None and not await delivery_allowed(query):
+        matched = False
     if not matched:
         service.preparing.pop(sequence, None)
         completion = service.observe(query, pipeline)
@@ -766,6 +773,32 @@ def stage_progress(query):
         task.changed = time.monotonic()
 
 
+async def delivery_allowed(query):
+    """Recheck genuine mentions/continuation grants for replies and notices."""
+    grant = getattr(query, '_qq_continuation', None)
+    if grant is not None and not await _validate_grant(grant, query):
+        return False
+    from qunling import reply_preferences as preferences
+    # Other platforms and unconfigured standalone hosts retain their behavior.
+    if not os.environ.get('QUNLING_DATA_DIR') or not (preferences.data_root() / 'reply-preferences.sqlite3').exists():
+        return True
+    runtime = getattr(getattr(query, 'adapter', None), '_runtime', None)
+    if (runtime is None or getattr(getattr(runtime, 'bot_entity', None), 'adapter', None) != 'onebot-v11'
+            or getattr(query.launcher_type, 'value', query.launcher_type) != 'group'):
+        return True
+    try:
+        record = preferences.get(preferences.key(runtime.execution_context, str(query.bot_uuid), str(query.launcher_id)),
+                                 str(query.sender_id))
+        chain = getattr(query.message_event, 'message_chain', ())
+        mentioned = any(getattr(part, 'type', None) == 'At'
+                        and str(part.target) == str(query.adapter.bot_account_id) for part in chain)
+        if grant is not None:
+            return True  # Host grant already checked the full rule and frozen revision.
+        return mentioned or record['mode'] == 'normal'
+    except Exception:
+        return False
+
+
 async def preflight(query, operation):
     grant = getattr(query, "_qq_continuation", None)
     if grant is not None and not await _validate_grant(grant, query):
@@ -802,7 +835,9 @@ async def run_pipeline(ap, query, pipeline):
             journal.record(query, 'running')
             object.__setattr__(query, '_request_phase', 'running')
             await pipeline.run(query)
-        if query.variables.get("_monitoring_has_error") and not (getattr(query, "_qq_delivery_confirmed", False) or getattr(query, "_qq_action_confirmed", False)):
+        if getattr(query, '_qq_reply_suppressed', False):
+            journal.record(query, 'ended', status='processed', reason='member_reply_preference')
+        elif query.variables.get("_monitoring_has_error") and not (getattr(query, "_qq_delivery_confirmed", False) or getattr(query, "_qq_action_confirmed", False)):
             reason = ('delivery_unconfirmed' if getattr(query, '_qq_delivery_attempted', False)
                       else getattr(query, '_request_error', 'pipeline_failed'))
             journal.record(query, 'ended', status='unconfirmed' if reason=='delivery_unconfirmed' else 'failed', reason=reason)

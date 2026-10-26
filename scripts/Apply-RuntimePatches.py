@@ -54,6 +54,7 @@ PATCHES = (
     ("host-group-memory-reset.patch", "host", False),
     ("host-admin-console.patch", "host", False),
     ("host-qq-actions.patch", "host", False),
+    ("host-reply-preferences.patch", "host", False),
     ("sdk-image-tool-timeout.patch", "sdk", False),
     ("sdk-dedicated-background.patch", "sdk", False),
     ("sdk-windows-dependency-temp.patch", "sdk", True),

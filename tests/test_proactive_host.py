@@ -461,24 +461,24 @@ async def test_group_topic_can_answer_another_participant_and_recall_their_group
     from qunling.proactive.engine import ConversationContext, Decision, Message
 
     messages = (
-        Message("bot", "30000", "a", "alice", "周末一起去看电影吧", time.time()),
-        Message("bot", "30000", "b", "bob", "那预算多少合适", time.time()),
+        Message("bot", "30000", "a", "20001", "周末一起去看电影吧", time.time()),
+        Message("bot", "30000", "b", "20002", "那预算多少合适", time.time()),
     )
     context = ConversationContext("bot", "30000", "active", "", messages, (), "", None, None,
-                                  participant_id="alice", reply_candidate_ids=("a", "b"),
+                                  participant_id="20001", reply_candidate_ids=("a", "b"),
                                   focus_message_ids=("a", "b"))
-    memory = {"group_id": "30000", "participant_id": "bob", "records": [
-        {"speaker_id": "bob", "text": "我喜欢看动画电影", "timestamp": 1},
+    memory = {"group_id": "30000", "participant_id": "20002", "records": [
+        {"speaker_id": "20002", "text": "我喜欢看动画电影", "timestamp": 1},
     ]}
     recall = AsyncMock(return_value=memory)
     monkeypatch.setattr(group_memory, "recall_group_memory", recall)
     bridge._complete = AsyncMock(return_value=json.dumps({"action": "reply", "text": "你们可以先选场次，再看票价。"}))
 
     assert await bridge.generate(context, Decision("reply", "b")) == "你们可以先选场次，再看票价。"
-    recall.assert_awaited_once_with(bridge.bot, "30000", "bob", "那预算多少合适")
+    recall.assert_awaited_once_with(bridge.bot, "30000", "20002", "那预算多少合适")
     _, payload = bridge._complete.await_args.args
     assert payload["dialogue"]["observations"]["memory"] == memory
-    assert payload["dialogue"]["target"]["sender_id"] == "bob"
+    assert payload["dialogue"]["target"]["sender_id"] == "20002"
     assert payload["output"]["tools_available"] is False
 
 

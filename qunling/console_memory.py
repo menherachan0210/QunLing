@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
+from datetime import datetime, timezone
 
 from qunling import group_reset
 from qunling.group_reset_host import MemoryResetError
@@ -17,16 +19,16 @@ def validate(values):
     if action == 'list':
         allowed = common | {'query', 'kind', 'offset'}
         if (not isinstance(values.get('query', ''), str) or len(values.get('query', '')) > 100
-                or values.get('kind', 'all') not in {'all', 'profile', 'episode'}
+                or values.get('kind', 'all') not in {'all', 'profile', 'episode', 'interaction'}
                 or type(values.get('offset', 0)) is not int or not 0 <= values.get('offset', 0) <= 5000):
             raise ValueError('Invalid memory filters')
     elif action == 'export':
         allowed = common
     elif action in {'save', 'delete'}:
         allowed = common | {'kind', 'sender_id', 'collection_id', 'id', 'revision', 'value'}
-        if values.get('kind') not in {'profile', 'episode'} or not re.fullmatch(r'[a-f0-9]{64}', str(values.get('revision', ''))):
+        if values.get('kind') not in {'profile', 'episode', 'interaction'} or not re.fullmatch(r'[a-f0-9]{64}', str(values.get('revision', ''))):
             raise ValueError('Invalid memory revision')
-        if values['kind'] == 'profile':
+        if values['kind'] in {'profile', 'interaction'}:
             if not re.fullmatch(r'[0-9]{0,20}', str(values.get('sender_id', ''))):
                 raise ValueError('Invalid speaker')
         elif any(not isinstance(values.get(key), str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,128}', values[key]) for key in ('collection_id', 'id')):
@@ -58,8 +60,33 @@ async def manage(ap, context, bot, values):
         boundary = group_reset.boundary(key)
         if boundary and boundary['pending']:
             raise MemoryResetError('memory_busy', '整群清空尚未完成，请先重试清空。')
+        from qunling import reply_preferences as preferences
+        if values.get('kind') == 'interaction' and values['action'] in {'save', 'delete'}:
+            value = values.get('value', {}) if values['action'] == 'save' else {'mode': 'normal', 'rule': ''}
+            if not isinstance(value, dict) or set(value) != {'mode', 'rule'}:
+                raise ValueError('Invalid interaction preference')
+            try:
+                preferences.save(key, values['sender_id'], **value, expected_revision=values['revision'],
+                                 source_message_id='admin', source_time=time.time())
+            except preferences.PreferenceError as exc:
+                raise MemoryResetError('memory_conflict', str(exc), 409) from None
+            return {'group_id': group, 'saved' if values['action'] == 'save' else 'deleted': True}
+        entries = []
+        if values['action'] in {'list', 'export'} and values.get('kind', 'all') in {'all', 'interaction'}:
+            for row in preferences.list_group(key):
+                entries.append({'kind': 'interaction', 'sender_id': row['sender_id'], 'title': '成员 ' + row['sender_id'],
+                    'value': {'mode': row['mode'], 'rule': row['rule']}, 'revision': row['revision'], 'status': 'active',
+                    'updated_at': datetime.fromtimestamp(row['updated_at'], timezone.utc).isoformat()})
+            needle = values.get('query', '').casefold()
+            entries = [row for row in entries if needle in (row['sender_id'] + row['value']['rule']).casefold()]
+        offset = values.get('offset', 0)
+        if values['action'] == 'list' and values.get('kind') == 'interaction':
+            return {'group_id': group, 'items': entries[offset:offset + 30], 'total': len(entries),
+                    'next_offset': offset + 30 if offset + 30 < len(entries) else None}
         await ap.plugin_connector.require_workspace_context(context)
         body = {**values, 'scope_key': f'{bot}:group_{group}'}
+        if values['action'] == 'list' and entries:
+            body['offset'] = max(0, offset - len(entries))
         result = await ap.plugin_connector.handle_page_api('langbot-team', 'LongTermMemory', 'memory_console', '/group', 'POST', body)
         if result.get('error'):
             # Never forward plugin tracebacks or credentials to the browser.
@@ -73,4 +100,10 @@ async def manage(ap, context, bot, values):
                         'invalid': '记忆内容格式或长度不正确，请检查后重试。'}
             raise MemoryResetError('memory_' + data['error'], messages.get(data['error'], '记忆操作未完成，请刷新核对。'),
                                    409 if data['error'] in {'conflict', 'missing'} else 400)
+        if values['action'] == 'list' and entries:
+            data = {**data, 'items': (entries[offset:offset + 30] + data.get('items', []))[:30],
+                    'total': len(entries) + data.get('total', len(data.get('items', [])))}
+            data['next_offset'] = offset + 30 if offset + 30 < data['total'] else None
+        elif values['action'] == 'export':
+            data = {**data, 'reply_preferences': entries}
         return {**data, 'group_id': group}

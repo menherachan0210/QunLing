@@ -478,7 +478,10 @@ async def execute(tool, action, params, query_id, query_uuid):
         context = tool.plugin.contexts.get(tool.plugin, variables, query_id, query_uuid)
         if str(await api.get_bot_uuid()) != context.bot:
             raise VisionError("机器人与当前群上下文不匹配。")
-        if action == "activity":
+        if action == "reply_preference":
+            from pkg.reply_preference import apply
+            result = apply(tool.plugin, context, params)
+        elif action == "activity":
             from pkg.group_api import validate_group_access
             from qunling.activity import read_activity
             if set(params) - {"minutes", "limit"}:

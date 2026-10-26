@@ -1,6 +1,25 @@
 from test_proactive_frontend import run_browser
 
 
+def test_member_reply_agreement_edit_uses_bound_member_and_tracks_dirty_state():
+    run_browser(r"""
+  select('123');
+  consoleMemory={items:[{kind:'interaction',sender_id:'456',title:'成员 456',revision:'a'.repeat(64),
+    value:{mode:'mention_only',rule:'没@不接话'},status:'active'}],total:1,next_offset:null};
+  await evaluate('loadMemory()');element('memory-list').children[0].children[0].click();
+  assert.equal(element('memory-interaction-fields').hidden,false);
+  assert.equal(element('memory-profile-fields').hidden,true);
+  element('memory-reply-mode').value='conditional';element('memory-reply-mode').input();
+  element('memory-reply-rule').value='只在我明确提问时参与';element('memory-reply-rule').input();
+  assert.equal(evaluate('memoryDirty'),true);
+  await element('memory-save').click();
+  const write=consoleMemoryPosts.find(row=>row.action==='save');
+  assert.equal(write.sender_id,'456');assert.equal(write.group_id,'123');assert.equal(write.kind,'interaction');
+  assert.equal(write.value.mode,'conditional');assert.equal(write.value.rule,'只在我明确提问时参与');
+  assert.equal(evaluate('memoryDirty'),false);
+""")
+
+
 def test_optional_features_and_independent_providers_survive_console_submission():
     run_browser(r"""
   setup.settings_revision='providers-v1';

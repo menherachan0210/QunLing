@@ -1,0 +1,14 @@
+--- a/src/langbot/pkg/pipeline/respback/respback.py
++++ b/src/langbot/pkg/pipeline/respback/respback.py
+@@ -31,6 +31,11 @@
+ 
+         await asyncio.sleep(random_delay)
+ 
++        from qunling.qq_dispatch import delivery_allowed
++        if not await delivery_allowed(query):
++            object.__setattr__(query, '_qq_reply_suppressed', True)
++            return entities.StageProcessResult(result_type=entities.ResultType.INTERRUPT, new_query=query)
++
+         if query.pipeline_config['output']['misc']['at-sender'] and isinstance(
+             query.message_event, platform_events.GroupMessage
+         ):

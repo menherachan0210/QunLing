@@ -173,12 +173,13 @@
                 <section class="memory-workspace" data-group-panel="memory" hidden>
                   <div class="section-heading"><h3>群聊记忆</h3><button id="memory-export" type="button" class="secondary small">导出本群记忆</button></div>
                   <p class="note">查看群与成员资料、长期事件记忆。编辑独立保存，后续记忆检索使用新内容；已有聊天上下文仍会保留。若要完全从零开始，请使用下方整群清空。</p>
-                  <div class="memory-filters"><label>搜索内容<input id="memory-query" type="search" maxlength="100" placeholder="关键词或成员 QQ 号"></label><label>类型<select id="memory-kind"><option value="all">全部记忆</option><option value="profile">群与成员资料</option><option value="episode">长期事件</option></select></label><button id="memory-refresh" type="button" class="secondary">查询 / 刷新</button></div>
+                  <div class="memory-filters"><label>搜索内容<input id="memory-query" type="search" maxlength="100" placeholder="关键词或成员 QQ 号"></label><label>类型<select id="memory-kind"><option value="all">全部记忆</option><option value="interaction">成员互动约定</option><option value="profile">群与成员资料</option><option value="episode">长期事件</option></select></label><button id="memory-refresh" type="button" class="secondary">查询 / 刷新</button></div>
                   <p id="memory-note" class="note" role="status" aria-live="polite">点击查询读取本群记忆。</p>
                   <div id="memory-list" class="memory-list"></div>
                   <div class="form-actions"><button id="memory-prev" type="button" class="secondary small" hidden>上一页</button><button id="memory-next" type="button" class="secondary small" hidden>下一页</button></div>
                   <section id="memory-editor" class="memory-editor" hidden aria-label="编辑记忆">
                     <h3 id="memory-editor-title">编辑记忆</h3>
+                    <div id="memory-interaction-fields" hidden><div class="field"><label for="memory-reply-mode">参与方式</label><select id="memory-reply-mode"><option value="mention_only">仅真正 @ 时回复</option><option value="conditional">按接话条件判断</option><option value="normal">恢复本群正常参与方式</option></select></div><div class="field"><label for="memory-reply-rule">接话条件<span>最多 600 字</span></label><textarea id="memory-reply-rule" rows="4" maxlength="600"></textarea><p class="note">约定绑定成员 QQ 号。仅 @ 模式会在发送前检查；自定义条件由 AI 结合上下文判断。真实 @ 可以继续提问或修改约定。人格与语气仍采用群设置。</p></div></div>
                     <div id="memory-profile-fields"><div class="field"><label for="memory-name">称呼</label><input id="memory-name" maxlength="160"></div><div class="field"><label for="memory-traits">特征与印象<span>每行一条</span></label><textarea id="memory-traits" rows="4"></textarea></div><div class="field"><label for="memory-preferences">偏好<span>每行一条</span></label><textarea id="memory-preferences" rows="4"></textarea></div><div class="field"><label for="memory-notes">备注<span>最多 2000 字</span></label><textarea id="memory-notes" rows="4" maxlength="2000"></textarea></div></div>
                     <div id="memory-episode-fields" class="field"><label for="memory-content">记忆内容<span>最多 8000 字</span></label><textarea id="memory-content" rows="7" maxlength="8000"></textarea><p class="note">保存时会更新检索索引，可能需要几秒钟。</p></div>
                     <div class="form-actions"><button id="memory-save" type="button">保存这条记忆</button><button id="memory-cancel" type="button" class="secondary">关闭编辑</button><button id="memory-delete" type="button" class="secondary danger-button">删除这条记忆</button></div>
@@ -186,7 +187,7 @@
                   </section>
                 <div class="proactive-memory-reset">
                   <h3>从零开始</h3>
-                  <p class="note" id="proactive-memory-note">清空本群的长期记忆、成员印象、聊天上下文和看图／查询记录，从新的对话开始。保留性格、默认语气和参与设置；不删除 QQ 消息、已生成文件或请求诊断。此操作不可撤销。</p>
+                  <p class="note" id="proactive-memory-note">清空本群的长期记忆、成员印象、成员互动约定、聊天上下文和看图／查询记录，从新的对话开始。保留性格、默认语气和群参与设置；不删除 QQ 消息、已生成文件或请求诊断。此操作不可撤销。</p>
                   <button id="proactive-clear-memory" type="button" class="secondary small" aria-describedby="proactive-memory-note" disabled>清空本群全部记忆</button>
                   <p id="proactive-memory-message" class="form-feedback" role="status" aria-live="polite"></p>
                 </div>

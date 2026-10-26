@@ -10,12 +10,30 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from qunling.proactive.engine import ConversationContext, Message, validate_decision
 from qunling.proactive.host import HostBridge
+
+
+@pytest.fixture(autouse=True)
+def isolated_preferences(monkeypatch):
+    # These synthetic routing cases deliberately use non-QQ identity labels.
+    from qunling import reply_preferences
+    monkeypatch.setattr(reply_preferences, 'get', lambda key, sender: {
+        'sender_id': sender, 'mode': 'normal', 'rule': '', 'revision': '0'})
+
+
+def judge_bridge():
+    bridge = HostBridge.__new__(HostBridge)
+    bridge.bot = SimpleNamespace(adapter=SimpleNamespace(bot_account_id='10000'))
+    bridge.store = SimpleNamespace(read=lambda: {'revision': '0'})
+    bridge.preference_key = Mock(return_value=('workspace', 'bot', '30000'))
+    bridge._preference_versions = {}
+    bridge._preference_subjects = {}
+    return bridge
 
 
 def _message(message_id, sender, text, *, is_bot=False, has_media=False, explicit=False):
@@ -120,8 +138,7 @@ async def test_judge_protocol_preserves_participation_mode_and_conversation(name
                 "role": "continuing" if action == "followup" else "addressed",
                 "entry_point": "回应原话中的邀请", "context_sufficient": True},
         }
-    bridge = HostBridge.__new__(HostBridge)
-    bridge.bot = SimpleNamespace(adapter=SimpleNamespace(bot_account_id="10000"))
+    bridge = judge_bridge()
     bridge._complete = AsyncMock(return_value=json.dumps(expected))
 
     actual = await bridge.judge(context)
@@ -130,7 +147,9 @@ async def test_judge_protocol_preserves_participation_mode_and_conversation(name
     system, payload = bridge._complete.await_args.args
     assert isinstance(system, str) and system
     assert payload == {**{key: value for key, value in asdict(context).items()
-                         if key not in {"persona", "default_style", "examples", "default_examples"}}, "bot_account_id": "10000"}
+                         if key not in {"persona", "default_style", "examples", "default_examples"}}, "bot_account_id": "10000",
+        "member_reply_preferences": [{'sender_id': sender, 'mode': 'normal', 'rule': '', 'revision': '0'}
+            for sender in dict.fromkeys(m.sender_id for m in context.messages if not m.is_bot)]}
     assert context.persona in system
     assert "persona" not in payload and "default_style" not in payload
     decision = validate_decision(actual, context)
@@ -148,8 +167,7 @@ async def test_judge_protocol_preserves_participation_mode_and_conversation(name
 @pytest.mark.parametrize("action", ["reply", "research", "task_request"])
 async def test_live_judge_requires_a_conversation_assessment_before_any_outgoing_action(meaning, action):
     context = _context("active", [_message("m1", "user-a", "他又那样了")])
-    bridge = HostBridge.__new__(HostBridge)
-    bridge.bot = SimpleNamespace(adapter=SimpleNamespace(bot_account_id="10000"))
+    bridge = judge_bridge()
     bridge._complete = AsyncMock(return_value=json.dumps({
         "action": action, "target_message_id": "m1", "understanding": meaning}))
     assert await bridge.judge(context) == {"action": "silence", "target_message_id": None}
