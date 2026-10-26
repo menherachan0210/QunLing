@@ -16,6 +16,27 @@ from test_proactive_host import bridge, event, query_for, dialogue_prompt
 
 
 @pytest.mark.asyncio
+async def test_missing_conversation_context_stops_before_generation_retrieval_or_tools(bridge):
+    bridge.engine._judge = bridge.judge
+    bridge.engine._handoff = AsyncMock()
+    bridge._complete = AsyncMock(return_value=json.dumps({
+        "action": "research", "target_message_id": "103",
+        "understanding": {"purpose": "想接入两位群友的交流", "context_message_ids": ["101", "102", "103"],
+            "information_needs": ["history"], "participation": {
+                "conversation": "两位成员在说未出现前情的人，无法确定具体事件",
+                "role": "joining", "entry_point": "先问他们说的是谁", "context_sufficient": False}}}))
+    bridge.observe(event("他又来了", sender="20001", message_id="101"))
+    bridge.observe(event("还是上次那个？", sender="20001", message_id="102"))
+    bridge.observe(event("又整上了", sender="20001", message_id="103"))
+    await bridge.engine.drain()
+    bridge._complete.assert_awaited_once()
+    bridge.engine._generate.assert_not_awaited()
+    bridge.engine._handoff.assert_not_awaited()
+    bridge.bot.adapter.send_message.assert_not_awaited()
+    await bridge.engine.close()
+
+
+@pytest.mark.asyncio
 async def test_draft_promotes_spontaneous_comment_to_read_images_from_another_member(bridge, monkeypatch):
     from qunling.group_batch import recall
     from qunling.group_knowledge import workspace_id
@@ -32,7 +53,9 @@ async def test_draft_promotes_spontaneous_comment_to_read_images_from_another_me
         variables={}, execution_context=bridge.bot.execution_context)
     host.remember_ingress(bridge.bot.adapter, question, args)
     interpretation = {"purpose": "接住大家对图片错字的吐槽，先确认原图文字",
-                      "context_message_ids": ["101"], "information_needs": ["image"]}
+                      "context_message_ids": ["101"], "information_needs": ["image"],
+                      "participation": {"conversation": "群友正在吐槽另一成员发的图中文字",
+                          "role": "joining", "entry_point": "结合原图接续错字话题", "context_sufficient": True}}
     bridge.engine._judge = AsyncMock(return_value={"action": "reply", "target_message_id": "102",
                                                    "understanding": interpretation})
     bridge.engine._generate = bridge.generate
@@ -58,6 +81,7 @@ async def test_draft_promotes_spontaneous_comment_to_read_images_from_another_me
     frame = dialogue_prompt(query)
     assert frame["understanding"]["purpose"] == interpretation["purpose"]
     assert frame["understanding"]["context_message_ids"] == ["101"]
+    assert frame["understanding"]["participation"] == interpretation["participation"]
     assert frame["target"]["sender_id"] == "20002"
     assert "主动接话" in query.prompt.messages[1].content
     assert "read_group_context_images" in query.prompt.messages[1].content

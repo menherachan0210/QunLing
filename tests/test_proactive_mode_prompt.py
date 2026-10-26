@@ -112,6 +112,14 @@ async def test_judge_protocol_preserves_participation_mode_and_conversation(name
         "action": action,
         "target_message_id": EXPECTED_REPLY_TARGETS[name] if action in {"reply", "followup", "research"} else None,
     }
+    if expected["target_message_id"]:
+        expected["understanding"] = {
+            "purpose": "根据当前群友的发言参与交流",
+            "context_message_ids": [expected["target_message_id"]], "information_needs": [],
+            "participation": {"conversation": "群友邀请机器人参与当前话题",
+                "role": "continuing" if action == "followup" else "addressed",
+                "entry_point": "回应原话中的邀请", "context_sufficient": True},
+        }
     bridge = HostBridge.__new__(HostBridge)
     bridge.bot = SimpleNamespace(adapter=SimpleNamespace(bot_account_id="10000"))
     bridge._complete = AsyncMock(return_value=json.dumps(expected))
@@ -128,3 +136,21 @@ async def test_judge_protocol_preserves_participation_mode_and_conversation(name
     decision = validate_decision(actual, context)
     assert decision is not None and decision.action in allowed_actions
     assert decision.target_message_id == expected["target_message_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("meaning", [None,
+    {"purpose": "回答问题", "context_message_ids": ["m1"], "information_needs": []},
+    {"purpose": "不知在说谁", "context_message_ids": ["m1"], "information_needs": [],
+     "participation": {"conversation": "两人在聊缺少前情的人", "role": "joining",
+                       "entry_point": "询问他们在说谁", "context_sufficient": False}},
+])
+@pytest.mark.parametrize("action", ["reply", "research", "task_request"])
+async def test_live_judge_requires_a_conversation_assessment_before_any_outgoing_action(meaning, action):
+    context = _context("active", [_message("m1", "user-a", "他又那样了")])
+    bridge = HostBridge.__new__(HostBridge)
+    bridge.bot = SimpleNamespace(adapter=SimpleNamespace(bot_account_id="10000"))
+    bridge._complete = AsyncMock(return_value=json.dumps({
+        "action": action, "target_message_id": "m1", "understanding": meaning}))
+    assert await bridge.judge(context) == {"action": "silence", "target_message_id": None}
+    bridge._complete.assert_awaited_once()

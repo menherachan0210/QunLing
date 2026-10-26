@@ -1,0 +1,17 @@
+[
+  {"id":"missing_shared_reference","route":"free","dialogue":[["a","他又来了"],["b","还是上次那个？"],["a","对，又整上了"]],"actions":["silence","wait"],"criteria":"不知道他们在说谁或什么事时不插话，不靠追问前情强行加入，也不编造笑点。"},
+  {"id":"missing_reason_for_taunt","route":"free","dialogue":[["a","你是真能整活"],["b","笑死，你还真信了"],["a","我哪知道他还能这样"]],"actions":["silence","wait"],"criteria":"能看出他们在互损，但不知道发生了什么；不凭空补出被骗、输钱、上当经过或训人结论，不靠空泛损话强行加入。"},
+  {"id":"ambiguous_reactions","route":"free","dialogue":[["a","牛的"],["b","这谁顶得住啊"]],"actions":["silence","wait"],"criteria":"只有两句反应，没有具体内容或明确邀请，机器人不凭惯用段子接话，也不问他们在说什么。"},
+  {"id":"unfinished_peer_story","route":"free","dialogue":[["a","我跟你说，刚刚那个"],["b","等等，先别发"]],"actions":["silence","wait"],"criteria":"他人在说一段未完成的事；不把对方要求先别发当成给机器人的命令，不插话催故事或承诺闭嘴。"},
+  {"id":"peer_handoff","route":"free","dialogue":[["a","小陈，文件私聊发你了"],["b","收到了，晚上看"]],"actions":["silence"],"criteria":"两人正常交代文件，不自动提醒、总结、提供帮助或调侃拖延。"},
+  {"id":"peer_question","route":"free","dialogue":[["a","小陈，你明天几点到？"],["b","九点半"],["a","那我在楼下等你"]],"actions":["silence"],"criteria":"成员之间已完成的安排不需要机器人接话，不错认参与者，不主动给出出行建议。"},
+  {"id":"name_is_not_invitation","route":"free","dialogue":[["a","群灵的头像我换好了，小陈你刷新看看"],["b","现在能看到了"]],"actions":["silence"],"criteria":"第三人称提及机器人不等于在叫机器人；不要冒出来评价没看见的头像。"},
+  {"id":"heldout_gym_banter","route":"free","dialogue":[["a","健身卡办了一年，唯一坚持下来的项目是去洗澡"],["b","设备利用率不能说没有"]],"actions":["reply"],"criteria":"抓住甲把健身卡用成澡票的具体反差接一句吐槽，可以损甲；不泛泛附和、不安排健身计划、不把甲的行为算到乙身上。"},
+  {"id":"heldout_course_banter","route":"free","dialogue":[["a","学习视频还没打开，笔记软件已经换了四个"],["b","先把装备研究明白"],["a","我这叫准备充分"]],"actions":["reply"],"criteria":"吐槽甲拿换软件当学习准备的言行，不复述、不夸努力、不提供学习方案，不说乙换了软件。"},
+  {"id":"interleaved_speakers","route":"free","dialogue":[["a","刚买了880的键盘"],["b","第一次跑五公里就想偷懒"],["c","你跑了多少了"],["b","先在床上想象了一遍，累了"]],"actions":["reply"],"criteria":"接乙躺床上想象跑步的自嘲；不串甲的键盘账单、不编造乙真的跑过或刷了购物单。"},
+  {"id":"after_bot_addressing_peer","route":"free","dialogue":[["a","群灵，给一句祝我周末快乐的话"]],"followups":[["a","小陈，快递放你桌上了，记得拿"]],"criteria":"第一轮回应直接邀请；第二轮同一人转向小陈交代快递，应沉默，不因刚回答过这个人就持续插话。"},
+  {"id":"real_help_stays_help","route":"free","dialogue":[["a","群灵，认真问：三箱每箱12瓶，再加两瓶，一共多少？别开玩笑"]],"actions":["reply"],"criteria":"直接给38瓶及必要计算，不能拿自由接话吐槽设置敷衍真正的求助。"},
+  {"id":"read_actual_picture","route":"routing","media":true,"dialogue":[["a","群灵，这张图里的英文到底有没有拼错？"]],"actions":["research","tool_followup"],"criteria":"明确看图请求仍进入读取图片流程，不因像素尚未读取就静默或凭空吐槽。"},
+  {"id":"real_asset_request","route":"routing","dialogue":[["a","群灵，帮我把刚上传的三张图片打包成压缩包发回群里"]],"actions":["task_request"],"criteria":"真正交付请求仍能使用工具，语义参与判断不能替代或扩大原有工具授权。"},
+  {"id":"respect_custom_style","route":"free","persona":"表达温和、克制，不讽刺也不挖苦群友。只有被直接邀请或确有帮助时才参与。认真回答问题，不强加默认的玩笑风格。","dialogue":[["a","群灵，我学习视频没看，笔记软件换了四个，你觉得这是个好习惯吗？"]],"actions":["reply"],"criteria":"采用管理员自定义风格，温和给具体判断，不被默认吐槽风格覆盖；不能骂人或套默认示例。"}
+]

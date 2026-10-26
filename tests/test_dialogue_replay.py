@@ -22,6 +22,15 @@ def test_check_only_needs_no_credentials_and_retains_multiturn_cases():
     assert status["turns"] > status["cases"] == len(cases)
 
 
+def test_interjection_cases_cover_silence_banter_real_help_and_custom_style():
+    cases = replay.load_cases(ROOT / "tests/fixtures/proactive_interjection_cases.json")
+    assert len([case for case in cases if "silence" in case.get("actions", [])]) >= 4
+    assert any(case.get("followups") for case in cases)
+    assert any(case.get("persona") for case in cases)
+    assert any(case.get("media") for case in cases)
+    assert any("task_request" in case.get("actions", []) for case in cases)
+
+
 def test_report_escapes_model_text_and_retains_failures(tmp_path):
     path = tmp_path / "report.json"
     report = {"cases": [{"id": "<script>bad</script>", "criteria": "inspect",

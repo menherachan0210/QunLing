@@ -125,6 +125,7 @@ async def replay(case, provider, label):
     bridge._complete = complete
     messages, previous, covered = [], None, []
     persona = case.get("persona", "")
+    mode, display_name = case.get("mode", "active"), case.get("display_name", "群灵")
     samples = case.get("examples", [])
     evidence = [{"kind": "image_analysis" if case.get("media") else "text_read",
                  "source": "synthetic-fixture", "text": case["evidence"]}] if case.get("evidence") else []
@@ -148,10 +149,10 @@ async def replay(case, provider, label):
             if turn_index:
                 add(*case["followups"][turn_index - 1])
             target = messages[-1]
-            attributes = dict(bot_id=bot_id, group_id=group_id, mode="active", persona=persona,
+            attributes = dict(bot_id=bot_id, group_id=group_id, mode=mode, persona=persona,
                 messages=tuple(messages), followup_candidate_ids=(target.message_id,) if previous else (),
                 last_bot_text=previous.text if previous else "", last_bot_message_id=previous.message_id if previous else None,
-                last_bot_at=previous.timestamp if previous else None, display_name="群灵",
+                last_bot_at=previous.timestamp if previous else None, display_name=display_name,
                 reply_candidate_ids=(target.message_id,), participant_id=target.sender_id,
                 focus_message_ids=tuple(m.message_id for m in messages), topic_message_ids=tuple(m.message_id for m in messages),
                 covered_message_ids=tuple(covered), examples=samples, default_examples=[])
@@ -168,12 +169,12 @@ async def replay(case, provider, label):
                     if decision is None:
                         raise ValueError("Invalid routing result")
                     row["action"] = decision.action
-                    if "actions" in case:
-                        row["expected_action_pass"] = decision.action in case["actions"]
                     if decision.action in {"reply", "followup"} and case["route"] != "routing":
                         answer = await bridge.generate(context, decision)
                         if isinstance(answer, Decision):
                             row["action"], answer = answer.action, ""
+                        elif not answer:
+                            row["action"] = "silence"
                         row["reply"] = answer
                         if answer and previous:
                             receipts = [{"receipt_id": previous.message_id, "target_message_id": covered[-1],
@@ -182,10 +183,13 @@ async def replay(case, provider, label):
                             row["review"] = review
                             if review.get("action") == "covered":
                                 row["suppressed_draft"], row["reply"] = answer, ""
+                                row["action"] = "silence"
+                    if "actions" in case:
+                        row["expected_action_pass"] = row["action"] in case["actions"]
                 else:
                     state = {"group_id": group_id, "questioner_id": target.sender_id, "participant_id": target.sender_id,
-                        "current_message_id": target.message_id, "mode": "active", "free_chat_enabled": True,
-                        "display_name": "群灵", "persona": persona, "default_style": "", "examples": samples,
+                        "current_message_id": target.message_id, "mode": mode, "free_chat_enabled": True,
+                        "display_name": display_name, "persona": persona, "default_style": "", "examples": samples,
                         "default_examples": [], "topic_message_ids": list(attributes["topic_message_ids"]),
                         "focus_message_ids": list(attributes["focus_message_ids"]), "covered_message_ids": covered,
                         "continuation_read_only": case["route"] == "research", "research_request": case["route"] == "research"}

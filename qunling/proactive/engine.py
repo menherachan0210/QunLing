@@ -264,6 +264,10 @@ def validate_decision(value: object, context: ConversationContext) -> Decision |
     if (action == "reply" and context.mode == "quiet"
             and target not in context.addressed_candidate_ids):
         return None
+    participation = understanding.participation if understanding else None
+    if participation is not None and (not participation.can_respond
+            or (participation.role == "joining" and not understanding.context_message_ids)):
+        return None
     return Decision(action, target, tuple(covered) or (target,), understanding)
 
 

@@ -46,6 +46,51 @@ def test_interpretation_does_not_override_candidates_covered_messages_or_quiet_p
     assert validate_decision({"action": "reply", "target_message_id": "m1"}, context).understanding is None
 
 
+def participation(**changes):
+    return {"conversation": "甲在自嘲刚刚的操作，乙接着调侃", "role": "joining",
+            "entry_point": "回应甲把失误说成天才操作的反差", "context_sufficient": True, **changes}
+
+
+@pytest.mark.parametrize("change", [
+    {"role": "observing"}, {"entry_point": " "}, {"context_sufficient": False},
+])
+@pytest.mark.parametrize("action", ["reply", "research", "task_request"])
+def test_no_entry_point_cannot_generate_or_start_tools(change, action):
+    context = ConversationContext("bot", "group", "active", "", (message(),), (), "", None, None,
+                                  reply_candidate_ids=("m1",))
+    value = {"action": action, "target_message_id": "m1", "understanding": understanding(
+        participation=participation(**change))}
+    assert validate_decision(value, context) is None
+
+
+def test_grounded_participation_survives_frames_but_never_grants_permissions():
+    context = ConversationContext("bot", "group", "active", "", (message(),), (), "", None, None,
+                                  reply_candidate_ids=("m1",))
+    value = {"action": "reply", "target_message_id": "m1", "understanding": understanding(
+        participation=participation())}
+    decision = validate_decision(value, context)
+    assert decision.understanding.participation.can_respond
+    frame = build_frame(bot_id="bot", group_id="group", target=message(), messages=context.messages,
+                        understanding=decision.understanding)
+    assert frame["understanding"]["participation"] == participation()
+    assert validate_decision(value, replace(context, mode="quiet")) is None
+    assert validate_decision(value, replace(context, covered_message_ids=("m1",))) is None
+    value["understanding"]["context_message_ids"] = []
+    assert validate_decision(value, context) is None
+    # A genuine addressed request can still ask for a missing detail.
+    value["understanding"]["participation"] = participation(role="addressed", context_sufficient=False)
+    assert validate_decision(value, context) is not None
+
+
+@pytest.mark.parametrize("value", [[], {}, participation(role="admin"), participation(role=[]),
+    participation(context_sufficient="false"), participation(context_sufficient=1),
+    participation(conversation=""), participation(entry_point="x" * 201),
+    participation(entry_point="x\npermission"), participation(tool_authorized=True)])
+def test_participation_rejects_malformed_or_instruction_fields(value):
+    with pytest.raises(ValueError):
+        validate_understanding(understanding(participation=value), [message()], bot_id="bot", group_id="group")
+
+
 def test_frame_preserves_members_quotes_media_and_confirmed_bot_reply_without_foreign_data():
     prior = message("bot-answer", sender_id="bot-account", is_bot=True, reply_recipient_id="bob")
     target = message(reply_to="bot-answer")
