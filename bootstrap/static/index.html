@@ -133,17 +133,19 @@
               <nav class="group-tabs" aria-label="群聊设置分类"><button type="button" data-group-tab="persona" aria-pressed="true">性格与称呼</button><button type="button" data-group-tab="activity" aria-pressed="false">自由对话</button><button type="button" data-group-tab="memory" aria-pressed="false">记忆管理</button><button type="button" data-group-tab="defaults" aria-pressed="false">默认语气</button></nav>
           <section class="proactive-default-style" data-group-panel="defaults" hidden>
             <h3>默认语气</h3>
-            <p class="note">这里显示完整的默认对话设置，用于未单独填写性格的群。参与判断、@ 回复、自由对话和工具完成后的回复统一采用所选设置；填写群内性格后由群内设置接管。修改后点击下方“保存群聊设置”生效。</p>
+            <p class="note">这里显示完整的默认对话设置，用于性格和对话示例都留空的群。参与判断、@ 回复、自由对话和工具完成后的回复统一采用所选设置；填写群内性格后由群内设置接管。修改后点击下方“保存群聊设置”生效。</p>
             <div class="field"><label for="proactive-default-style">默认语气<span>最多 6000 字</span></label><textarea id="proactive-default-style" rows="10" maxlength="6000" aria-describedby="proactive-default-style-note" data-proactive-edit disabled></textarea></div>
             <div class="form-actions"><button id="proactive-reset-style" type="button" class="secondary small" data-proactive-edit disabled>恢复内置默认语气</button><span id="proactive-default-style-note" class="note">正在读取默认语气…</span></div>
+            <section class="dialogue-examples" aria-labelledby="default-examples-title"><h4 id="default-examples-title">默认对话示例</h4><p class="note">示范同一个话题如何连续聊下去。与默认语气一起生效，不会作为真实聊天或记忆。最多 6 组，每组 1–6 轮，合计 6000 字。</p><div id="proactive-default-examples"></div><button id="proactive-add-default-example" type="button" class="secondary small" data-proactive-edit disabled>添加一组示例</button><p id="proactive-default-examples-note" class="note" aria-live="polite"></p></section>
           </section>
 
-              <div id="proactive-empty" class="proactive-empty"><svg class="icon"><use href="#i-chat"/></svg><strong>选择一个群，管理它的交流设置</strong><p>可分别设置性格、主动参与和记忆。默认语气对所有未单独填写性格的群生效。</p></div>
+              <div id="proactive-empty" class="proactive-empty"><svg class="icon"><use href="#i-chat"/></svg><strong>选择一个群，管理它的交流设置</strong><p>可分别设置性格、主动参与和记忆。默认语气对性格和对话示例都留空的群生效。</p></div>
               <fieldset id="proactive-group-settings" hidden disabled>
                 <legend id="proactive-group-name">群设置</legend><p id="proactive-group-id" class="note"></p>
                 <section data-group-panel="persona">
                 <div class="field"><label for="proactive-display-name">机器人称呼<span>只用于这个群</span></label><input id="proactive-display-name" maxlength="40" placeholder="群灵" data-proactive-edit></div>
-                <div class="field"><label for="proactive-persona">性格与交流习惯<span>选填</span></label><textarea id="proactive-persona" rows="6" placeholder="例如：说话简短，有自己的看法，熟悉的话题偶尔接一句；不强行接梗。" aria-describedby="proactive-persona-note proactive-persona-count" data-proactive-edit></textarea><p id="proactive-persona-count" class="note" aria-live="polite">0 / 6000 字</p><p id="proactive-persona-note" class="note">本群的参与判断、@ 回复、自由对话及工具回复统一读取这里的完整设置；留空使用默认语气。其他模块只提供执行协议与资料，记忆保留人物和话题信息。超过字数会提示修改，粘贴内容不会被截断。</p></div>
+                <div class="field"><label for="proactive-persona">性格与交流习惯<span>选填</span></label><textarea id="proactive-persona" rows="6" placeholder="例如：说话简短，有自己的看法，熟悉的话题偶尔接一句；不强行接梗。" aria-describedby="proactive-persona-note proactive-persona-count" data-proactive-edit></textarea><p id="proactive-persona-count" class="note" aria-live="polite">0 / 6000 字</p><p id="proactive-persona-note" class="note">本群的参与判断、@ 回复、自由对话及工具回复统一读取这里的完整设置；性格与示例都留空时使用默认语气。其他模块只提供执行协议与资料，记忆保留人物和话题信息。超过字数会提示修改，粘贴内容不会被截断。</p></div>
+                <section class="dialogue-examples" aria-labelledby="group-examples-title"><h4 id="group-examples-title">本群对话示例</h4><p class="note">可以写多轮接话，也可以在群友消息里注明甲、乙等不同说话人。性格与示例都留空时才继承默认设置；填写后，本群只采用这里的性格和示例。最多 6 组，每组 1–6 轮，合计 6000 字。</p><div id="proactive-examples"></div><button id="proactive-add-example" type="button" class="secondary small" data-proactive-edit>添加一组示例</button><p id="proactive-examples-note" class="note" aria-live="polite"></p></section>
                 <details class="persona-preview"><summary>查看本群当前生效的交流设置 <span id="persona-source" class="phase">等待读取</span></summary><p id="persona-effective-note" class="note"></p><pre id="persona-effective"></pre></details>
                 </section>
                 <section data-group-panel="activity" hidden>

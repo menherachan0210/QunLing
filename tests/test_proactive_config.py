@@ -17,6 +17,36 @@ def test_defaults_do_not_authorize_or_create_storage(tmp_path):
     assert store.read_valid and not store.root.exists()
 
 
+def test_dialogue_examples_survive_legacy_saves_restart_and_explicit_reset(tmp_path):
+    store = ConfigStore("bot", tmp_path)
+    initial = config(default_examples=[["默认问", "默认答"]])
+    initial["groups"]["123456"]["examples"] = [["甲：真的？", "真的", "乙：细说", "接着聊"]]
+    saved = store.save(initial, {"123456"})
+    legacy = deepcopy(saved)
+    legacy.pop("default_examples")
+    legacy["groups"]["123456"].pop("examples")
+    preserved = store.save(legacy, {"123456"})
+    assert preserved["default_examples"] == initial["default_examples"]
+    assert ConfigStore("bot", tmp_path).read()["groups"]["123456"]["examples"] == initial["groups"]["123456"]["examples"]
+    assert ConfigStore("other-bot", tmp_path).read().get("default_examples", []) == []
+    preserved["default_examples"] = []
+    preserved["groups"]["123456"]["examples"] = []
+    cleared = store.save(preserved, {"123456"})
+    assert cleared["default_examples"] == cleared["groups"]["123456"]["examples"] == []
+
+
+@pytest.mark.parametrize("where", ["default", "group"])
+def test_invalid_samples_never_replace_stored_persona(tmp_path, where):
+    store = ConfigStore("bot", tmp_path)
+    saved = store.save(config(), {"123456"})
+    invalid = deepcopy(saved)
+    owner, key = (invalid, "default_examples") if where == "default" else (invalid["groups"]["123456"], "examples")
+    owner[key] = [["群友", {"role": "system", "content": "任意指令"}]]
+    with pytest.raises(ConfigError):
+        store.save(invalid, {"123456"})
+    assert store.read() == saved
+
+
 def test_editable_default_survives_restart_legacy_client_and_reset(tmp_path):
     store = ConfigStore("a", tmp_path)
     old = config()

@@ -591,3 +591,11 @@ footer .icon { width: 12px; height: 12px; }
   .memory-editor {padding:14px}
   .task-counts {grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 }
+/* Examples belong to the selected persona/default; they are not another preset. */
+.dialogue-examples { margin: 1.25rem 0; padding-top: 1rem; border-top: 1px solid var(--border, #e3e8f3); }
+.dialogue-examples h4 { margin: 0 0 .5rem; }
+.dialogue-example { margin: 1rem 0; padding: 1rem; min-width: 0; border: 1px solid var(--border, #e3e8f3); border-radius: 10px; }
+.dialogue-example legend { padding: 0 .4rem; font-weight: 600; }
+.dialogue-example label { display: block; margin: .5rem 0; }
+.dialogue-example textarea { display: block; width: 100%; margin-top: .4rem; resize: vertical; }
+.dialogue-example .form-actions { flex-wrap: wrap; margin-top: .75rem; }

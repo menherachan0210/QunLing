@@ -13,6 +13,7 @@ import threading
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from qunling.assets import data_root
+from qunling.dialogue import validate_examples
 
 MAX_BYTES = 256 * 1024
 MAX_GROUPS = 100
@@ -47,7 +48,7 @@ def _text(value, limit, name, *, multiline=False):
 
 
 def validate(values: object) -> dict:
-    if (not isinstance(values, dict) or set(values) - {"default_style"} != {"version", "revision", "enabled", "groups"}
+    if (not isinstance(values, dict) or set(values) - {"default_style", "default_examples"} != {"version", "revision", "enabled", "groups"}
             or type(values["version"]) is not int or values["version"] != 1
             or type(values["enabled"]) is not bool
             or not isinstance(values["revision"], str) or not REVISION.fullmatch(values["revision"])
@@ -56,10 +57,15 @@ def validate(values: object) -> dict:
     result = {**values, "groups": {}}
     if "default_style" in values:
         result["default_style"] = _text(values["default_style"], 6000, "默认语气", multiline=True)
+    if "default_examples" in values:
+        try:
+            result["default_examples"] = validate_examples(values["default_examples"])
+        except ValueError as exc:
+            raise ConfigError("invalid_config", str(exc)) from None
     for group_id, entry in values["groups"].items():
         if not isinstance(group_id, str) or not GROUP_ID.fullmatch(group_id):
             raise ConfigError("invalid_config", "群号格式无效。")
-        if (not isinstance(entry, dict) or set(entry) != set(DEFAULT_GROUP)
+        if (not isinstance(entry, dict) or set(entry) - {"examples"} != set(DEFAULT_GROUP)
                 or not isinstance(entry.get("mode"), str)
                 or entry.get("mode") not in {"off", "quiet", "natural", "active"}):
             raise ConfigError("invalid_config", "请选择有效的群参与模式。")
@@ -84,6 +90,11 @@ def validate(values: object) -> dict:
             "persona": _text(entry["persona"], MAX_PERSONA_CHARACTERS, "人设", multiline=True),
             "quiet_hours": dict(quiet),
         }
+        if "examples" in entry:
+            try:
+                result["groups"][group_id]["examples"] = validate_examples(entry["examples"])
+            except ValueError as exc:
+                raise ConfigError("invalid_config", str(exc)) from None
     if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_BYTES:
         raise ConfigError("invalid_config", "自由对话配置过大，请减少群数量或缩短人设。")
     return result
@@ -159,7 +170,13 @@ class ConfigStore:
                 # from one must not erase an administrator's default style.
                 if "default_style" not in candidate and "default_style" in current:
                     candidate["default_style"] = current["default_style"]
-                    candidate = validate(candidate)
+                if "default_examples" not in candidate and "default_examples" in current:
+                    candidate["default_examples"] = current["default_examples"]
+                for group_id, policy in candidate["groups"].items():
+                    before = current["groups"].get(group_id, {})
+                    if "examples" not in policy and "examples" in before:
+                        policy["examples"] = before["examples"]
+                candidate = validate(candidate)
                 # An offline emergency pause is allowed only if policies are
                 # unchanged (or removed/turned off), never as an authorization path.
                 for group_id, policy in candidate["groups"].items():

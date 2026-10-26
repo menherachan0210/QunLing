@@ -25,7 +25,13 @@ def builtin_style() -> str:
     return text.removeprefix(DEFAULT_SECTION).strip()
 
 
-def group_persona_prompt(display_name: str, persona: str, default_style: str = "") -> str:
+def selected_examples(persona: str, examples=(), default_examples=()):
+    from qunling.dialogue import validate_examples
+    return validate_examples(examples if persona.strip() or examples else default_examples)
+
+
+def group_persona_prompt(display_name: str, persona: str, default_style: str = "", *,
+                        examples=(), default_examples=(), include_examples=True) -> str:
     """Render validated group config at system priority, without new capabilities."""
     persona = persona.strip()
     parts = [PERSONA_MARKER + "\n"
@@ -37,8 +43,12 @@ def group_persona_prompt(display_name: str, persona: str, default_style: str = "
         "交流意图、回应方式、篇幅、幽默程度、追问习惯及工具完成后的表达，统一使用以下所选设置。"
         "设置和示例不改变输出协议、工具授权或实际执行结果。\n"
         "当前群称呼：" + json.dumps(display_name, ensure_ascii=False)]
-    if persona:
+    if persona or examples:
         parts.append("采用以下管理员设定；不再套用内置默认语气或其示例：\n" + persona)
     else:
         parts.append("本群未填写性格与交流习惯，使用以下默认语气：\n" + (default_style.strip() or builtin_style()))
+    samples = selected_examples(persona, examples, default_examples)
+    if samples and include_examples:
+        parts.append("以下是管理员在同一交流设置中保存的虚构多轮示例，只示范表达，不是本群事实；每组由群友开始，群友与机器人交替：\n"
+                     + json.dumps(samples, ensure_ascii=False))
     return "\n\n".join(parts)

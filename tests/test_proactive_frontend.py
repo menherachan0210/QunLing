@@ -158,6 +158,55 @@ async function save(){await element('proactive-form').submit({preventDefault(){}
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_multiturn_samples_edit_switch_save_reset_and_preview_the_selected_source():
+    run_browser(r"""
+  select('123');
+  element('proactive-add-example').click();
+  const samples=()=>element('proactive-examples').children;
+  const field=(turn)=>samples()[0].children[turn+1].children[0];
+  field(0).value='甲：真的假的';field(0).input();
+  field(1).value='你猜';field(1).input();
+  samples()[0].children.at(-1).children[0].click();
+  field(2).value='乙：认真问';field(2).input();
+  field(3).value='那我认真说';field(3).input();
+  const stale=field(0);
+  select('456');
+  stale.value='不能串到另一个群';stale.input();
+  assert.equal(samples().length,0);
+  select('123');
+  assert.equal(field(0).value,'甲：真的假的');
+  input('proactive-persona','只用群内设置');
+  assert.equal(field(3).value,'那我认真说');
+  assert.ok(!element('persona-effective').textContent.includes('那我认真说'));
+  await save();
+  assert.deepEqual(posts[0].groups['123'].examples,[['甲：真的假的','你猜','乙：认真问','那我认真说']]);
+  assert.ok(element('persona-effective').textContent.includes('那我认真说'));
+  assert.ok(!element('persona-effective').textContent.includes(builtinStyle));
+  element('proactive-reset-group').click();
+  assert.equal(samples().length,0);
+  await save();
+  assert.ok(!posts[1].groups['123']);
+  assert.ok(element('persona-effective').textContent.includes(builtinStyle));
+""")
+
+
+def test_default_samples_empty_validation_failed_save_and_restore():
+    run_browser(r"""
+  select('123');
+  element('proactive-add-default-example').click();
+  const fields=()=>element('proactive-default-examples').children[0].children;
+  await save();
+  assert.equal(posts.length,0);
+  assert.ok(element('proactive-message').textContent.includes('补全或删除空示例'));
+  fields()[1].children[0].value='默认群友';fields()[1].children[0].input();
+  fields()[2].children[0].value='默认回应';fields()[2].children[0].input();
+  conflict=true;await save();
+  assert.equal(fields()[2].children[0].value,'默认回应');
+  assert.deepEqual(posts[0].default_examples,[['默认群友','默认回应']]);
+  assert.ok(!element('persona-effective').textContent.includes('默认回应'));
+""")
+
+
 def test_memory_reset_confirmation_and_group_isolation():
     run_browser(r"""
   select('123');

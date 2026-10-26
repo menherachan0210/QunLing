@@ -263,17 +263,17 @@ async def test_free_reply_and_explicit_request_share_relevant_public_summary_onl
     bridge._complete.return_value = json.dumps({"action": "reply", "text": "是戴眼镜的白猫。"})
     await bridge.generate(context, Decision("reply", "m1"))
     payload = bridge._complete.await_args.args[1]
-    assert len(seen) == 1 and payload["shared_knowledge"][0]["subject"] == "小明的头像"
-    assert payload["runtime"]["tools_available"] is False
+    assert len(seen) == 1 and payload["dialogue"]["observations"]["shared_knowledge"][0]["subject"] == "小明的头像"
+    assert payload["output"]["tools_available"] is False
     request = event("小明的头像是什么样", explicit=True, sender="20003")
     bridge.observe(request)
     query = query_for(bridge, request)
     host.prepare_prompt(query)
-    summaries = [m for m in query.prompt.messages if isinstance(m.content, str) and m.content.startswith(host.KNOWLEDGE_MARKER)]
+    summaries = [m for m in query.prompt.messages if isinstance(m.content, str) and m.content.startswith(host.FRAME_MARKER)]
     assert len(summaries) == 1 and "戴眼镜的白猫" in summaries[0].content
     assert summaries[0].role == "user"
     host.prepare_prompt(query)
-    assert sum(m.content.startswith(host.KNOWLEDGE_MARKER) for m in query.prompt.messages) == 1
+    assert sum(m.content.startswith(host.FRAME_MARKER) for m in query.prompt.messages) == 1
     await bridge.engine.close()
 
 
@@ -286,7 +286,8 @@ async def test_explicit_request_cannot_gain_newer_lookup_or_foreign_workspace_su
     assert publish()
     query = query_for(bridge, request)
     host.prepare_prompt(query)
-    assert not any(m.content.startswith(host.KNOWLEDGE_MARKER) for m in query.prompt.messages)
+    from test_proactive_host import dialogue_prompt
+    assert dialogue_prompt(query)["observations"]["shared_knowledge"] == []
     assert publish(workspace_id=knowledge.workspace_id("instance", "other-workspace"))
     assert host._shared_knowledge(bridge.bot, "30000", "小明的头像", before=request.timestamp) == []
     bridge.bot.enable = False

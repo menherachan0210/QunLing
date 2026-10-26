@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 import contextvars
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
 import hashlib
@@ -23,6 +23,7 @@ from typing import Awaitable, Callable, Mapping
 from zoneinfo import ZoneInfo
 
 from qunling.group_context import MAX_CHARACTERS, MAX_MESSAGES, WINDOW_SECONDS, metadata, topic_roots
+from qunling.dialogue import Understanding, validate_understanding
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class GroupPolicy:
     judgments_per_day: int | None = None
     display_name: str = "群灵"
     aliases: tuple[str, ...] = ()
+    examples: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,7 @@ class EngineConfig:
     enabled: bool
     groups: Mapping[str, GroupPolicy]
     default_style: str = ""
+    default_examples: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,7 @@ class Decision:
     action: str
     target_message_id: str | None
     covered_message_ids: tuple[str, ...] = ()
+    understanding: Understanding | None = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +98,8 @@ class ConversationContext:
     covered_message_ids: tuple[str, ...] = ()
     continuation_anchors: tuple[tuple[str, str], ...] = ()
     default_style: str = ""
+    examples: tuple[tuple[str, ...], ...] = ()
+    default_examples: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -207,7 +213,12 @@ def reply_character_limit(context: ConversationContext, decision: Decision) -> i
 def validate_decision(value: object, context: ConversationContext) -> Decision | None:
     """Closed schema: unknown fields, stale targets and invented IDs fail closed."""
     if (not isinstance(value, dict) or not {"action", "target_message_id"} <= set(value)
-            or set(value) - {"action", "target_message_id", "covered_message_ids"}):
+            or set(value) - {"action", "target_message_id", "covered_message_ids", "understanding"}):
+        return None
+    try:
+        understanding = validate_understanding(value.get("understanding"), context.messages,
+                                               bot_id=context.bot_id, group_id=context.group_id)
+    except ValueError:
         return None
     action, target = value["action"], value["target_message_id"]
     covered = value.get("covered_message_ids", [])
@@ -217,7 +228,7 @@ def validate_decision(value: object, context: ConversationContext) -> Decision |
     if action not in ("silence", "wait", "reply", "followup", "tool_followup", "research", "task_request"):
         return None
     if action in ("silence", "wait"):
-        return Decision(action, None) if target is None and not covered else None
+        return Decision(action, None, understanding=understanding) if target is None and not covered else None
     if not isinstance(target, str) or not target:
         return None
     eligible = {m.message_id for m in context.messages if m.text.strip() and not m.is_bot and not m.explicit_request
@@ -253,7 +264,7 @@ def validate_decision(value: object, context: ConversationContext) -> Decision |
     if (action == "reply" and context.mode == "quiet"
             and target not in context.addressed_candidate_ids):
         return None
-    return Decision(action, target, tuple(covered) or (target,))
+    return Decision(action, target, tuple(covered) or (target,), understanding)
 
 
 class ProactiveEngine:
@@ -876,7 +887,8 @@ class ProactiveEngine:
                                    policy.display_name, addressed, candidates, conversation_id,
                                    lane.sender_id, shared["focus_message_ids"], shared["topic_id"],
                                    shared["topic_message_ids"], shared["participant_ids"], shared["covered_message_ids"],
-                                   tuple(continuations.items()), default_style=self._snapshot.default_style)
+                                   tuple(continuations.items()), default_style=self._snapshot.default_style,
+                                   examples=policy.examples, default_examples=self._snapshot.default_examples)
 
     def _current(self, group_id: str, sender_id: str, generation: int, revision: str):
         self.refresh_configuration()
@@ -1323,8 +1335,7 @@ class ProactiveEngine:
                         # The draft can discover missing visual/source evidence
                         # after participation was judged. It may only promote
                         # this same target to the existing read-only workflow.
-                        promotion = {"action": text.action, "target_message_id": text.target_message_id,
-                                     "covered_message_ids": list(text.covered_message_ids)}
+                        promotion = {**asdict(text), "covered_message_ids": list(text.covered_message_ids)}
                         if (text.action != "research" or text.target_message_id != decision.target_message_id
                                 or validate_decision(promotion, context) is None):
                             self._record(state, "invalid_generation")

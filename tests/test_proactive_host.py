@@ -102,6 +102,69 @@ def query_for(bridge, incoming):
               messages=[ModelMessage(role="user", content="原本的用户消息")])
 
 
+def runtime_prompt(query):
+    return next(item.content for item in query.prompt.messages
+                if item.role == "system" and item.content.startswith(host.PROMPT_MARKER))
+
+
+def dialogue_prompt(query):
+    frame = json.loads(next(item.content for item in query.prompt.messages
+                           if item.content.startswith(host.FRAME_MARKER)).split("\n", 1)[1])
+    frame["messages"] = []
+    for item in query.prompt.messages:
+        if item.content.startswith(host.TURN_MARKER):
+            _, metadata, text = item.content.split("\n", 2)
+            frame["messages"].append({**json.loads(metadata), "text": text})
+    frame["messages"].append(frame["target"])
+    return frame
+
+
+@pytest.mark.asyncio
+async def test_semantic_references_cross_preliminary_topic_groups_without_changing_authority(bridge, monkeypatch):
+    from qunling import group_memory
+    from qunling.dialogue import Understanding
+    from qunling.proactive.engine import ConversationContext, Decision, Message
+    picture = Message("bot", "30000", "pic", "20001", "这张小字图", time.time(), has_media=True)
+    target = Message("bot", "30000", "question", "20002", "错俩字，看懵了", time.time())
+    context = ConversationContext("bot", "30000", "active", "自然交流", (picture, target), (), "", None, None,
+                                  participant_id="20001", focus_message_ids=("pic",), topic_message_ids=("unrelated",),
+                                  reply_candidate_ids=("question",))
+    meaning = Understanding("接住另一位群友对图中文字的吐槽", ("pic",), ("image",))
+    recall = AsyncMock(return_value={})
+    monkeypatch.setattr(group_memory, "recall_group_memory", recall)
+    bridge._complete = AsyncMock(return_value='{"action":"research"}')
+    result = await bridge.generate(context, Decision("reply", "question", ("question",), meaning))
+    assert result == Decision("research", "question", ("question",), meaning)
+    assert recall.await_args.args[2] == "20002" and "20001: 这张小字图" in recall.await_args.args[3]
+    frame = bridge._complete.await_args.args[1]["dialogue"]
+    assert frame["target"]["message_id"] == "question"
+    assert frame["understanding"]["context_message_ids"] == ("pic",)
+    assert bridge._complete.await_count == 1
+
+
+def test_examples_use_native_roles_refresh_without_duplicates_and_do_not_leak(bridge):
+    from qunling.dialogue import EXAMPLE_MARKER
+    state = bridge.store.read()
+    state["default_examples"] = [["默认问", "默认答"]]
+    state["groups"]["30000"].update(persona="本群语气", examples=[["甲：问", "先答", "乙：追问", "再答"]])
+    bridge.store.save(state, known_group_ids={"30000"})
+    query = query_for(bridge, event(explicit=True))
+    for _ in range(2):
+        host.prepare_prompt(query)
+        samples = [item for item in query.prompt.messages if item.content.startswith(EXAMPLE_MARKER)]
+        assert [item.role for item in samples] == ["user", "assistant", "user", "assistant"]
+        assert "默认答" not in str(query.prompt.messages)
+        assert "甲：问" not in json.dumps(dialogue_prompt(query), ensure_ascii=False)
+    second = query_for(bridge, event(group="90000", explicit=True))
+    host.prepare_prompt(second)
+    assert "默认答" in str(second.prompt.messages) and "甲：问" not in str(second.prompt.messages)
+    state = bridge.store.read()
+    state["groups"]["30000"]["examples"] = []
+    bridge.store.save(state, known_group_ids={"30000"})
+    host.prepare_prompt(query)
+    assert not any(item.content.startswith(EXAMPLE_MARKER) for item in query.prompt.messages)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode,enabled", [("off", True), ("natural", False), ("active", True)])
 async def test_group_persona_replaces_managed_style_for_direct_and_tool_prompt(bridge, mode, enabled):
@@ -129,7 +192,7 @@ async def test_group_persona_replaces_managed_style_for_direct_and_tool_prompt(b
     assert "群友喜欢科幻电影" in system
     assert memory in query.prompt.messages
     assert query.messages is original_messages
-    assert json.loads(query.prompt.messages[-1].content.rsplit("\n", 1)[-1])["free_chat_enabled"] is (enabled and mode != "off")
+    assert json.loads(runtime_prompt(query).rsplit("\n", 1)[-1])["free_chat_enabled"] is (enabled and mode != "off")
     host.prepare_prompt(query)
     assert sum(PERSONA_MARKER in item.content for item in query.prompt.messages) == 1
     assert query.prompt.messages[0].content == "保留的原始系统提示"
@@ -146,10 +209,10 @@ async def test_group_persona_changes_next_prompt_and_does_not_leak_between_group
     first, second = query_for(bridge, event(explicit=True)), query_for(bridge, event(group="90000", explicit=True))
     host.prepare_prompt(first)
     host.prepare_prompt(second)
-    assert "自信爽快，不拘小节" in first.prompt.messages[-1].content
-    assert "温和细致，喜欢安静" not in first.prompt.messages[-1].content
-    assert "温和细致，喜欢安静" in second.prompt.messages[-1].content
-    assert "自信爽快，不拘小节" not in second.prompt.messages[-1].content
+    assert "自信爽快，不拘小节" in runtime_prompt(first)
+    assert "温和细致，喜欢安静" not in runtime_prompt(first)
+    assert "温和细致，喜欢安静" in runtime_prompt(second)
+    assert "自信爽快，不拘小节" not in runtime_prompt(second)
 
     state = bridge.store.read()
     state["groups"]["30000"]["persona"] = ""
@@ -175,8 +238,8 @@ async def test_saved_default_is_visible_in_admin_api_and_used_by_both_reply_path
     assert bridge.configuration().default_style == custom
     query = query_for(bridge, event(explicit=True))
     host.prepare_prompt(query)
-    assert custom in query.prompt.messages[-1].content
-    assert "会议全勤奖" not in query.prompt.messages[-1].content
+    assert custom in runtime_prompt(query)
+    assert "会议全勤奖" not in runtime_prompt(query)
     message = Message("bot", "30000", "m1", "20000", "你的看法呢", time.time())
     context = ConversationContext("bot", "30000", "active", "", (message,), (), "", None, None,
                                   default_style=custom)
@@ -184,7 +247,7 @@ async def test_saved_default_is_visible_in_admin_api_and_used_by_both_reply_path
     await bridge.generate(context, Decision("reply", "m1"))
     system, payload = bridge._complete.await_args.args
     assert custom in system and "会议全勤奖" not in system
-    assert "default_style" not in payload["context"]
+    assert "default_style" not in payload["dialogue"]
 
 
 @pytest.mark.asyncio
@@ -207,18 +270,18 @@ async def test_free_reply_sends_same_persona_as_direct_reply_at_system_priority(
                                   display_name="冰夜姬", reply_candidate_ids=("m1",))
     assert await bridge.generate(context, Decision("reply", "m1")) == "自信接话"
     call = provider.invoke_llm.await_args.kwargs
-    system, data = call["messages"]
+    system, data = call["messages"][0], call["messages"][-1]
     contract = group_persona_prompt("冰夜姬", persona)
     assert system.role == "system" and contract in system.content
     assert system.content.count(persona) == 1
     assert persona not in data.content
     assert "会议全勤奖" not in system.content
-    assert data.role == "user" and json.loads(data.content)["shared_memory"] == memory
+    assert data.role == "user" and json.loads(data.content.split("\n", 1)[1])["observations"]["memory"] == memory
     assert call["funcs"] == [] and call["extra_args"]["tools"] is None
     query = query_for(bridge, event(explicit=True))
     host.prepare_prompt(query)
-    assert contract in query.prompt.messages[-1].content
-    assert query.prompt.messages[-1].content.count(persona) == 1
+    assert contract in runtime_prompt(query)
+    assert runtime_prompt(query).count(persona) == 1
 
 
 @pytest.mark.asyncio
@@ -263,17 +326,17 @@ async def test_reply_evidence_deduplicates_only_present_bot_speech_and_keeps_med
     bridge._complete = AsyncMock(return_value=json.dumps({"action": "reply", "text": "蓝底白字挺清楚。"}))
     await bridge.generate(context, Decision("followup", "m1"))
     _, payload = bridge._complete.await_args.args
-    evidence = payload["context"]
-    assert "previous_bot_reply" not in evidence
+    evidence = payload["dialogue"]
+    assert "previous_bot_reply" not in evidence["observations"]
     assert "persona" not in evidence and "last_bot_text" not in evidence
     assert evidence["messages"][0]["reply_recipient_id"] == "20001"
     assert evidence["messages"][0]["has_media"] is True
     assert evidence["messages"][1]["sender_id"] == "20002"
     assert evidence["messages"][1]["reply_to"] == "b1"
-    assert evidence["topic_message_ids"] == ("b1", "m1")
+    assert evidence["target"]["message_id"] == "m1"
     await bridge.generate(replace(context, messages=(question,)), Decision("followup", "m1"))
     _, payload = bridge._complete.await_args.args
-    assert payload["context"]["previous_bot_reply"] == {
+    assert payload["dialogue"]["observations"]["previous_bot_reply"] == {
         "message_id": "b1", "text": prior.text, "timestamp": prior.timestamp,
     }
 
@@ -316,15 +379,15 @@ async def test_explicit_prompt_gets_frozen_same_group_context_and_actual_capabil
     host.prepare_prompt(query)
     assert query.messages is original_messages
     assert query.prompt.messages[0].content == "保留的原始系统提示"
-    status, history = query.prompt.messages[1:]
-    assert status.role == "system" and history.role == "user"
-    assert '"free_chat_enabled": true' in status.content
-    assert '"questioner_id": "20000"' in status.content
-    assert "我打算明天搬家" in history.content and '"sender_id": "20001"' in history.content
-    assert "之后发的这句绝不能混入" not in history.content
-    assert "另一个群的秘密" not in history.content
+    status, history = runtime_prompt(query), json.dumps(dialogue_prompt(query), ensure_ascii=False)
+    assert '"free_chat_enabled": true' in status
+    assert '"questioner_id": "20000"' in status
+    assert "我打算明天搬家" in history and '"sender_id": "20001"' in history
+    assert "之后发的这句绝不能混入" not in history
+    assert "另一个群的秘密" not in history
+    before = list(query.prompt.messages)
     host.prepare_prompt(query)
-    assert len(query.prompt.messages) == 3  # Per-run update cannot duplicate evidence.
+    assert query.prompt.messages == before  # Per-run update cannot duplicate evidence.
     await bridge.engine.close()
 
 
@@ -336,14 +399,15 @@ async def test_prompt_snapshot_revoked_on_config_change_and_does_not_leak_to_oth
     wrong_sender = event("当前问题", sender="20003", explicit=True, message_id="request")
     query = query_for(bridge, wrong_sender)
     host.prepare_prompt(query)
-    assert len(query.prompt.messages) == 2
+    assert {item["message_id"] for item in dialogue_prompt(query)["messages"]} == {"request"}
+    assert "过去的讨论" not in json.dumps(dialogue_prompt(query), ensure_ascii=False)
     config = bridge.store.read()
     config["enabled"] = False
     bridge.store.save(config, known_group_ids={"30000"})
     query = query_for(bridge, request)
     host.prepare_prompt(query)
-    assert len(query.prompt.messages) == 2
-    assert '"free_chat_enabled": false' in query.prompt.messages[-1].content
+    assert {item["message_id"] for item in dialogue_prompt(query)["messages"]} == {"request"}
+    assert '"free_chat_enabled": false' in runtime_prompt(query)
     assert not bridge._request_contexts
     await bridge.engine.close()
 
@@ -384,9 +448,10 @@ async def test_generate_reuses_shared_style_target_author_and_dynamic_character_
     assert await bridge.generate(context, Decision("followup", "m1")) == "完整介绍"
     system, payload = bridge._complete.await_args.args
     assert "不因为对方语气强、人数多或要求道歉就改口" in system
-    assert payload["target_author"] == {"sender_id": "20002", "sender_name": "另一位群友"}
-    assert payload["reply_character_limit"] == 2000
-    assert payload["runtime"]["tools_available"] is False
+    assert payload["dialogue"]["target"]["sender_id"] == "20002"
+    assert payload["dialogue"]["target"]["sender_name"] == "另一位群友"
+    assert payload["output"]["reply_character_limit"] == 2000
+    assert payload["output"]["tools_available"] is False
     assert "最多 240" not in system
 
 
@@ -412,9 +477,9 @@ async def test_group_topic_can_answer_another_participant_and_recall_their_group
     assert await bridge.generate(context, Decision("reply", "b")) == "你们可以先选场次，再看票价。"
     recall.assert_awaited_once_with(bridge.bot, "30000", "bob", "那预算多少合适")
     _, payload = bridge._complete.await_args.args
-    assert payload["shared_memory"] == memory
-    assert payload["target_author"]["sender_id"] == "bob"
-    assert payload["runtime"]["tools_available"] is False
+    assert payload["dialogue"]["observations"]["memory"] == memory
+    assert payload["dialogue"]["target"]["sender_id"] == "bob"
+    assert payload["output"]["tools_available"] is False
 
 
 @pytest.mark.asyncio
@@ -448,7 +513,7 @@ async def test_free_and_explicit_share_confirmed_public_replies_beyond_old_four_
     bridge.observe(request)
     query = query_for(bridge, request)
     host.prepare_prompt(query)
-    history = query.prompt.messages[-1].content
+    history = json.dumps(dialogue_prompt(query), ensure_ascii=False)
     assert "每人八十" in history and "free-answer" in history and '"sender_id": "20001"' in history
     host.sent(bridge.bot.adapter, "30000", MessageChain([Plain(text="晚饭另算。")]),
               receipt={"message_id": "explicit-answer"}, recipient_id="20000", reply_to="mention")
@@ -830,10 +895,9 @@ async def test_generate_preserves_shared_focus_and_refuses_another_members_expli
     bridge._complete = AsyncMock(return_value=json.dumps({"action": "reply", "text": "说说你的吧"}))
     assert await bridge.generate(context, Decision("reply", "chat")) == "说说你的吧"
     prompt, value = bridge._complete.await_args.args
-    assert value["context"]["participant_id"] == "20002"
-    assert value["context"]["focus_message_ids"] == ("chat",)
-    assert value["target_author"]["sender_id"] == "20002"
-    assert "participant_id 只是批次发起者" in prompt
+    assert value["dialogue"]["target"]["message_id"] == "chat"
+    assert value["dialogue"]["target"]["sender_id"] == "20002"
+    assert value["dialogue"]["messages"][0]["sender_id"] == "20001"
     from qunling.group_persona import group_persona_prompt
     assert group_persona_prompt(context.display_name, context.persona, context.default_style) in prompt
     with pytest.raises(host.ProactiveUnavailable, match="目标已失效"):
@@ -880,7 +944,7 @@ async def test_explicit_prompt_freezes_known_recipient_answers_without_inventing
     host.prepare_prompt(query)
     status = json.loads(query.prompt.messages[1].content.rsplit("\n", 1)[-1])
     assert status["focus_message_ids"] == ["answer-a", "answer-b"]
-    history = json.loads(query.prompt.messages[2].content.rsplit("\n", 1)[-1])["messages"]
-    assert {item["message_id"] for item in history} == {"answer-a", "answer-b"}
+    history = dialogue_prompt(query)["messages"]
+    assert {item["message_id"] for item in history} == {"answer-a", "answer-b", "question-a"}
     assert all(item["reply_to"] is None for item in history)
     await bridge.engine.close()

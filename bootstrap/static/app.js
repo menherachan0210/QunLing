@@ -146,6 +146,8 @@ function locked(message) {
   proactiveSavedConfig = null;
   proactiveBuiltinStyle = null;
   $("proactive-default-style").value = "";
+  $("proactive-default-examples").replaceChildren();
+  $("proactive-examples").replaceChildren();
   $("proactive-runtime").hidden = true;
   $("console-content").hidden = true;
   $("unlock").hidden = false;
@@ -278,10 +280,14 @@ function renderProviderFields() {
 }
 function renderPersonaPreview() {
   const saved = proactiveSavedConfig;
-  const persona = saved?.groups?.[proactiveSelected]?.persona?.trim();
-  const style = persona || saved?.default_style || proactiveBuiltinStyle || "";
-  text("persona-source", persona ? "本群独立性格" : "继承默认语气");
-  text("persona-effective", style || "尚未读取到生效设置。");
+  const group = saved?.groups?.[proactiveSelected];
+  const persona = group?.persona?.trim();
+  const independent = Boolean(persona || group?.examples?.length);
+  const style = independent ? persona || "" : saved?.default_style || proactiveBuiltinStyle || "";
+  const examples = (independent ? group?.examples : saved?.default_examples) || [];
+  const samples = examples.map((turns, index) => `示例 ${index + 1}\n` + turns.map((turn, i) => `${i % 2 ? "机器人" : "群友"}：${turn}`).join("\n")).join("\n\n");
+  text("persona-source", independent ? "本群独立性格" : "继承默认语气");
+  text("persona-effective", [style, samples].filter(Boolean).join("\n\n") || "尚未读取到生效设置。");
   text("persona-effective-note", proactiveDirty ? "这里展示服务器已保存的内容；正在编辑的草稿尚未生效。" : "参与判断、@ 回复、自由对话及工具回复均使用以下内容。");
 }
 function setGroupTab(tab) {
@@ -326,14 +332,25 @@ function controls() {
   text("proactive-save-label", proactiveAction && !memoryResetAction ? "正在保存…" : "保存群聊设置");
 }
 function proactiveDefaultGroup() {
-  return {mode: "off", display_name: "群灵", persona: "", quiet_hours: {enabled: false, start: "23:00", end: "08:00", timezone: "Asia/Shanghai"}};
+  return {mode: "off", display_name: "群灵", persona: "", examples: [], quiet_hours: {enabled: false, start: "23:00", end: "08:00", timezone: "Asia/Shanghai"}};
+}
+function validExamples(value) {
+  return value === undefined || (Array.isArray(value) && value.length <= 6 && value.every(turns =>
+    Array.isArray(turns) && turns.length >= 2 && turns.length <= 12 && turns.length % 2 === 0 && turns.every(turn => typeof turn === "string")));
+}
+function exampleValidationError(value) {
+  if (!validExamples(value)) return "示例最多 6 组，每组需要 1–6 轮完整对话。";
+  const turns = (value || []).flat();
+  if (turns.some(turn => !turn.trim() || Array.from(turn).length > 1500)) return "示例每条消息需要 1–1500 字，请补全或删除空示例。";
+  if (turns.reduce((sum, turn) => sum + Array.from(turn.trim()).length, 0) > 6000) return "示例合计超过 6000 字，请缩短后保存。";
+  return "";
 }
 function validProactiveConfig(value) {
   return value?.version === 1 && typeof value.revision === "string" && typeof value.enabled === "boolean" &&
-    (value.default_style === undefined || typeof value.default_style === "string") &&
+    (value.default_style === undefined || typeof value.default_style === "string") && validExamples(value.default_examples) &&
     value.groups && !Array.isArray(value.groups) && typeof value.groups === "object" &&
     Object.entries(value.groups).every(([id, group]) => /^\d+$/.test(id) && group && Object.hasOwn(proactiveModes, group.mode) &&
-      typeof group.display_name === "string" && typeof group.persona === "string" && typeof group.quiet_hours?.enabled === "boolean" &&
+      typeof group.display_name === "string" && typeof group.persona === "string" && validExamples(group.examples) && typeof group.quiet_hours?.enabled === "boolean" &&
       typeof group.quiet_hours.start === "string" && typeof group.quiet_hours.end === "string");
 }
 function proactiveFeedback(message, state = "error") {
@@ -440,6 +457,8 @@ function renderProactiveEditor() {
   $("proactive-group-settings").hidden = !selected || activeGroupTab === "defaults";
   renderPersonaPreview();
   renderProactiveRuntime();
+  renderDialogueExamples(true);
+  renderDialogueExamples(false);
   if (!selected || !proactiveDraft) return;
   const member = proactiveGroups.find((group) => group.group_id === selected);
   const group = proactiveDraft.groups[selected] || proactiveDefaultGroup();
@@ -584,6 +603,7 @@ function editProactiveGroup() {
     mode: $("proactive-mode").value,
     display_name: $("proactive-display-name").value,
     persona: $("proactive-persona").value,
+    examples: proactiveDraft.groups[proactiveSelected]?.examples || [],
     quiet_hours: {enabled: $("proactive-quiet-enabled").checked, start: $("proactive-quiet-start").value, end: $("proactive-quiet-end").value, timezone: "Asia/Shanghai"}
   };
   proactiveDraft.groups[proactiveSelected] = group;
@@ -593,6 +613,68 @@ function editProactiveGroup() {
   text("proactive-mode-note", proactiveModeNotes[group.mode]);
   proactiveSummary();
   renderProactiveGroups();
+}
+function exampleOwner(defaults, create = false) {
+  if (!proactiveDraft) return null;
+  if (defaults) return proactiveDraft;
+  if (!proactiveSelected) return null;
+  if (!proactiveDraft.groups[proactiveSelected] && create) {
+    if (Object.keys(proactiveDraft.groups).length >= 100) {
+      proactiveFeedback("最多保存 100 个群的独立设置。"); return null;
+    }
+    proactiveDraft.groups[proactiveSelected] = proactiveDefaultGroup();
+  }
+  return proactiveDraft.groups[proactiveSelected] || null;
+}
+function changeDialogueExamples(defaults, change, groupId = proactiveSelected, rerender = true) {
+  if (!authenticated || !proactiveConfigReady || (defaults ? $("proactive-default-style").disabled : $("proactive-group-settings").disabled || groupId !== proactiveSelected)) return;
+  const owner = exampleOwner(defaults, true);
+  if (!owner) return;
+  const key = defaults ? "default_examples" : "examples";
+  const examples = structuredCloneExamples(owner[key] || []);
+  change(examples);
+  owner[key] = examples;
+  proactiveDirty = true;
+  if (rerender) renderDialogueExamples(defaults);
+  else renderExamplesCount(defaults);
+  proactiveSummary(); renderPersonaPreview(); controls();
+}
+function structuredCloneExamples(examples) { return examples.map(turns => [...turns]); }
+function renderExamplesCount(defaults) {
+  const examples = exampleOwner(defaults)?.[defaults ? "default_examples" : "examples"] || [];
+  const count = examples.reduce((sum, turns) => sum + turns.reduce((n, turn) => n + Array.from(turn).length, 0), 0);
+  const id = defaults ? "proactive-default-examples-note" : "proactive-examples-note";
+  text(id, `${examples.length} / 6 组 · ${count} / 6000 字${count > 6000 ? " · 超出限制，请缩短后保存" : ""}`);
+  tone(id, count > 6000 ? "error" : "neutral");
+}
+function renderDialogueExamples(defaults) {
+  const parent = $(defaults ? "proactive-default-examples" : "proactive-examples");
+  const owner = exampleOwner(defaults);
+  const examples = owner?.[defaults ? "default_examples" : "examples"] || [];
+  const groupId = proactiveSelected;
+  parent.replaceChildren();
+  examples.forEach((turns, index) => {
+    const card = document.createElement("fieldset"); card.className = "dialogue-example";
+    const legend = document.createElement("legend"); legend.textContent = `示例 ${index + 1}`; card.append(legend);
+    turns.forEach((turn, turnIndex) => {
+      const label = document.createElement("label"); label.textContent = `${turnIndex % 2 ? "机器人" : "群友"} · 第 ${Math.floor(turnIndex / 2) + 1} 轮`;
+      const input = document.createElement("textarea"); input.rows = 2; input.value = turn;
+      input.dataset.proactiveEdit = ""; input.dataset.exampleIndex = String(index); input.dataset.exampleTurn = String(turnIndex);
+      input.addEventListener("input", () => changeDialogueExamples(defaults, list => { list[index][turnIndex] = input.value; }, groupId, false));
+      label.append(input); card.append(label);
+    });
+    const actions = document.createElement("div"); actions.className = "form-actions";
+    const button = (caption, action) => {
+      const element = document.createElement("button"); element.type = "button"; element.className = "secondary small";
+      element.textContent = caption; element.dataset.proactiveEdit = "";
+      element.addEventListener("click", () => changeDialogueExamples(defaults, action, groupId)); actions.append(element);
+    };
+    if (turns.length < 12) button("添加一轮对话", list => list[index].push("", ""));
+    if (turns.length > 2) button("删除最后一轮", list => list[index].splice(-2));
+    button("删除这组示例", list => list.splice(index, 1));
+    card.append(actions); parent.append(card);
+  });
+  renderExamplesCount(defaults);
 }
 function summary(name, label, detail, state = "neutral") {
   text("summary-" + name, label);
@@ -759,6 +841,12 @@ $("proactive-enabled").addEventListener("change", () => {
   proactiveSummary();
   controls();
 });
+$("proactive-add-example").addEventListener("click", () => {
+  if ((exampleOwner(false)?.examples || []).length < 6) changeDialogueExamples(false, list => list.push(["", ""]));
+});
+$("proactive-add-default-example").addEventListener("click", () => {
+  if ((exampleOwner(true)?.default_examples || []).length < 6) changeDialogueExamples(true, list => list.push(["", ""]));
+});
 $("proactive-default-style").addEventListener("input", () => {
   if ($("proactive-default-style").disabled || !proactiveDraft) return;
   const value = $("proactive-default-style").value.trim();
@@ -771,7 +859,9 @@ $("proactive-default-style").addEventListener("input", () => {
 $("proactive-reset-style").addEventListener("click", () => {
   if ($("proactive-reset-style").disabled || !proactiveDraft || proactiveBuiltinStyle === null) return;
   proactiveDraft.default_style = "";
+  proactiveDraft.default_examples = [];
   $("proactive-default-style").value = proactiveBuiltinStyle;
+  renderDialogueExamples(true);
   proactiveDirty = true;
   text("proactive-default-style-note", "已恢复内置默认语气，保存后生效；群内独立性格保留。");
   proactiveSummary();
@@ -843,6 +933,10 @@ $("proactive-form").addEventListener("submit", async (event) => {
   if ($("proactive-save").disabled || !proactiveDraft) return;
   const epoch = authEpoch;
   const config = JSON.parse(JSON.stringify(proactiveDraft));
+  for (const [label, samples] of [["默认语气", config.default_examples], ...Object.entries(config.groups).map(([id, group]) => [`群 ${id}`, group.examples])]) {
+    const error = exampleValidationError(samples);
+    if (error) { proactiveFeedback(`${label}：${error} 输入内容已保留。`); return; }
+  }
   const oversizedPersona = Object.entries(config.groups).find(([, group]) => Array.from(group.persona).length > proactivePersonaLimit);
   if (oversizedPersona) { proactiveFeedback(`群 ${oversizedPersona[0]} 的性格与交流习惯超过 ${proactivePersonaLimit} 字，请缩短后保存。输入内容已保留。`); return; }
   const invalidQuiet = Object.values(config.groups).some((group) => group.quiet_hours.enabled && (!group.quiet_hours.start || !group.quiet_hours.end || group.quiet_hours.start === group.quiet_hours.end));

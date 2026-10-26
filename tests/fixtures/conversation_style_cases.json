@@ -18,5 +18,11 @@
   {"id":"heldout_service_banter","route":"free","dialogue":[["a","服务器又炸了，我和它今天必须走一个"]],"criteria":"识别夸张吐槽，不自动索要日志或派排障任务，不假装实际修复。"},
   {"id":"heldout_art_self_mockery","route":"free","dialogue":[["a","练了一晚上画人，越画越像外星人，我这还有救吗"]],"criteria":"接住自嘲，不评价没看到的具体画面，不自动列出课程计划或要求提供素材。"},
   {"id":"heldout_specific_technical_help","route":"direct","dialogue":[["a","认真问，刚把图层全部合并了，还没关闭文件，怎么撤销？"]],"criteria":"给立即可用的撤销建议，必要时只问软件名；不当成玩笑，不用长篇收集背景。"},
-  {"id":"heldout_default_style","route":"direct","persona":"","dialogue":[["a","我这周买了三本书，一页没看，精神食粮主打一个库存充足"]],"criteria":"未配置群人格时使用管理页完整默认语气，能自然接话，不主动制定阅读计划。"}
+  {"id":"heldout_default_style","route":"direct","persona":"","dialogue":[["a","我这周买了三本书，一页没看，精神食粮主打一个库存充足"]],"criteria":"未配置群人格时使用管理页完整默认语气，能自然接话，不主动制定阅读计划。"},
+  {"id":"multiturn_intent_change","route":"direct","dialogue":[["a","练了一晚上画人，全画成土豆了，我这还有救吗"]],"followups":[["a","这次认真问，脸总是画歪，给我一个最先练的办法"],["b","我就是觉得土豆挺可爱的"]],"criteria":"第一轮接自嘲，第二轮切换到具体求助，第三轮回应乙的玩笑；不把甲的练习当成乙的问题，不持续教训或追问。"},
+  {"id":"multiturn_correction","route":"direct","dialogue":[["a","三箱，每箱12个，一共36个对吧"]],"followups":[["b","不对，是48，你赶紧认错"],["a","我漏说了，还多一箱，那是四箱"]],"criteria":"无新事实的强硬反驳不应使其改错答案；新增第四箱后应自然更新为48，不写长篇认错检讨。"},
+  {"id":"multiturn_duplicate","route":"free","dialogue":[["a","群灵，电影票上写着周六15:00，那是下午几点"]],"followups":[["b","那电影到底是几点来着"],["b","为什么选三点，我是在问原因"]],"criteria":"已公开回答的同一时间不再换人重复答；第三轮新的原因问题应保留，不凭空编造选时间的理由。"},
+  {"id":"multiturn_topic_shift","route":"direct","dialogue":[["a","给我报销键盘的钱，880"]],"followups":[["b","我今天跑完五公里了"],["b","刚才那个键盘多少钱来着，是我要的吗"]],"criteria":"切换到乙跑步时不继续套甲的报销梗；回问时正确答880并知道是甲提出。"},
+  {"id":"multiturn_post_tool","route":"research","media":true,"dialogue":[["a","哈哈这猫在嫌弃谁啊"]],"evidence":"实际读图观察：一只猫坐在纸箱里，眯眼看向镜头。图片没有字幕，无法确认真实情绪。","followups":[["b","当然是在嫌弃拍照技术"],["a","认真说下，图里有没有字，我看不清"]],"criteria":"观察结果支持玩笑交流，不每轮补不能确认情绪的声明；最后明确图片无字幕。不得把观察中没有的文字或情绪当事实。"},
+  {"id":"editable_examples","route":"direct","persona":"熟人之间说话直接、轻松；认真求助时讲明白。按下面示例掌握节奏，不机械复读。","examples":[["甲：又迟到了，我真是时间管理大师","你管理时间的办法就是让它自己先走？","乙：别损了，地铁真停运了","那今天迟到冠军得颁给地铁。"]],"dialogue":[["a","今天把周一的闹钟关了，周二睡过头，我可太会举一反三了"]],"followups":[["a","别损了，现在我只想知道手机能不能只跳过下次闹钟"]],"criteria":"示例通过配置生效，按语境互损再切换到认真回答；不复读示例台词，不把示例中地铁停运当本群事实。"}
 ]

@@ -15,7 +15,7 @@ from qunling.proactive import host
 from qunling.proactive.engine import ConversationContext, Decision, Message
 from qunling.qq_dispatch import Dispatch, is_control_notice
 from test_group_memory import entry, source
-from test_proactive_host import bridge, event, query_for
+from test_proactive_host import bridge, event, query_for, dialogue_prompt
 
 
 def shared_context(messages, **kwargs):
@@ -50,8 +50,9 @@ async def test_selected_topic_member_uses_real_shared_memory_lookup_but_judgment
     assert source.kb.retrieve.await_args.kwargs["settings"]["sender_id"] == "20002"
     assert source.kb.retrieve.await_args.kwargs["settings"]["session_name"] == "group_30000"
     assert "周末一起看电影" in source.kb.retrieve.await_args.args[1]
-    assert payload["target_author"]["sender_id"] == payload["shared_memory"]["participant_id"] == "20002"
-    assert [r["kind"] for r in payload["shared_memory"]["records"]] == ["speaker_profile", "group_profile"]
+    frame = payload["dialogue"]
+    assert frame["target"]["sender_id"] == frame["observations"]["memory"]["participant_id"] == "20002"
+    assert [r["kind"] for r in frame["observations"]["memory"]["records"]] == ["speaker_profile", "group_profile"]
     assert "别的群秘密" not in json.dumps(payload, ensure_ascii=False)
     await bridge.engine.close()
 
@@ -69,7 +70,7 @@ async def test_passive_reply_and_explicit_followup_share_public_text_without_rep
     query.prompt.messages.append(original_memory)
     host.prepare_prompt(query)
     assert query.prompt.messages[1] is original_memory
-    history = query.prompt.messages[-1].content
+    history = json.dumps(dialogue_prompt(query), ensure_ascii=False)
     assert "这里用反击更顺" in history and "public-text" in history
     assert '"sender_id": "20001"' in history
     host.sent(bridge.bot.adapter, "30000", MessageChain([Plain(text="后面的词在这里是拟声词。")]),
@@ -117,7 +118,10 @@ async def test_unknown_group_and_foreign_image_never_enter_explicit_public_evide
     injected = "\n".join(str(message.content) for message in query.prompt.messages)
     assert query.messages is original
     assert "另一个群" not in injected and "foreign-image" not in injected
-    assert "owned-source.png" not in injected and "图片内容未读取" in injected
+    assert "owned-source.png" not in injected
+    frame = dialogue_prompt(query)
+    assert next(item for item in frame["messages"] if item["message_id"] == "image-owner")["has_media"] is True
+    assert frame["observations"]["shared_knowledge"] == []
     host.completed(bridge.bot.adapter, followup)
     await bridge.engine.close()
 

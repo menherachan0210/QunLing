@@ -122,7 +122,7 @@ async def test_judge_protocol_preserves_participation_mode_and_conversation(name
     system, payload = bridge._complete.await_args.args
     assert isinstance(system, str) and system
     assert payload == {**{key: value for key, value in asdict(context).items()
-                         if key not in {"persona", "default_style"}}, "bot_account_id": "10000"}
+                         if key not in {"persona", "default_style", "examples", "default_examples"}}, "bot_account_id": "10000"}
     assert context.persona in system
     assert "persona" not in payload and "default_style" not in payload
     decision = validate_decision(actual, context)

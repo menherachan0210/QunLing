@@ -8,7 +8,7 @@ from langbot_plugin.api.entities.builtin.platform.message import Image, MessageC
 from qunling import group_knowledge as knowledge, group_memory
 from qunling.proactive import host
 from qunling.proactive.engine import ConversationContext, Decision
-from test_proactive_host import bridge, event, query_for
+from test_proactive_host import bridge, event, query_for, dialogue_prompt
 
 
 def observation(*, anchor="draw", group="30000", actor="20000"):
@@ -43,10 +43,10 @@ async def test_pure_image_receipt_links_observation_to_free_and_explicit_followu
     bridge._complete = AsyncMock(return_value='{"action":"research"}')
     assert await bridge.generate(context, Decision("reply", "feedback")) == Decision("research", "feedback", ("feedback",))
     payload = bridge._complete.await_args.args[1]
-    records = payload["shared_knowledge"]
+    records = payload["dialogue"]["observations"]["shared_knowledge"]
     assert {r["source"] for r in records} == {"avatar_analysis", "image_delivery"}
     assert {r["actor_id"] for r in records} == {"20000"}
-    assert "private.invalid" not in json.dumps(payload) and payload["runtime"]["tools_available"] is False
+    assert "private.invalid" not in json.dumps(payload) and payload["output"]["tools_available"] is False
     delivery = next(r for r in records if r["source"] == "image_delivery")
     assert "墨绿" not in delivery["text"] and "未记录成图视觉核验" in delivery["text"]
     explicit = event("那刚才呢", explicit=True, sender="20002", message_id="ask-again")
@@ -54,8 +54,8 @@ async def test_pure_image_receipt_links_observation_to_free_and_explicit_followu
     bridge.observe(explicit)
     query = query_for(bridge, explicit)
     host.prepare_prompt(query)
-    evidence = [m.content for m in query.prompt.messages if m.content.startswith(host.KNOWLEDGE_MARKER)]
-    assert len(evidence) == 1 and "avatar_analysis" in evidence[0] and "image_delivery" in evidence[0]
+    evidence = dialogue_prompt(query)["observations"]["shared_knowledge"]
+    assert {item["source"] for item in evidence} == {"avatar_analysis", "image_delivery"}
     await bridge.engine.close()
 
 
@@ -100,7 +100,7 @@ async def test_host_receipt_cutoff_includes_earlier_same_second_evidence_only(br
                              subject="小明的头像", text="稍后换成了白猫。", actor_id="20000")
     query = query_for(bridge, incoming)
     host.prepare_prompt(query)
-    evidence = "\n".join(m.content for m in query.prompt.messages if m.content.startswith(host.KNOWLEDGE_MARKER))
+    evidence = json.dumps(dialogue_prompt(query)["observations"]["shared_knowledge"], ensure_ascii=False)
     assert "墨绿短发" in evidence and "稍后换成了白猫" not in evidence
     await bridge.engine.close()
 

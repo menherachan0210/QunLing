@@ -12,7 +12,7 @@ from qunling import qq_dispatch
 from qunling.proactive import host
 from qunling.proactive.engine import ConversationContext, Decision, Message, validate_decision
 from test_proactive_engine import Harness
-from test_proactive_host import bridge, event, query_for
+from test_proactive_host import bridge, event, query_for, dialogue_prompt
 
 
 @pytest.mark.asyncio
@@ -31,7 +31,10 @@ async def test_draft_promotes_spontaneous_comment_to_read_images_from_another_me
         message_chain=question.message_chain, pipeline_uuid="pipeline", routed_by_rule=False,
         variables={}, execution_context=bridge.bot.execution_context)
     host.remember_ingress(bridge.bot.adapter, question, args)
-    bridge.engine._judge = AsyncMock(return_value={"action": "reply", "target_message_id": "102"})
+    interpretation = {"purpose": "接住大家对图片错字的吐槽，先确认原图文字",
+                      "context_message_ids": ["101"], "information_needs": ["image"]}
+    bridge.engine._judge = AsyncMock(return_value={"action": "reply", "target_message_id": "102",
+                                                   "understanding": interpretation})
     bridge.engine._generate = bridge.generate
     bridge._complete = AsyncMock(return_value='{"action":"research"}')
     async def admit(ap, original, *, validate, allow_actions=False):
@@ -48,9 +51,14 @@ async def test_draft_promotes_spontaneous_comment_to_read_images_from_another_me
     state, history = bridge.request_context(question)
     assert state["continuation_read_only"] and state["research_request"]
     assert not state["natural_task_request"]
+    assert state["understanding"]["purpose"] == interpretation["purpose"]
     assert history[0]["has_media"] and history[0]["sender_id"] == "20001"
     query = query_for(bridge, question)
     host.prepare_prompt(query)
+    frame = dialogue_prompt(query)
+    assert frame["understanding"]["purpose"] == interpretation["purpose"]
+    assert frame["understanding"]["context_message_ids"] == ["101"]
+    assert frame["target"]["sender_id"] == "20002"
     assert "主动接话" in query.prompt.messages[1].content
     assert "read_group_context_images" in query.prompt.messages[1].content
     assert "read_group_context_images" in query.prompt.messages[1].content
