@@ -34,6 +34,10 @@ spec:
     bytes and source manifest in ZIPs instead of text files containing image URLs.
     Operations and exact arguments:
       list: {} or {cursor} from a previous result. Prefer current=true attachments.
+        Also returns usage for member, conversation and storage: bytes/items,
+        limits and remaining capacity. These are local cache quotas, not AI API
+        credits or QQ group disk capacity. A full cache does not authorize deletion;
+        only delete specific cached files the user has asked to remove.
       import: {incoming_ref}. Download a listed QQ attachment into an asset_ref.
       inspect: {asset_ref}. Obtain format, structure, capabilities and warnings.
       read: {asset_ref, selector?:{section?,page?,sheet?,member?,offset?,limit?,

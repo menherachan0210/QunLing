@@ -56,6 +56,8 @@ async def test_upload_read_correct_export_and_send_real_bytes(env):
     module = env.module
     listing = await module.workspace(env.plugin, env.api, env.context, env.scope, env.store, {"operation": "list"})
     assert len(listing["incoming"]) == 1 and listing["incoming"][0]["current"]
+    assert listing["usage"]["member"]["items"] == 1
+    assert listing["usage"]["conversation"]["max_bytes"] == 256 * 1024 * 1024
     imported = await module.workspace(env.plugin, env.api, env.context, env.scope, env.store, {
         "operation": "import", "arguments": {"incoming_ref": listing["incoming"][0]["incoming_ref"]},
     })

@@ -156,6 +156,64 @@ class AssetStore:
             if HASH.fullmatch(path.name) and path.name not in live and not path.is_symlink():
                 path.unlink(missing_ok=True)
 
+    @staticmethod
+    def _register_scope(db, scope: Scope) -> str:
+        # Only a trusted Host scope can recover an old row's conversation.
+        # Never guess the owner from a filename or charge unknown legacy rows
+        # to every conversation; those rows still count against the store cap.
+        owner = {k: v for k, v in scope.as_dict().items() if k != "actor_id"}
+        conversation = hashlib.sha256(json.dumps(owner, sort_keys=True).encode()).hexdigest()
+        db.execute("INSERT OR IGNORE INTO asset_owners VALUES(?,?)", (scope.key, conversation))
+        return conversation
+
+    def _usage(self, db, scope: Scope) -> dict:
+        conversation = self._register_scope(db, scope)
+        now = self.clock()
+        member = db.execute(
+            "SELECT COUNT(*),COALESCE(SUM(size),0) FROM assets WHERE scope=? AND expires>?",
+            (scope.key, now),
+        ).fetchone()
+        group = db.execute(
+            "SELECT COUNT(*),COALESCE(SUM(a.size),0) FROM assets a "
+            "JOIN asset_owners o ON a.scope=o.scope WHERE o.conversation=? AND a.expires>?",
+            (conversation, now),
+        ).fetchone()
+        total = db.execute(
+            "SELECT COUNT(*),COALESCE(SUM(size),0) FROM assets WHERE expires>?", (now,),
+        ).fetchone()
+        return {
+            key: {"items": row[0], "bytes": row[1], "max_items": items, "max_bytes": size,
+                  "remaining_items": max(0, items - row[0]), "remaining_bytes": max(0, size - row[1])}
+            for key, row, items, size in (
+                ("member", member, self.member_assets, self.member_bytes),
+                ("conversation", group, self.conversation_assets, self.conversation_bytes),
+                ("storage", total, self.max_assets, self.max_bytes),
+            )
+        }
+
+    def usage(self, scope: Scope) -> dict:
+        """Live logical cache usage, without exposing other users' file records."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            return self._usage(db, scope)
+
+    @staticmethod
+    def _check_quota(usage: dict, added_bytes: int):
+        for key, code, label in (
+            ("member", "member_quota", "你在当前会话的文件额度"),
+            ("conversation", "conversation_quota", "当前会话的文件总额度"),
+            ("storage", "storage_full", "机器人文件缓存总额度"),
+        ):
+            current = usage[key]
+            if current["items"] < current["max_items"] and current["bytes"] + added_bytes <= current["max_bytes"]:
+                continue
+            raise AssetError(code, (
+                f"{label}不足：已用 {current['bytes'] / 1048576:.2f}/{current['max_bytes'] / 1048576:.2f} MiB、"
+                f"{current['items']}/{current['max_items']} 项；本次需新增 {added_bytes / 1048576:.2f} MiB、1 项。"
+                "这是机器人文件缓存限制，不是 AI 接口额度或 QQ 群文件容量。"
+                "可用 file_workspace list 查看占用；经用户确认删除不用的缓存，或等待旧文件过期。"
+            ))
+
     def put(self, scope: Scope, name: str, data: bytes, *, origin="upload", metadata=None) -> dict:
         name = safe_name(name)
         if not isinstance(data, bytes) or len(data) > MAX_ASSET_BYTES:
@@ -170,27 +228,14 @@ class AssetStore:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._prune(db)
-            owner = {k: v for k, v in scope.as_dict().items() if k != "actor_id"}
-            conversation = hashlib.sha256(json.dumps(owner, sort_keys=True).encode()).hexdigest()
-            db.execute("INSERT OR IGNORE INTO asset_owners VALUES(?,?)", (scope.key, conversation))
             existing = db.execute(
                 "SELECT * FROM assets WHERE scope=? AND digest=? AND name=? AND metadata=? ORDER BY created DESC LIMIT 1",
                 (scope.key, digest, name, encoded),
             ).fetchone()
             if existing:
+                self._register_scope(db, scope)
                 return self._public(existing)
-            member = db.execute("SELECT COUNT(*),COALESCE(SUM(size),0) FROM assets WHERE scope=?",
-                                (scope.key,)).fetchone()
-            if member[0] >= self.member_assets or member[1] + len(data) > self.member_bytes:
-                raise AssetError("member_quota", "你在当前会话的文件额度已满，请删除不用的文件后继续。")
-            group = db.execute("SELECT COUNT(*),COALESCE(SUM(a.size),0) FROM assets a "
-                               "LEFT JOIN asset_owners o ON a.scope=o.scope WHERE o.conversation=? OR o.scope IS NULL",
-                               (conversation,)).fetchone()
-            if group[0] >= self.conversation_assets or group[1] + len(data) > self.conversation_bytes:
-                raise AssetError("conversation_quota", "当前会话的文件总额度已满，请清理后继续。")
-            rows = db.execute("SELECT COUNT(*),COALESCE(SUM(size),0) FROM assets").fetchone()
-            if rows[0] >= self.max_assets or rows[1] + len(data) > self.max_bytes:
-                raise AssetError("storage_full", "文件存储空间已满，可删除不再使用的文件后继续。")
+            self._check_quota(self._usage(db, scope), len(data))
             path = self._blob(digest)
             if not path.exists():
                 temporary = self.blobs / ("pending_" + secrets.token_hex(16))
@@ -234,8 +279,9 @@ class AssetStore:
                 "SELECT * FROM assets WHERE ref=? AND scope=? AND expires>?",
                 (ref, scope.key, self.clock()),
             ).fetchone()
-        if row is None:
-            raise AssetError("not_found", "文件已过期或不属于当前会话。")
+            if row is None:
+                raise AssetError("not_found", "文件已过期或不属于当前会话。")
+            self._register_scope(db, scope)
         return row
 
     def read(self, scope: Scope, ref: str) -> bytes:
@@ -282,6 +328,8 @@ class AssetStore:
             except (ValueError, TypeError):
                 raise AssetError("invalid_cursor", "文件列表分页位置无效。") from None
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            usage = self._usage(db, scope)
             visibility = ""
             extra = ()
             if context is not None:
@@ -296,6 +344,7 @@ class AssetStore:
                 (scope.key, self.clock(), upper, upper, last_ref, *extra, limit + 1),
             ).fetchall()
         return {
+            "usage": usage,
             "assets": [self._public(row) for row in rows[:limit]],
             "next_cursor": base64.urlsafe_b64encode(json.dumps([
                 rows[limit - 1]["created"], rows[limit - 1]["ref"],
