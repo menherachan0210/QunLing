@@ -1,0 +1,10 @@
+diff --git a/src/langbot/pkg/pipeline/preproc/preproc.py b/src/langbot/pkg/pipeline/preproc/preproc.py
+--- a/src/langbot/pkg/pipeline/preproc/preproc.py
++++ b/src/langbot/pkg/pipeline/preproc/preproc.py
+@@ -438,2 +438,6 @@
+         bound_plugins = query.variables.get('_pipeline_bound_plugins', None)
++        if os.environ.get('QUNLING_DATA_DIR'):
++            from qunling.dialogue_focus import prepare as prepare_current_understanding
++            await prepare_current_understanding(query)
++
+         event_ctx = await self.ap.plugin_connector.emit_event(event, bound_plugins)

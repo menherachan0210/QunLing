@@ -1,0 +1,181 @@
+diff --git a/pkg/context_pipeline.py b/pkg/context_pipeline.py
+--- a/pkg/context_pipeline.py
++++ b/pkg/context_pipeline.py
+@@ -52,79 +52,12 @@
+     "Instruction: exact opaque values from omitted messages; when asked for a remembered "
+     "passcode, secret, sentinel, or identifier, reply with the full matching value verbatim."
+ )
+-SUMMARIZATION_SYSTEM_PROMPT = """You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
+-
+-Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary."""
+-SUMMARIZATION_PROMPT = """The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+-
+-Use this EXACT format:
+-
+-## Goal
+-[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
+-
+-## Constraints & Preferences
+-- [Any constraints, preferences, or requirements mentioned by user]
+-- [Or "(none)" if none were mentioned]
+-
+-## Progress
+-### Done
+-- [x] [Completed tasks/changes]
+-
+-### In Progress
+-- [ ] [Current work]
+-
+-### Blocked
+-- [Issues preventing progress, if any]
+-
+-## Key Decisions
+-- **[Decision]**: [Brief rationale]
+-
+-## Next Steps
+-1. [Ordered list of what should happen next]
+-
+-## Critical Context
+-- [Any data, examples, or references needed to continue]
+-- [Or "(none)" if not applicable]
+-
+-Keep each section concise. Preserve exact file paths, function names, and error messages."""
+-UPDATE_SUMMARIZATION_PROMPT = """The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+-
+-Update the existing structured summary with new information. RULES:
+-- PRESERVE all existing information from the previous summary
+-- ADD new progress, decisions, and context from the new messages
+-- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
+-- UPDATE "Next Steps" based on what was accomplished
+-- PRESERVE exact file paths, function names, and error messages
+-- If something is no longer relevant, you may remove it
+-
+-Use this EXACT format:
+-
+-## Goal
+-[Preserve existing goals, add new ones if the task expanded]
+-
+-## Constraints & Preferences
+-- [Preserve existing, add new ones discovered]
+-
+-## Progress
+-### Done
+-- [x] [Include previously done items AND newly completed items]
+-
+-### In Progress
+-- [ ] [Current work - update based on progress]
+-
+-### Blocked
+-- [Current blockers - remove if resolved]
+-
+-## Key Decisions
+-- **[Decision]**: [Brief rationale] (preserve all previous, add new)
+-
+-## Next Steps
+-1. [Update based on current state]
+-
+-## Critical Context
+-- [Preserve important context, add new if needed]
+-
+-Keep each section concise. Preserve exact file paths, function names, and error messages."""
++from qunling.dialogue_context import (
++    SUMMARY_SYSTEM as SUMMARIZATION_SYSTEM_PROMPT,
++    SUMMARY_PROMPT as SUMMARIZATION_PROMPT,
++    UPDATE_SUMMARY_PROMPT as UPDATE_SUMMARIZATION_PROMPT,
++)
++
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -415,7 +348,7 @@
+         tokens = await count_tokens(
+             llm_model_uuid=self.model_id,
+             messages=messages,
+-            funcs=[],
++            funcs=self.tools,
+             reasoning_level=self.reasoning_level,
+         )
+         if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
+@@ -493,13 +426,20 @@
+         if user_message is not None:
+             current_messages.append(user_message)
+ 
++        from qunling.dialogue_context import assemble as assemble_dialogue
++        prompt_messages, combined_history, current_messages, combined_cursors = assemble_dialogue(
++            prompt_messages, checkpoint_messages + history_messages, current_messages,
++            checkpoint_cursors + history_cursors,
++            [{} for _ in checkpoint_messages] + getattr(self, "_history_sources", []), self.ctx,
++        )
++
+         assembly = await ContextCompactor(
+             self.budget,
+             summarizer=self.summarizer,
+             token_counter=self.token_counter,
+         ).compact_async(
+             prompt_messages=prompt_messages,
+-            history_messages=checkpoint_messages + history_messages,
++            history_messages=combined_history,
+             rag_messages=rag_messages,
+             current_messages=current_messages,
+             rag_chunks=rag_chunks,
+@@ -507,7 +447,7 @@
+         await self._store_compaction_checkpoint(
+             assembly,
+             checkpoint=checkpoint,
+-            compaction_cursors=checkpoint_cursors + history_cursors,
++            compaction_cursors=combined_cursors,
+         )
+         return assembly
+ 
+@@ -547,6 +487,7 @@
+         self,
+         checkpoint: CompactionCheckpoint | None = None,
+     ) -> tuple[list[Message], list[str | None]]:
++        self._history_sources = []
+         context = self.ctx.context
+         if not context.available_apis.history_page or not context.conversation_id:
+             return [], []
+@@ -585,6 +526,7 @@
+                 message = _message_from_transcript_item(item, self.ctx.event.event_id)
+                 if message is not None:
+                     messages.append(message)
++                    self._history_sources.append(item)
+                     cursor = item.get("cursor") or item.get("seq")
+                     cursors.append(str(cursor) if cursor is not None else None)
+ 
+@@ -645,7 +587,7 @@
+     def _checkpoint_messages(self, checkpoint: CompactionCheckpoint | None) -> list[Message]:
+         if checkpoint is None or not checkpoint.summary:
+             return []
+-        return [Message(role="system", content=checkpoint.summary)]
++        return [Message(role="user", content=checkpoint.summary)]
+ 
+     async def _store_compaction_checkpoint(
+         self,
+@@ -1528,7 +1470,7 @@
+         )
+         if not summary:
+             return None
+-        return Message(role="system", content=summary)
++        return Message(role="user", content=summary)
+ 
+     async def _build_summary_message_async(self, omitted: list[Message], summary_budget: int) -> Message | None:
+         if not omitted or summary_budget <= 0:
+@@ -1542,7 +1484,7 @@
+         summary = _attach_summary_references(summary, omitted, summary_budget)
+         if not summary:
+             return None
+-        return Message(role="system", content=summary)
++        return Message(role="user", content=summary)
+ 
+ 
+ def sanitize_provider_messages(messages: list[Message]) -> list[Message]:
+@@ -1953,7 +1895,7 @@
+ 
+ def _is_conversation_summary_message(message: Message) -> bool:
+     return (
+-        message.role == "system"
++        message.role in {"system", "user"}
+         and isinstance(message.content, str)
+         and SUMMARY_OPEN_TAG in message.content
+         and SUMMARY_CLOSE_TAG in message.content

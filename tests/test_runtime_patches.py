@@ -282,7 +282,9 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("host-admin-console.patch", "host", False) in patcher.PATCHES
     assert ("host-qq-actions.patch", "host", False) in patcher.PATCHES
     assert ("host-reply-preferences.patch", "host", False) in patcher.PATCHES
-    assert len(names) == 37
+    assert ("host-chinese-embedding.patch", "host", False) in patcher.PATCHES
+    assert ("host-dialogue-provenance.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 40
     assert "host-model-usage.patch" in names
     assert {"host-web-knowledge.patch", "host-memory-recall.patch"} <= names
     assert "host-animation-vision.patch" in names

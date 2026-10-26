@@ -1,7 +1,8 @@
 """Replay synthetic conversations through the real Host prompt builders.
 
-No QQ transport, real chat history, memories or tools are used. Research evidence
-is a fixture, not a live vision/search test. Each follow-up sees that run's actual
+No QQ transport or private chat history is used. Runtime mode exercises actual
+memory retrieval and the tool loop on synthetic data; external evidence is recorded,
+not a live vision/search test. Each follow-up sees that run's actual
 previous reply. Run the same script in two source trees with the same provider
 for a comparison; retain the JSON and review HTML rather than a keyword score.
 """
@@ -111,6 +112,9 @@ async def replay(case, provider, label):
     from qunling.knowledge import host as knowledge_host
     from bootstrap.configure import PROMPT
 
+    if hasattr(provider, "begin_case"):
+        await provider.begin_case(case)
+
     bot_id, group_id = "synthetic-bot", "900000001"
     execution = ExecutionContext(instance_uuid="synthetic-instance", workspace_uuid="synthetic-workspace",
                                  bot_uuid=bot_id, placement_generation=1)
@@ -135,13 +139,17 @@ async def replay(case, provider, label):
 
     bridge._complete = complete
     messages, previous, covered = [], None, []
-    persona = case.get("persona", "")
-    mode, display_name = case.get("mode", "active"), case.get("display_name", "群灵")
-    samples = case.get("examples", [])
+    settings = getattr(provider, "group_settings", {})
+    persona = case.get("persona", settings.get("persona", ""))
+    mode = case.get("mode", settings.get("mode", "active"))
+    display_name = case.get("display_name", settings.get("display_name", "群灵"))
+    samples = case.get("examples", settings.get("examples", []))
     evidence = [{"kind": "image_analysis" if case.get("media") else "text_read",
                  "source": "synthetic-fixture", "text": case["evidence"]}] if case.get("evidence") else []
 
     def add(actor, text, *, is_bot=False):
+        if not is_bot and hasattr(provider, "actor_id"):
+            actor = provider.actor_id(actor)
         key = "s" + str(len(messages) + 1)
         media_kind = case.get("media_messages", {}).get(str(len(messages) + 1))
         attachment = ({"kind": media_kind, "source": "message", "message_id": key,
@@ -157,12 +165,12 @@ async def replay(case, provider, label):
         add(actor, text, is_bot=actor == "bot")
 
     result = {"id": case["id"], "criteria": case["criteria"], "label": label, "turns": []}
-    with patch.object(group_memory, "recall_group_memory", AsyncMock(return_value={})), \
+    with patch.object(group_memory, "recall_group_memory", getattr(provider, "recall_group_memory", AsyncMock(return_value={}))), \
             patch.object(knowledge_host, "recall", AsyncMock(return_value={})), \
             patch.object(host.reply_preferences, "get", side_effect=lambda scope, sender: {
                 "sender_id": sender, "mode": "normal", "rule": "", "revision": "0"}), \
             patch.object(host.reply_preferences, "save", side_effect=RuntimeError("Style replay cannot persist member agreements")), \
-            patch.object(host, "_shared_knowledge", return_value=evidence), \
+            patch.object(host, "_shared_knowledge", return_value=[] if hasattr(provider, "runner_reply") else evidence), \
             patch.object(host, "_bridge", return_value=bridge):
         for turn_index in range(1 + len(case.get("followups", []))):
             if turn_index:
@@ -174,7 +182,8 @@ async def replay(case, provider, label):
                 last_bot_at=previous.timestamp if previous else None, display_name=display_name,
                 reply_candidate_ids=(target.message_id,), participant_id=target.sender_id,
                 focus_message_ids=tuple(m.message_id for m in messages), topic_message_ids=tuple(m.message_id for m in messages),
-                covered_message_ids=tuple(covered), examples=samples, default_examples=[])
+                covered_message_ids=tuple(covered), examples=samples,
+                default_style=settings.get("default_style", ""), default_examples=settings.get("default_examples", []))
             allowed = {field.name for field in fields(ConversationContext)}
             context = ConversationContext(**{k: v for k, v in attributes.items() if k in allowed})
             row = {"input": [asdict(m) for m in messages], "route": case["route"], "calls": calls}
@@ -191,7 +200,8 @@ async def replay(case, provider, label):
                     if decision.action in {"reply", "followup"} and case["route"] != "routing":
                         answer = await bridge.generate(context, decision)
                         if isinstance(answer, Decision):
-                            row["action"], answer = answer.action, ""
+                            decision = answer
+                            row["action"], answer = decision.action, ""
                         elif not answer:
                             row["action"] = "silence"
                         row["reply"] = answer
@@ -205,26 +215,38 @@ async def replay(case, provider, label):
                                 row["action"] = "silence"
                     if "actions" in case:
                         row["expected_action_pass"] = row["action"] in case["actions"]
-                else:
+                handoff = (hasattr(provider, "runner_reply") and case["route"] == "free"
+                           and row.get("action") in {"research", "tool_followup", "task_request"})
+                if case["route"] not in {"free", "routing"} or handoff:
+                    research = case["route"] == "research" or (handoff and row["action"] != "task_request")
                     state = {"group_id": group_id, "questioner_id": target.sender_id, "participant_id": target.sender_id,
                         "current_message_id": target.message_id, "mode": mode, "free_chat_enabled": True,
-                        "display_name": display_name, "persona": persona, "default_style": "", "examples": samples,
-                        "default_examples": [], "topic_message_ids": list(attributes["topic_message_ids"]),
+                        "display_name": display_name, "persona": persona, "default_style": settings.get("default_style", ""), "examples": samples,
+                        "default_examples": settings.get("default_examples", []), "topic_message_ids": list(attributes["topic_message_ids"]),
                         "focus_message_ids": list(attributes["focus_message_ids"]), "covered_message_ids": covered,
-                        "continuation_read_only": case["route"] == "research", "research_request": case["route"] == "research"}
+                        "continuation_read_only": research, "research_request": research}
+                    if handoff and decision.understanding:
+                        state["understanding"] = asdict(decision.understanding)
                     bridge.request_context = lambda _: (state, [asdict(m) for m in messages[:-1]])
                     incoming = NS(group=NS(id=group_id), sender=NS(id=target.sender_id, nickname=target.sender_name),
                                   message_id=target.message_id, timestamp=target.timestamp, message_chain=[Plain(text=target.text)])
+                    configured = getattr(provider, "runner", {}).get("prompt", [{"role": "system", "content": PROMPT}])
                     query = NS(adapter=bot.adapter, message_event=incoming, _execution_context=execution,
-                               prompt=NS(messages=[ModelMessage(role="system", content=PROMPT)]))
+                               prompt=NS(messages=[ModelMessage(**item) for item in configured]))
+                    if hasattr(provider, "runner_reply"):
+                        from qunling.dialogue_focus import prepare
+                        await prepare(query)
                     host.prepare_prompt(query)
                     if not any(item.content.startswith(host.PROMPT_MARKER) for item in query.prompt.messages):
                         raise ValueError("Host prompt was not prepared")
                     # Represents the real event after Host projection, not a new instruction inferred from tool output.
-                    query.prompt.messages.append(ModelMessage(role="user", content=json.dumps(
-                        {"sender_id": target.sender_id, "message_id": target.message_id, "text": target.text}, ensure_ascii=False)))
                     provider.stage, provider.calls = "tool_reply" if evidence else "direct_reply", calls
-                    response = await provider.invoke(messages=query.prompt.messages)
+                    if hasattr(provider, "runner_reply"):
+                        response = await provider.runner_reply(query=query, target=target, case=case)
+                    else:
+                        # Lightweight style smoke test; full runtime mode below
+                        # uses LocalAgent assembly, history, compaction and loop.
+                        response = await provider.invoke(messages=query.prompt.messages)
                     row["reply"], row["action"] = response.content, "reply"
                 if row.get("reply"):
                     covered.append(target.message_id)
@@ -275,6 +297,10 @@ async def main():
     parser.add_argument("--cases", type=Path, default=ROOT / "tests/fixtures/conversation_style_cases.json")
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--provider-config", type=Path, help="Existing protected AI config; never copied into reports")
+    parser.add_argument("--runtime-db", type=Path, help="Read-only Host SQLite DB; reuse active model and pipeline settings")
+    parser.add_argument("--pipeline", help="Pipeline UUID when the Host has more than one")
+    parser.add_argument("--local-agent", type=Path, help="Packaged/patched LocalAgent source for runtime replay")
+    parser.add_argument("--group-settings", type=Path, help="Read-only persona/mode/examples projection for the group under evaluation")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--label", default="current")
     parser.add_argument("--case", action="append", default=[])
@@ -297,6 +323,32 @@ async def main():
     if args.check_only:
         print(json.dumps({"cases": len(cases), "turns": sum(1 + len(c.get("followups", [])) for c in cases),
                           "api_requests": 0, "qq_messages_sent": 0}))
+        return
+    if args.runtime_db:
+        if not args.local_agent or not args.output or not 1 <= args.max_calls <= 500 or args.provider_config:
+            parser.error("Runtime replay needs --runtime-db, --local-agent, --output and a call budget; omit --provider-config")
+        from scripts.dialogue_runtime import RuntimeProvider
+        provider = RuntimeProvider(args.runtime_db, args.local_agent, args.output.with_suffix(".state"), args.max_calls, args.pipeline)
+        if args.group_settings:
+            provider.group_settings = json.loads(args.group_settings.read_text(encoding="utf-8"))
+        report = {"label": args.label, "assembly_mode": "production_model_and_runner", "cases": [],
+            "models": {role: provider.model_rows[key]["name"] for role, key in provider.roles.items()},
+            "limits": "Isolated synthetic replay; actual Host model settings, LocalAgent history/compaction/tool loop and LTM embedding/retrieval/injection. External tool observations are recorded fixtures; unrecorded tools return unavailable. No QQ dispatch or live image perception.",
+            "api_requests": 0, "qq_messages_sent": 0}
+        try:
+            for case in cases:
+                report["cases"].append(await replay(case, provider, args.label))
+                report["api_requests"] = provider.count
+                report["assembly"] = provider.assembly_reports
+                report["tool_calls"] = provider.tool_calls
+                write_report(args.output, report)
+                print(json.dumps({"case": case["id"], "requests": provider.count}), flush=True)
+        finally:
+            provider.close()
+        report["errors"] = sum("error" in turn for case in report["cases"] for turn in case["turns"])
+        write_report(args.output, report)
+        if report["errors"]:
+            raise SystemExit(1)
         return
     if not args.provider_config or not args.output or not 1 <= args.max_calls <= 500:
         parser.error("Live replay needs --provider-config, --output and a call budget of 1–500")

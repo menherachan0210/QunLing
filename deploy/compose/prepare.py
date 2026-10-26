@@ -45,6 +45,14 @@ LOCAL_AGENT_PATCH_TARGETS = {
 
 
 def apply_local_agent_patch(staging: Path, root: Path):
+    for name, targets in (
+        ("localagent-task-continuation.patch", LOCAL_AGENT_PATCH_TARGETS),
+        ("localagent-dialogue-context.patch", {"pkg/context_pipeline.py"}),
+    ):
+        _apply_local_agent_patch(staging, root, name, targets)
+
+
+def _apply_local_agent_patch(staging: Path, root: Path, name: str, targets: set[str]):
     """Patch only an isolated, pinned source staging tree; never runtime caches."""
     import yaml
 
@@ -54,14 +62,14 @@ def apply_local_agent_patch(staging: Path, root: Path):
         "langbot-team", "LocalAgent", expected
     ):
         raise ValueError("LocalAgent continuation patch requires its pinned upstream version")
-    patch = (root / "patches/localagent-task-continuation.patch").read_text(encoding="utf-8")
+    patch = (root / "patches" / name).read_text(encoding="utf-8")
     patch = patch.replace("\r\n", "\n")
     paths = []
     for block in re.split(r"(?=^diff --git )", patch, flags=re.M):
         if not block.strip():
             continue
         match = re.match(r"diff --git a/(\S+) b/(\S+)\n", block)
-        if not match or match[1] != match[2] or match[1] not in LOCAL_AGENT_PATCH_TARGETS:
+        if not match or match[1] != match[2] or match[1] not in targets:
             raise ValueError("Unexpected LocalAgent continuation patch target")
         path = match[1]
         if path in paths:
@@ -78,7 +86,7 @@ def apply_local_agent_patch(staging: Path, root: Path):
             raise ValueError("Pinned LocalAgent source file is missing")
         if re.search(r"^(?:rename |copy |GIT binary patch|deleted file mode)", block, re.M):
             raise ValueError("Unsupported LocalAgent patch operation")
-    if set(paths) != LOCAL_AGENT_PATCH_TARGETS:
+    if set(paths) != targets:
         raise ValueError("Incomplete LocalAgent continuation patch")
     env = os.environ.copy()
     for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"):
@@ -348,12 +356,10 @@ def build_packages(root: Path):
 
 
 def prepare_embedding():
-    from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
+    sys.path.insert(0, str(ROOT))
+    from qunling.embeddings import prepare
 
-    # Chroma verifies its pinned SHA-256 before extracting the public ONNX model.
-    # Keeping the default root user's cache in this image avoids first-use setup.
-    embedding = ONNXMiniLM_L6_V2()
-    embedding._download_model_if_not_exists()
+    prepare()
     print("Verified local memory embedding model is available.")
 
 

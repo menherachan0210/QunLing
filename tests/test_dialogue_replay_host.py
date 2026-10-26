@@ -21,7 +21,7 @@ async def test_replay_followup_uses_its_actual_previous_reply_and_real_host_prom
                 context = json.loads(messages[-1].content)
                 target = context["reply_candidate_ids"][-1]
                 text = json.dumps({"action": "reply", "target_message_id": target,
-                    "understanding": {"purpose": "接续问候", "context_message_ids": [target], "information_needs": [],
+                    "understanding": {"purpose": "接续问候", "context_message_ids": [m["message_id"] for m in context["messages"][-3:]], "information_needs": [],
                         "participation": {"conversation": "群友在邀请机器人聊天", "role": "addressed",
                                           "entry_point": "回应问候", "context_sufficient": True}}})
             elif self.stage == "reconcile":

@@ -56,5 +56,12 @@
     "upstream": "https://pypi.org/project/python-pptx/1.0.2/",
     "retrieved_on": "2026-10-20",
     "sha256": "7652f271e46d0d533e9dc463f3b5fcbdcacf4d6a9c8d6b554d15efd0f37f6132"
+  },
+  {
+    "file": "BGE-MIT.txt",
+    "source": "https://raw.githubusercontent.com/FlagOpen/FlagEmbedding/master/LICENSE",
+    "upstream": "https://huggingface.co/BAAI/bge-small-zh-v1.5/tree/7999e1d3359715c523056ef9478215996d62a620",
+    "retrieved_on": "2026-10-26",
+    "sha256": "587a673933425dbc36ec61268d3b954051b2d3ef3c9b322ede357976055ffdd5"
   }
 ]

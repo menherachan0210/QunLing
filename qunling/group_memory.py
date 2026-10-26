@@ -1,8 +1,8 @@
 """Read-only recall of a QQ group's existing LongTermMemory records.
 
-Call only after deciding to answer. Explicit requests already use the plugin's
-normal memory injector and must not invoke this a second time. This module does
-not create queries, execute tools, save memories, or change plugin configuration.
+Stable profiles can inform participation before generation. Episodic search is
+requested only after deciding to answer; explicit requests use their existing
+injector. This module cannot write memories or change plugin configuration.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import re
 MEMORY_PLUGIN = "langbot-team/LongTermMemory"
 RECALL_TIMEOUT = 3.0
 MAX_QUERY_CHARS = 1200
-MAX_RECORDS = 3
+MAX_RECORDS = 5  # Two stable profiles plus up to three relevant episodes.
 MAX_RECORD_CHARS = 900
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ async def _pipeline_snapshot(bot):
     return await run_in_workspace_uow(bot.ap, context.workspace_uuid, read)
 
 
-async def _recall(bot, group_id: str, participant_id: str, text: str) -> list[dict]:
+async def _recall(bot, group_id: str, participant_id: str, text: str, *, mode="all") -> list[dict]:
     from langbot.pkg.agent.runner.config_resolver import RunnerConfigResolver
     from langbot.pkg.agent.runner.config_schema import extract_knowledge_base_uuids
     from langbot.pkg.core.task_boundary import run_in_workspace_uow
@@ -166,16 +166,21 @@ async def _recall(bot, group_id: str, participant_id: str, text: str) -> list[di
         "session_name": f"group_{group_id}",
         "bot_uuid": bot_id,
         "sender_id": participant_id,
-        "top_k": MAX_RECORDS,
-        "include_profiles": True,
+        "top_k": 3,
+        "include_profiles": mode != "episodes",
+        "include_episodes": mode != "profiles",
     })
     # Do not release recalled data after a disable, rebind or workspace change.
     if await _pipeline_snapshot(bot) != initial:
         return []
-    return _records(entries, bot_id, group_id)
+    records = _records(entries, bot_id, group_id)
+    return [record for record in records
+            if (mode != "profiles" or record["kind"] != "episode")
+            and (mode != "episodes" or record["kind"] == "episode")
+            and (record["kind"] != "speaker_profile" or record["speaker_id"] == participant_id)]
 
 
-async def recall_group_memory(bot, group_id, participant_id, text) -> dict:
+async def recall_group_memory(bot, group_id, participant_id, text, *, mode="all") -> dict:
     """Return bounded text records from this real bot/group, preserving speakers.
 
     The caller supplies trusted ingress identities, never model-selected ones.
@@ -191,7 +196,7 @@ async def recall_group_memory(bot, group_id, participant_id, text) -> dict:
         return result
     try:
         async with asyncio.timeout(RECALL_TIMEOUT):
-            result["records"] = await _recall(bot, group_id, participant_id, text)
+            result["records"] = await _recall(bot, group_id, participant_id, text, mode=mode)
     except Exception as exc:
         # Exception strings from embedding/RPC clients may contain credentials
         # or endpoint URLs. Neither logs nor model input need those details.

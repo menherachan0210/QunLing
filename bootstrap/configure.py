@@ -531,7 +531,7 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
             "/api/v1/provider/models/embedding",
             "models",
             {
-                "name": "all-MiniLM-L6-v2",
+                "name": "BAAI/bge-small-zh-v1.5",
                 "provider_uuid": embedding_provider,
                 "extra_args": {},
             },

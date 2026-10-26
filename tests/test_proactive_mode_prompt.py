@@ -146,7 +146,8 @@ async def test_judge_protocol_preserves_participation_mode_and_conversation(name
     bridge._complete.assert_awaited_once()
     system, payload = bridge._complete.await_args.args
     assert isinstance(system, str) and system
-    assert payload == {**{key: value for key, value in asdict(context).items()
+    assert all(profile["records"] == [] for profile in payload["known_profiles"])
+    assert {key: value for key, value in payload.items() if key != "known_profiles"} == {**{key: value for key, value in asdict(context).items()
                          if key not in {"persona", "default_style", "examples", "default_examples"}}, "bot_account_id": "10000",
         "member_reply_preferences": [{'sender_id': sender, 'mode': 'normal', 'rule': '', 'revision': '0'}
             for sender in dict.fromkeys(m.sender_id for m in context.messages if not m.is_bot)]}

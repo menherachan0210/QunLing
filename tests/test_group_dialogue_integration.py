@@ -24,7 +24,7 @@ def shared_context(messages, **kwargs):
 
 
 @pytest.mark.asyncio
-async def test_selected_topic_member_uses_real_shared_memory_lookup_but_judgment_does_not(bridge, source):
+async def test_judgment_gets_profiles_and_generation_recalls_for_the_selected_member(bridge, source):
     # Keep the real HostBridge and recall implementation; only the external KB
     # boundary and model are fakes. A begins the topic, but B is the reply target.
     bridge.bot.ap.runner_registry = source.bot.ap.runner_registry
@@ -43,7 +43,9 @@ async def test_selected_topic_member_uses_real_shared_memory_lookup_but_judgment
                              topic_message_ids=("a-plan", "b-budget"))
     bridge._complete = AsyncMock(return_value='{"action":"silence","target_message_id":null}')
     assert (await bridge.judge(context))["action"] == "silence"
-    source.kb.retrieve.assert_not_awaited()
+    assert source.kb.retrieve.await_count == 2
+    assert all(call.kwargs["settings"]["include_episodes"] is False for call in source.kb.retrieve.await_args_list)
+    assert bridge._complete.await_args.args[1]["known_profiles"]
     bridge._complete.return_value = json.dumps({"action": "reply", "text": "先看场次，再一起商量预算。"})
     assert await bridge.generate(context, Decision("reply", "b-budget")) == "先看场次，再一起商量预算。"
     _, payload = bridge._complete.await_args.args
@@ -52,7 +54,8 @@ async def test_selected_topic_member_uses_real_shared_memory_lookup_but_judgment
     assert "周末一起看电影" in source.kb.retrieve.await_args.args[1]
     frame = payload["dialogue"]
     assert frame["target"]["sender_id"] == frame["observations"]["memory"]["participant_id"] == "20002"
-    assert [r["kind"] for r in frame["observations"]["memory"]["records"]] == ["speaker_profile", "group_profile"]
+    assert [r["kind"] for r in frame["observations"]["profiles"]["records"]] == ["speaker_profile", "group_profile"]
+    assert frame["observations"]["memory"]["records"] == []
     assert "别的群秘密" not in json.dumps(payload, ensure_ascii=False)
     await bridge.engine.close()
 

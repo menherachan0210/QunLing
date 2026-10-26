@@ -87,6 +87,17 @@ spec:
       required: false
       default: auto
 
+    - name: min_semantic_similarity
+      label:
+        en_US: Minimum Semantic Similarity
+        zh_Hans: 最低语义相关度
+      description:
+        en_US: Cosine threshold (0–1), applied before recency and importance boosts.
+        zh_Hans: 0–1 的余弦相关度门槛，先排除不相关记忆，再按时效和重要性排序；默认 0.45。
+      type: number
+      required: false
+      default: 0.45
+
     - name: vector_weight
       label:
         en_US: Vector Weight

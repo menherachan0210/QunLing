@@ -51,6 +51,12 @@ NapCatQQ 使用 [Limited Redistribution License](https://github.com/NapNeko/NapC
 
 LabelPlus 作为输出文件格式的兼容目标。格式根据 [LabelFileManager.cs](https://github.com/LabelPlus/LabelPlus/blob/master/LabelPlus/LabelFileManager.cs) 和 [PS-Script 文本解析器](https://github.com/LabelPlus/PS-Script/blob/master/src/text_parser.ts) 核对；本仓库实现自己的 TXT 序列化器，不分发 LabelPlus／Photoshop 程序或其解析器。格式兼容不表示商标授权或项目背书。
 
+## 中文记忆嵌入
+
+默认中文记忆使用 [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5/tree/7999e1d3359715c523056ef9478215996d62a620)，沿用其 [MIT 许可](licenses/BGE-MIT.txt)。CPU 构建下载 [Xenova 的 ONNX 量化转换](https://huggingface.co/Xenova/bge-small-zh-v1.5/tree/75c43b069aac4d136ba6bc1122f995fedcfd2781)，固定提交、文件大小和 SHA-256 见 `qunling/embeddings.py`；模型权重不提交到源码仓库。池化、长文本分块和离线索引迁移由本项目实现。
+
+LocalAgent 0.2.1 的额外修改见 `patches/localagent-dialogue-context.patch`：统一群聊上下文、改进聊天摘要、计入工具定义的 token 开销；对应固定上游测试源位于 `tests/fixtures/localagent_0_2_1/`，继续沿用上游 Apache-2.0 许可。
+
 ## 依赖与发布材料
 
 以下解析依赖固定在 `qunling/requirements.txt`；版本与许可已核对该版本安装包的 `METADATA` 及许可文件，副本与摘要保留在 `licenses/`：

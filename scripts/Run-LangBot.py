@@ -128,6 +128,13 @@ def main():
     if decoder_dir.is_dir():
         env["PATH"] = str(decoder_dir) + os.pathsep + env.get("PATH", os.defpath)
     handle = windows_job()
+    # The Host and plugin Runtime have not started: no memory writer can race
+    # an index conversion. Failure stops startup with the old data retained.
+    sys.path.insert(0, str(root))
+    from qunling.memory_upgrade import before_start
+    migrated = before_start(app)
+    if migrated:
+        print(f"Verified Chinese memory indexes: {len(migrated)} collections.", flush=True)
     # Keep the Job object handle alive for all descendants on Windows.
     _ = handle
     return supervise([sys.executable, "-u", "main.py"],

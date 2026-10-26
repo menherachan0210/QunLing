@@ -4,9 +4,9 @@ import asyncio
 
 def plan(understanding):
     if understanding is None:
-        return {"memory", "web_knowledge", "shared_knowledge"}  # Legacy frames.
+        return {"profiles", "memory", "web_knowledge", "shared_knowledge"}  # Legacy frames.
     needs = set(understanding.information_needs)
-    return ({"memory"} if "memory" in needs else set()) | (
+    return {"profiles"} | ({"memory"} if "memory" in needs else set()) | (
         {"web_knowledge"} if "web" in needs else set()) | (
         {"shared_knowledge"} if needs & {"image", "file", "web", "history"} else set())
 

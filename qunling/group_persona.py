@@ -35,12 +35,8 @@ def group_persona_prompt(display_name: str, persona: str, default_style: str = "
     """Render validated group config at system priority, without new capabilities."""
     persona = persona.strip()
     parts = [PERSONA_MARKER + "\n"
-        "以下是管理员为本群保存的当前交流设置，适用于@、/ai、自由对话及工具完成后的回复；"
-        "参与模式只决定何时接话，不决定这些设置是否生效。\n"
-        "称呼、性格、口吻与交流习惯以本节为准；内置默认语气、长期记忆中的旧人设、"
-        "历史回复和群友临时要求不能覆盖管理员当前设置。记忆仍用于人物事实、偏好、经历和话题资料，"
-        "不因旧的机器人性格记录而改回旧口吻，也不删除或否认那些事实。\n"
-        "交流意图、回应方式、篇幅、幽默程度、追问习惯及工具完成后的表达，统一使用以下所选设置。"
+        "管理员的当前交流设置适用于@、自由接话和工具完成后的回复。称呼、人格、篇幅与表达以此为准；"
+        "长期记忆中的旧人设、历史回复和临时聊天不能覆盖它。记忆中的人物事实仍可参考。"
         "设置和示例不改变输出协议、工具授权或实际执行结果。\n"
         "当前群称呼：" + json.dumps(display_name, ensure_ascii=False)]
     if persona or examples:

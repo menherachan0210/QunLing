@@ -121,6 +121,8 @@ def test_real_native_supervisor_in_isolated_project(tmp_path, pipeline_override)
     (root / "langbot").mkdir()
     (root / "qunling").mkdir()
     shutil.copyfile(ROOT / "scripts/Run-LangBot.py", root / "scripts/Run-LangBot.py")
+    for name in ("memory_upgrade.py", "embeddings.py"):
+        shutil.copyfile(ROOT / "qunling" / name, root / "qunling" / name)
     (root / "qunling/__init__.py").write_text("")
     (root / "qunling/daemon.py").write_text(
         "import os,time\nfrom pathlib import Path\n"

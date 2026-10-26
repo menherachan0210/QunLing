@@ -60,18 +60,18 @@ def engine():
 
 
 @pytest.mark.asyncio
-async def test_group_and_current_member_profiles_share_three_record_budget_with_episode(engine):
+async def test_stable_profiles_do_not_consume_the_three_episode_budget(engine):
     before = deepcopy(engine.plugin.storage)
     response = await engine.retrieve(context())
-    assert len(response.results) == response.total_found == 3
-    speaker, group, episode = response.results
+    assert len(response.results) == response.total_found == 5
+    speaker, group, *episodes = response.results
     assert speaker.metadata["memory_kind"] == "speaker_profile"
     assert speaker.metadata["sender_id"] == "20000"
     assert speaker.metadata["sender_name"] == "小南"
     assert "喜欢漫画校对" in speaker.metadata["content"]
     assert group.metadata["memory_kind"] == "group_profile" and group.metadata["sender_id"] == ""
     assert "周六" in group.metadata["content"]
-    assert episode.id.startswith("episode-") and episode.metadata["sender_id"] == "20001"
+    assert all(episode.id.startswith("episode-") and episode.metadata["sender_id"] == "20001" for episode in episodes)
     assert all(r.metadata["user_key"] == "bot:group_30000" for r in response.results)
     assert engine.plugin.read_keys == ["pp:bot:group_30000:20000", "ps:bot:group_30000"]
     assert engine.plugin.storage == before

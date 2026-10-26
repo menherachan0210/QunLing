@@ -1,0 +1,58 @@
+diff --git a/src/langbot/pkg/provider/modelmgr/requesters/chromaembed.py b/src/langbot/pkg/provider/modelmgr/requesters/chromaembed.py
+--- a/src/langbot/pkg/provider/modelmgr/requesters/chromaembed.py
++++ b/src/langbot/pkg/provider/modelmgr/requesters/chromaembed.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import asyncio
+ import typing
+ 
+ from .. import requester
+@@ -10,7 +11,7 @@
+ class ChromaEmbedding(requester.ProviderAPIRequester):
+     """Chroma built-in embedding requester.
+ 
+-    Uses chromadb's DefaultEmbeddingFunction (all-MiniLM-L6-v2).
++    Dispatches the configured, pinned local model through QunLing.
+     The embedding function runs locally using ONNX Runtime.
+     """
+ 
+@@ -21,12 +22,8 @@
+     _embedding_function = None
+ 
+     async def initialize(self):
+-        try:
+-            from chromadb.utils import embedding_functions
+-        except ImportError:
+-            raise ImportError('chromadb is not installed. Install it with: pip install chromadb')
+-
+-        self._embedding_function = embedding_functions.DefaultEmbeddingFunction()
++        # Model loading is deferred to a worker thread on first use.
++        pass
+ 
+     async def invoke_llm(
+         self,
+@@ -45,17 +42,11 @@
+         input_text: typing.List[str],
+         extra_args: dict[str, typing.Any] = {},
+     ) -> typing.List[typing.List[float]]:
+-        """Generate embeddings using Chroma's DefaultEmbeddingFunction."""
+-        if self._embedding_function is None:
+-            await self.initialize()
++        """Use the selected model without blocking the Host event loop."""
++        from qunling.embeddings import embed
++        from .. import errors
+ 
+         try:
+-            result = self._embedding_function(input_text)
+-            # DefaultEmbeddingFunction returns list of ndarray, convert for JSON
+-            if isinstance(result, list):
+-                return [item.tolist() if hasattr(item, 'tolist') else item for item in result]
+-            return result.tolist() if hasattr(result, 'tolist') else result
+-        except Exception as e:
+-            from .. import errors
+-
+-            raise errors.RequesterError(f'Chroma embedding failed: {str(e)}')
++            return await asyncio.to_thread(embed, model.model_entity.name, input_text)
++        except Exception as exc:
++            raise errors.RequesterError(f'Local embedding failed: {type(exc).__name__}') from exc

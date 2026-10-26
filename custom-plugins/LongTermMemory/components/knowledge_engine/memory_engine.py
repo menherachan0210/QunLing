@@ -166,11 +166,15 @@ class LongTermMemoryEngine(KnowledgeEngine):
 
     async def retrieve(self, context: RetrievalContext) -> RetrievalResponse:
         if context.retrieval_settings.get("include_profiles") is not True:
+            if context.retrieval_settings.get("include_episodes") is False:
+                return RetrievalResponse(results=[], total_found=0)
             return await self._retrieve_episodes(context)
 
         # Group chat has a short overall deadline. Read cheap, existing L1 data
         # first and retain it when the embedding model is cold or unavailable.
         profiles = await self._read_group_profiles(context)
+        if context.retrieval_settings.get("include_episodes") is False:
+            return RetrievalResponse(results=profiles, total_found=len(profiles))
         request = context.model_copy(deep=True)
         try:
             limit = max(1, min(3, int(request.retrieval_settings.get("top_k", 3))))
@@ -184,7 +188,7 @@ class LongTermMemoryEngine(KnowledgeEngine):
                 episodes = response.results
         except Exception as exc:
             logger.info("[LongTermMemory] group episode recall unavailable (%s)", type(exc).__name__)
-        entries = [*profiles, *episodes][:limit]
+        entries = [*profiles, *episodes[:limit]]
         return RetrievalResponse(results=entries, total_found=len(entries))
 
     async def _retrieve_episodes(self, context: RetrievalContext) -> RetrievalResponse:
@@ -303,12 +307,16 @@ class LongTermMemoryEngine(KnowledgeEngine):
             )
             return RetrievalResponse(results=[], total_found=0)
 
+        from qunling.memory_relevance import relevant_candidates
+        results = await relevant_candidates(self.plugin, embedding_model_uuid, query_vector, results,
+            threshold=settings.get("min_semantic_similarity", 0.45))
+
         # Time-decay re-ranking: blend similarity with recency so that
         # recent memories can outrank older ones with marginally higher
         # vector similarity.
         half_life = float(settings.get("recency_half_life_days", 30))
         for r in results:
-            sim = r.get("score") or (1.0 - r.get("distance", 1.0))
+            sim = r["semantic_similarity"]
             metadata = r.get("metadata", {})
             ts = metadata.get("timestamp", "")
             importance = self._parse_importance(metadata)

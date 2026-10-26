@@ -1,0 +1,12 @@
+diff --git a/src/langbot/pkg/agent/runner/run_journal.py b/src/langbot/pkg/agent/runner/run_journal.py
+--- a/src/langbot/pkg/agent/runner/run_journal.py
++++ b/src/langbot/pkg/agent/runner/run_journal.py
+@@ -328,6 +328,8 @@
+             metadata={
+                 'actor_type': event.actor.actor_type if event.actor else None,
+                 'actor_id': event.actor.actor_id if event.actor else None,
++                'platform_message_id': event.subject.subject_id if event.subject and event.subject.subject_type == 'message' else None,
++                'event_time': event.event_time,
+             },
+         )
+ 

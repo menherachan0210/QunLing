@@ -64,7 +64,8 @@ async def test_uses_existing_pipeline_memory_with_real_group_and_member_and_no_w
     source.bot.ap.runner_registry.get.assert_awaited_once_with(source.context, "runner", None)
     source.bot.ap.rag_mgr.get_knowledge_base_by_uuid.assert_awaited_once_with(source.context, "memory")
     source.kb.retrieve.assert_awaited_once_with(source.context, "你还记得我的爱好吗", settings={
-        "session_name": "group_30000", "bot_uuid": "bot", "sender_id": "20000", "top_k": 3, "include_profiles": True,
+        "session_name": "group_30000", "bot_uuid": "bot", "sender_id": "20000", "top_k": 3,
+        "include_profiles": True, "include_episodes": True,
     })
     assert source.pipeline.pipeline_entity.config == original
     assert source.kb.knowledge_base_entity.creation_settings == settings

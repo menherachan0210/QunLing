@@ -447,7 +447,7 @@ async def test_generate_reuses_shared_style_target_author_and_dynamic_character_
     bridge._complete = AsyncMock(return_value=json.dumps({"action": "reply", "text": "完整介绍"}))
     assert await bridge.generate(context, Decision("followup", "m1")) == "完整介绍"
     system, payload = bridge._complete.await_args.args
-    assert "不因为对方语气强、人数多或要求道歉就改口" in system
+    assert "有依据的不同意见可以保留" in system
     assert payload["dialogue"]["target"]["sender_id"] == "20002"
     assert payload["dialogue"]["target"]["sender_name"] == "另一位群友"
     assert payload["output"]["reply_character_limit"] == 2000
@@ -475,7 +475,9 @@ async def test_group_topic_can_answer_another_participant_and_recall_their_group
     bridge._complete = AsyncMock(return_value=json.dumps({"action": "reply", "text": "你们可以先选场次，再看票价。"}))
 
     assert await bridge.generate(context, Decision("reply", "b")) == "你们可以先选场次，再看票价。"
-    recall.assert_awaited_once_with(bridge.bot, "30000", "20002", "那预算多少合适")
+    assert recall.await_count == 2
+    recall.assert_any_await(bridge.bot, "30000", "20002", "那预算多少合适", mode="profiles")
+    recall.assert_any_await(bridge.bot, "30000", "20002", "那预算多少合适", mode="episodes")
     _, payload = bridge._complete.await_args.args
     assert payload["dialogue"]["observations"]["memory"] == memory
     assert payload["dialogue"]["target"]["sender_id"] == "20002"

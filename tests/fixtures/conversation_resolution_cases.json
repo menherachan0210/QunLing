@@ -1,0 +1,193 @@
+[
+  {
+    "id": "correction_then_nickname_free",
+    "route": "free",
+    "dialogue": [
+      [
+        "a",
+        "那不是隔夜食材，是把翅膀也算成了腿"
+      ],
+      [
+        "bot",
+        "对，我刚才认真分析隔夜食材，没看懂是在整活。"
+      ],
+      [
+        "a",
+        "群灵，你就是南墙二号，不要再忘了"
+      ]
+    ],
+    "followups": [
+      [
+        "a",
+        "行，二号上线了"
+      ],
+      [
+        "a",
+        "我去买杯奶茶"
+      ]
+    ],
+    "actions": [
+      "reply",
+      "followup",
+      "silence"
+    ],
+    "criteria": "昵称互动可简短接梗，后续不复述数腿、隔夜食材或自责经过；新话题不携带旧失误。"
+  },
+  {
+    "id": "correction_then_nickname_direct",
+    "route": "direct",
+    "dialogue": [
+      [
+        "a",
+        "那不是隔夜食材，是把翅膀也算成了腿"
+      ],
+      [
+        "bot",
+        "对，我刚才认真分析隔夜食材，没看懂是在整活。"
+      ],
+      [
+        "a",
+        "你就是南墙二号，不要再忘了"
+      ]
+    ],
+    "followups": [
+      [
+        "a",
+        "行，二号上线了"
+      ],
+      [
+        "a",
+        "我去买杯奶茶"
+      ]
+    ],
+    "criteria": "@与自由接话同样应在更正后停止自我解释；正确接昵称，不重新讲失误原因。"
+  },
+  {
+    "id": "new_correction_should_update",
+    "route": "direct",
+    "dialogue": [
+      [
+        "a",
+        "这只鸭子为什么有四条腿"
+      ],
+      [
+        "bot",
+        "可能是两只鸭子的部分混在一起了。"
+      ],
+      [
+        "a",
+        "看仔细，是两条腿加两个翅膀，同一只"
+      ]
+    ],
+    "followups": [
+      [
+        "a",
+        "对，就这么简单"
+      ],
+      [
+        "a",
+        "今晚吃什么"
+      ]
+    ],
+    "criteria": "采用新的明确纠正，可以简短回应一次；后续不继续认错或编道歉段子，不把聚餐问题挂到失误上。"
+  },
+  {
+    "id": "explicit_revisit_still_answer",
+    "route": "direct",
+    "dialogue": [
+      [
+        "a",
+        "刚才文件发送失败了"
+      ],
+      [
+        "bot",
+        "发送失败，还没交付。"
+      ],
+      [
+        "a",
+        "我是认真问的，你刚才为什么会说已经发了？"
+      ]
+    ],
+    "criteria": "当前明确追问旧错误时应解释已知原因和不确定性，不能借停止道歉回避；不编造工具执行记录。"
+  },
+  {
+    "id": "unrelated_memory_not_forced",
+    "route": "direct",
+    "tools": [],
+    "dialogue": [
+      [
+        "a",
+        "晚上打哪款游戏？想玩个轻松的"
+      ]
+    ],
+    "profiles": {
+      "a": {
+        "name": "小林",
+        "preferences": [
+          "无糖咖啡"
+        ],
+        "traits": [],
+        "notes": ""
+      }
+    },
+    "memories": [
+      {
+        "content": "小林喜欢喝无糖咖啡"
+      },
+      {
+        "content": "昨天解释错了鸭子笑话，后来已经澄清"
+      }
+    ],
+    "criteria": "记忆可用不代表每轮要提及；当前讨论游戏，不牵扯咖啡或已经解释过的笑话，也不编造共同玩过的经历。"
+  },
+  {
+    "id": "relevant_memory_and_scope",
+    "route": "direct",
+    "tools": [],
+    "dialogue": [
+      [
+        "a",
+        "我之前说喝咖啡加不加糖来着"
+      ]
+    ],
+    "profiles": {
+      "a": {
+        "name": "小林",
+        "preferences": [
+          "喝咖啡不加糖"
+        ],
+        "traits": [],
+        "notes": ""
+      }
+    },
+    "memories": [
+      {
+        "content": "小林喜欢喝不加糖的咖啡"
+      },
+      {
+        "content": "小林喝咖啡必须加糖",
+        "group": "900000002"
+      }
+    ],
+    "criteria": "本轮确实问到偏好时使用正确成员与当前群记录，不取其他群相反信息；直接回答即可。"
+  },
+  {
+    "id": "recorded_tool_result_banter",
+    "route": "research",
+    "tools": [
+      "search_web"
+    ],
+    "dialogue": [
+      [
+        "a",
+        "测试杯A组首轮四队都输了。"
+      ],
+      [
+        "a",
+        "群灵，查下战报，打成这样也太难看了吧"
+      ]
+    ],
+    "evidence": "已核对测试杯A组首轮战报：四队均输；赛事尚未结束，四队尚未出局。",
+    "criteria": "实际经过工具循环后接住吐槽，不把没有说过的出局说法当成需要纠正的错误；不追加申诉式清单。"
+  }
+]

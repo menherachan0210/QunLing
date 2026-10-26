@@ -1506,7 +1506,7 @@ class MemoryStore:
                 user_key=user_key,
             )
 
-        fetch_k = max(top_k, top_k * 4, 50)
+        fetch_k = min(60, max(top_k, top_k * 4, 20))
         strategy = self.normalize_retrieval_strategy(retrieval_strategy)
         normalized_weight = self.normalize_vector_weight(vector_weight)
         search_kwargs = {
@@ -1544,6 +1544,8 @@ class MemoryStore:
             filters if filters else None,
         )
 
+        from qunling.memory_relevance import relevant_candidates
+        results = await relevant_candidates(self.plugin, embedding_model_uuid, query_vector, results)
         seen_ids: set[str] = set()
         episodes = []
         if exact_episode and self.episode_status_included(
