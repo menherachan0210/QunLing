@@ -48,6 +48,7 @@ def apply_local_agent_patch(staging: Path, root: Path):
     for name, targets in (
         ("localagent-task-continuation.patch", LOCAL_AGENT_PATCH_TARGETS),
         ("localagent-dialogue-context.patch", {"pkg/context_pipeline.py"}),
+        ("localagent-dialogue-time.patch", {"pkg/context_pipeline.py"}),
     ):
         _apply_local_agent_patch(staging, root, name, targets)
 

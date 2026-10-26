@@ -49,7 +49,7 @@ async def test_decision_model_does_not_replace_reply_or_reconciliation_model(bri
     assert bridge.bot.ap.model_mgr.get_model_by_uuid.await_args.args[1] == "review-model"
     assert context.persona in provider.invoke_llm.await_args.kwargs['messages'][0].content
     stages = bridge.performance.snapshot('30000')['stages']
-    assert {stage: data['count'] for stage, data in stages.items()} == {'judge': 1, 'generate': 1, 'reconcile': 2}
+    assert {stage: data['count'] for stage, data in stages.items()} == {'judge': 1, 'generate': 1, 'reconcile': 2, 'review': 0}
 
 
 @pytest.fixture
@@ -181,6 +181,10 @@ async def test_group_persona_replaces_managed_style_for_direct_and_tool_prompt(b
     original_messages = query.messages
 
     host.prepare_prompt(query)
+    # Disabling spontaneous participation still permits persona-aware review of
+    # an explicitly addressed reply through the real Host preparation path.
+    from qunling.dialogue_review import ATTRIBUTE, Binding
+    assert isinstance(getattr(query, ATTRIBUTE), Binding)
     # Exercise the actual Host-to-runner serialization, including tool requests.
     serialize = patched_method(LANGBOT_ROOT, "src/langbot/pkg/pipeline/process/handlers/chat.py",
                                "ChatMessageHandler", "_build_history_prompt_config", {})
@@ -269,7 +273,7 @@ async def test_free_reply_sends_same_persona_as_direct_reply_at_system_priority(
     context = ConversationContext("bot", "30000", "active", persona, (message,), (), "", None, None,
                                   display_name="冰夜姬", reply_candidate_ids=("m1",))
     assert await bridge.generate(context, Decision("reply", "m1")) == "自信接话"
-    call = provider.invoke_llm.await_args.kwargs
+    call = provider.invoke_llm.await_args_list[0].kwargs
     system, data = call["messages"][0], call["messages"][-1]
     contract = group_persona_prompt("冰夜姬", persona)
     assert system.role == "system" and contract in system.content
@@ -325,7 +329,7 @@ async def test_reply_evidence_deduplicates_only_present_bot_speech_and_keeps_med
                                   reply_candidate_ids=("m1",), topic_message_ids=("b1", "m1"))
     bridge._complete = AsyncMock(return_value=json.dumps({"action": "reply", "text": "蓝底白字挺清楚。"}))
     await bridge.generate(context, Decision("followup", "m1"))
-    _, payload = bridge._complete.await_args.args
+    _, payload = bridge._complete.await_args_list[0].args
     evidence = payload["dialogue"]
     assert "previous_bot_reply" not in evidence["observations"]
     assert "persona" not in evidence and "last_bot_text" not in evidence
@@ -446,7 +450,7 @@ async def test_generate_reuses_shared_style_target_author_and_dynamic_character_
     context = ConversationContext("bot", "30000", "active", "", (request,), ("m1",), "我刚才的观点", "b1", time.time())
     bridge._complete = AsyncMock(return_value=json.dumps({"action": "reply", "text": "完整介绍"}))
     assert await bridge.generate(context, Decision("followup", "m1")) == "完整介绍"
-    system, payload = bridge._complete.await_args.args
+    system, payload = bridge._complete.await_args_list[0].args
     assert "有依据的不同意见可以保留" in system
     assert payload["dialogue"]["target"]["sender_id"] == "20002"
     assert payload["dialogue"]["target"]["sender_name"] == "另一位群友"
@@ -478,7 +482,7 @@ async def test_group_topic_can_answer_another_participant_and_recall_their_group
     assert recall.await_count == 2
     recall.assert_any_await(bridge.bot, "30000", "20002", "那预算多少合适", mode="profiles")
     recall.assert_any_await(bridge.bot, "30000", "20002", "那预算多少合适", mode="episodes")
-    _, payload = bridge._complete.await_args.args
+    _, payload = bridge._complete.await_args_list[0].args
     assert payload["dialogue"]["observations"]["memory"] == memory
     assert payload["dialogue"]["target"]["sender_id"] == "20002"
     assert payload["output"]["tools_available"] is False
@@ -904,7 +908,7 @@ async def test_generate_preserves_shared_focus_and_refuses_another_members_expli
     assert group_persona_prompt(context.display_name, context.persona, context.default_style) in prompt
     with pytest.raises(host.ProactiveUnavailable, match="目标已失效"):
         await bridge.generate(context, Decision("reply", "translation"))
-    bridge._complete.assert_awaited_once()
+    assert bridge._complete.await_count == 2
 
 
 @pytest.mark.asyncio

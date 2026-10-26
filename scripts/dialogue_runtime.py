@@ -54,7 +54,8 @@ class RuntimeProvider:
             RunnerConfigResolver.resolve_runner_id(config)))
         primary = self.runner["model"]["primary"]
         self.roles = {"chat": primary, "judge": config.get("ai", {}).get("qunling_decision_model") or primary,
-                      "reconcile": config.get("ai", {}).get("qunling_reconcile_model") or primary}
+                      "reconcile": config.get("ai", {}).get("qunling_reconcile_model") or primary,
+                      "review": config.get("ai", {}).get("qunling_reconcile_model") or primary}
         self.execution = ExecutionContext(instance_uuid="isolated-replay", workspace_uuid=self.pipeline["workspace_uuid"],
                                           bot_uuid="synthetic-bot", placement_generation=1)
         self.ap = NS(logger=logging.getLogger("qunling.replay"))
@@ -143,6 +144,25 @@ class RuntimeProvider:
         finally:
             observation["seconds"] = round(time.monotonic() - started, 3)
 
+    async def restore_query(self, *, query, target, case):
+        # Host preprocessing projects this member's canonical transcript before
+        # interpreting the current turn. LocalAgent reads the same history later.
+        from langbot.pkg.agent.runner.transcript_store import TranscriptStore
+        api = ReplayAPI(self, case["id"] + ":" + target.sender_id, query, target, case)
+        view = TranscriptStore(None)
+        query.messages = [message for item in api.items[-view.HARD_LIMIT:]
+                          if (message := view._transcript_item_to_provider_message(
+                              {**item, "item_type": "message"})) is not None]
+        query._replay_prepared_api = api
+
+    async def prepare_query(self, *, query, target, case):
+        # Production memory listeners run after understanding and before the
+        # final Host prompt is frozen. Preserve that order in isolated replay.
+        if self.memory is not None:
+            api = query._replay_prepared_api
+            await self.memory.inject(api)
+            query._replay_prepared_api = api
+
     async def runner_reply(self, *, query, target, case):
         from langbot_plugin.api.entities.builtin.provider.message import ContentElement
         from pkg.agent_core import AgentLoop, LangBotModelAdapter
@@ -152,14 +172,13 @@ class RuntimeProvider:
         # Match QunLing's QQ member lanes. Public group snapshots are shared,
         # while runner transcripts, tool results and checkpoints are per member.
         conversation = case["id"] + ":" + target.sender_id
-        api = ReplayAPI(self, conversation, query, target, case)
+        api = getattr(query, "_replay_prepared_api", None) or ReplayAPI(self, conversation, query, target, case)
         config = copy.deepcopy(self.runner)
         # Case overrides are reported. Production defaults remain the baseline;
         # a small window allows an explicit compaction regression scenario.
         config.update(case.get("runner_overrides", {}))
         if case.get("memories") or case.get("profiles"):
             config["knowledge-bases"] = ["replay-memory"]
-            await self.memory.inject(api)
             from qunling.memory_recall import deduplicate, RUNNER
             envelope = {"config": config}
             deduplicate(api.query_scope, envelope, RUNNER)
@@ -182,6 +201,9 @@ class RuntimeProvider:
             max_tool_iterations=assembly.max_tool_iterations, tool_execution_mode=assembly.tool_execution_mode,
             hooks=assembly.hooks)
         from langbot_plugin.api.entities.builtin.provider.message import Message
+        from qunling.dialogue_review import RunReview
+        from langbot_plugin.api.entities.builtin.runner import RunnerResult
+        reviewer = RunReview(query)
         api.append(Message(role="user", content=target.text), target=target)
         response = None
         async with asyncio.timeout(min(int(config.get("timeout") or 600), 600)):
@@ -189,14 +211,24 @@ class RuntimeProvider:
                 if str(event.type) == "run_failed":
                     raise RuntimeError("LocalAgent runtime replay failed")
                 if str(event.type) == "message_end" and event.message:
-                    api.append(event.message)
                     if event.message.role == "assistant" and not event.message.tool_calls:
                         response = event.message
+                    else:
+                        api.append(event.message)
+                if str(event.type) == "tool_execution_start":
+                    await reviewer.observe(RunnerResult.tool_call_started("replay", tool_call_id=event.tool_call_id,
+                        tool_name=event.tool_name, parameters=event.parameters).model_dump(mode="json"))
                 if str(event.type) == "tool_execution_end":
                     self.tool_calls.append({"case": case["id"], "tool": event.tool_name,
                                             "parameters": event.parameters, "error": bool(event.error)})
+                    payload = event.result if isinstance(event.result, dict) else {"value": event.result}
+                    await reviewer.observe(RunnerResult.tool_call_completed("replay", tool_call_id=event.tool_call_id,
+                        tool_name=event.tool_name, result=payload, error=event.error).model_dump(mode="json"))
         if response is None:
             raise ValueError("LocalAgent did not produce a final answer")
+        result = await reviewer.observe(RunnerResult.message_completed("replay", response).model_dump(mode="json"))
+        response = Message(**result["data"]["message"])
+        api.append(response)
         return response
 
     def close(self):
@@ -350,6 +382,9 @@ class ReplayMemory:
 
     async def get_plugin_storage(self, key):
         return self.storage[key]
+
+    async def get_plugin_storage_keys(self):
+        return list(self.storage)
 
     async def set_plugin_storage(self, key, value):
         self.storage[key] = value

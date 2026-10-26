@@ -9,7 +9,7 @@ import math
 import threading
 import time
 
-MODEL_STAGES = frozenset({'judge', 'generate', 'reconcile'})
+MODEL_STAGES = frozenset({'judge', 'generate', 'reconcile', 'review'})
 USAGE_CONTEXT = ContextVar('qunling_model_usage', default=None)
 
 

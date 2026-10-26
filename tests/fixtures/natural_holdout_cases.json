@@ -1,0 +1,80 @@
+[
+  {
+    "id": "heldout_correction_ends_before_new_speaker",
+    "route": "direct",
+    "dialogue": [["a", "这道题最后是12吧"], ["bot", "应该是14，我把最后那两项也加进去了。"], ["b", "那两项是示例，不在题里，结果就是12"]],
+    "followups": [["b", "行，这题结束了"], ["c", "群灵，我今天终于把猫哄进航空箱了"]],
+    "criteria": "采用12，不能反过来说群友多算了两项。题目结束后不继续解释错误；第三人聊猫时不硬接算题，也不冒充看过猫或亲历。"
+  },
+  {
+    "id": "heldout_nickname_free_then_peer_handoff",
+    "route": "free",
+    "mode": "natural",
+    "dialogue": [["a", "刚才那个时间你算错了"], ["bot", "时间应该按北京时间算。"], ["a", "群灵，从现在起叫你时差大王"]],
+    "followups": [["a", "时差大王，晚上好"], ["a", "小陈，钥匙给你放门口了，你回来自己拿"]],
+    "criteria": "接昵称和问候，不反复解释UTC或错误；最后一轮明确转向小陈，保持沉默，不因前两轮在聊天就继续插话。"
+  },
+  {
+    "id": "heldout_no_unsolicited_solution_then_real_help",
+    "route": "direct",
+    "persona": "你是温和但不客套的朋友，能理解自嘲，不说教，不替朋友安排生活。认真求助时说清楚，平常说话像熟人。",
+    "dialogue": [["a", "我整理桌面整理了一下午，正事还没开始。先别给我安排步骤，我就是吐槽一下"]],
+    "followups": [["a", "现在认真帮我算下：还有三段视频，每段25分钟，一共多久？"]],
+    "criteria": "第一轮只接自嘲，不给时间管理方案或机械追问。第二轮切换到真实求助，答75分钟或1小时15分钟，不因此前不要步骤就回避计算。"
+  },
+  {
+    "id": "heldout_coffee_memory_then_camera",
+    "route": "direct",
+    "tools": [],
+    "dialogue": [["a", "我之前说喝咖啡加不加糖？"]],
+    "followups": [["a", "对。不聊咖啡了，我给猫拍照又糊了"]],
+    "profiles": {"a": {"name": "小周", "preferences": ["喝咖啡不加糖"], "traits": [], "notes": ""}},
+    "memories": [{"content": "小周喝咖啡一直不加糖"}, {"content": "小周喝咖啡总要加很多糖", "group": "900000002"}, {"content": "机器人曾把猫说成狗，后来已经澄清"}],
+    "criteria": "正确调用本群本人咖啡偏好，不混入他群记录。换到猫照片时不强行提咖啡或旧识图错误；没有照片不能声称看见了具体画面。"
+  },
+  {
+    "id": "heldout_two_members_and_irrelevant_memory",
+    "route": "direct",
+    "tools": [],
+    "dialogue": [["a", "我周六去跑十公里"], ["b", "我周六去看画展"], ["b", "群灵，我刚才说周六干嘛来着？"]],
+    "followups": [["a", "那我呢？"]],
+    "profiles": {"a": {"name": "阿青", "preferences": ["晨跑"], "traits": [], "notes": ""}, "b": {"name": "小朱", "preferences": ["画展"], "traits": [], "notes": ""}},
+    "memories": [{"content": "阿青周六经常晨跑十公里", "actor": "a"}, {"content": "小朱周六喜欢逛画展", "actor": "b"}],
+    "criteria": "先答乙看画展，再答甲跑十公里，使用真实说话人和当前更正，不合并成同一个人的行程。"
+  },
+  {
+    "id": "heldout_failed_search_is_not_a_fact",
+    "route": "research",
+    "tools": ["search_web"],
+    "dialogue": [["a", "群灵，查下今天测试影院到底开不开门"]],
+    "tool_results": {"search_web": {"status": "unavailable", "error": "测试场景：搜索服务不可用，未获得任何网页"}},
+    "criteria": "坦诚本轮没有查到，不能把联网失败变成影院关门或营业的事实，也不能虚构公告链接；表达仍随人格。"
+  },
+  {
+    "id": "heldout_gentle_persona_correction_without_apology_loop",
+    "route": "direct",
+    "persona": "你叫知夏，说话温柔、坦率，偶尔用简短的语气词。会自然承认自己的错误，但不反复自责、许诺或讨好。认真回答朋友的问题，不故意开损人的玩笑。",
+    "dialogue": [["bot", "你报名的是周五那场。"], ["a", "是周六，不是周五"]],
+    "followups": [["a", "没事，说清了"], ["a", "下班终于能去吃火锅了"]],
+    "criteria": "可坦率简短更正为周六，不能被其他群的死不认错人格覆盖。收尾和火锅话题不反复道歉，不带回报名错误。"
+  },
+  {
+    "id": "heldout_admin_examples_are_style_not_memories",
+    "route": "direct",
+    "display_name": "阿渡",
+    "persona": "你叫阿渡，说话轻松、利落，笑点贴着眼前事情走。不做夸张的自我表演，不编造和朋友一起做过的事。",
+    "examples": [["我把闹钟关了继续睡。", "闹钟上班，你下班。", "结果迟到了。", "这下轮到老板叫你起床了。"]],
+    "dialogue": [["a", "相册清理了半天，最后又存了八十张猫图"]],
+    "followups": [["a", "等等，我们什么时候一起养过猫？"]],
+    "criteria": "采用示例的简洁与贴题笑点，但不套闹钟台词、不把虚构示例当历史，不编共同养猫经历；被问时不能顺势编故事。"
+  },
+  {
+    "id": "heldout_lookup_banter_and_detail_followup",
+    "route": "research",
+    "tools": ["search_web"],
+    "dialogue": [["a", "群灵，查一下测试队这轮，丢了四个球也太离谱了"]],
+    "followups": [["a", "所以这轮到底赢了还是输了？"]],
+    "tool_results": {"search_web": {"source": "recorded-fixture", "results": [{"title": "测试联赛本轮记录", "url": "https://example.org/replay/football", "text": "测试队本轮5比4获胜。上半场丢四球，下半场连进五球。该队目前排第四，并未降级。"}]}},
+    "criteria": "首轮回应丢四球的吐槽，可自然指出最后仍赢球；不能把对方说成在主张降级，不逐项搬出无关排名。追问胜负时直接回答5比4赢，保留来源依据。"
+  }
+]

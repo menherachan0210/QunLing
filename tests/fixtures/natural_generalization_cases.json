@@ -1,0 +1,45 @@
+[
+  {
+    "id": "generalization_trip_ownership_then_lunch",
+    "route": "direct",
+    "dialogue": [["a", "我明天去苏州出差"], ["b", "我去宁波，找朋友玩两天"], ["c", "群灵，刚才谁说要去苏州？"]],
+    "followups": [["b", "那我是去哪来着？"], ["c", "行，午饭吃啥，我已经饿了"]],
+    "criteria": "甲去苏州、乙去宁波；表达身份归属时不向群友汇报记忆规则，不无端自证没有串话或认错人。午饭正常接话，不再讨论出差归属。"
+  },
+  {
+    "id": "generalization_train_delay_then_requested_extra",
+    "route": "research",
+    "tools": ["search_web"],
+    "dialogue": [["a", "查下测试城际怎么今天晚点这么多，我站台上都快站麻了"]],
+    "followups": [["a", "那站里有没有能坐着等的地方？"]],
+    "tool_results": {"search_web": {"source": "recorded-fixture", "results": [{"title": "测试城际运行公告", "url": "https://example.org/replay/transit", "text": "测试城际受信号故障影响，当前晚点约40分钟，尚无恢复正常的确切时间。站内二层候车区有座位。车站建筑面积2.4万平方米，2018年启用，去年客流增长7%。"}]}},
+    "criteria": "第一轮讲清信号故障和约40分钟晚点，不虚构恢复时间，不顺带汇报建筑面积、启用年份、客流数据；可自然接住站麻了的抱怨。第二轮明确问坐席时答二层候车区，不能把有用信息当多余内容删掉。保留来源。"
+  },
+  {
+    "id": "generalization_explicit_full_facts_formal",
+    "route": "research",
+    "persona": "你是严谨、平实的资料助理。按提问范围完整作答，措辞正式但清楚，不玩梗，不用安慰或热情的开场白。",
+    "tools": ["search_web"],
+    "dialogue": [["a", "请查询测试博物馆的开馆年份、建筑面积和周日闭馆时间，三项都要，并注明来源。"]],
+    "tool_results": {"search_web": {"source": "recorded-fixture", "results": [{"title": "测试博物馆访客指南", "url": "https://example.org/replay/museum", "text": "测试博物馆于2018年开馆，建筑面积2.4万平方米，周日18:00闭馆。"}]}},
+    "criteria": "完整答2018年、2.4万平方米、18:00及来源，保持正式人格。不能把这次明确要的年份和面积误当上一类闲聊的多余资料。"
+  },
+  {
+    "id": "generalization_gentle_rejection_then_topic_change",
+    "route": "direct",
+    "persona": "你叫小满，是温和、坦诚又有点随性的朋友。可以说自己搞错了，不卖惨、不反复道歉。轻松聊天时短一点，关心落在朋友正在说的事上，不教育对方。",
+    "dialogue": [["bot", "你家狗是不是又把门口弄乱了"], ["a", "我养的是兔子，不是狗"]],
+    "followups": [["a", "哈哈，反正都能拆家"], ["a", "不聊它了，新买的鞋终于到了"]],
+    "criteria": "接收兔子的新事实，一次自然更正即可。能顺着都能拆家的玩笑接话；新鞋话题不再提误认动物、道歉或自己记性差。不编造看过鞋子。"
+  },
+  {
+    "id": "generalization_requested_memory_explanation",
+    "route": "direct",
+    "persona": "你说话直接、坦诚，不玩梗，不假装无所不知。不必讲大道理，但别人明确问到的事情要说明白。",
+    "tools": [],
+    "dialogue": [["a", "群灵，你为什么记得我喝茶不加糖？我是这次刚告诉你的吗？"]],
+    "profiles": {"a": {"name": "小陆", "preferences": ["喝茶不加糖"], "traits": [], "notes": ""}},
+    "memories": [{"content": "小陆之前聊过喝茶习惯：不加糖。"}],
+    "criteria": "明确解释来自此前保存的个人偏好或历史记录，不能编造这次刚说过或具体日期。不能因禁止平时自述规则而回避这次明确问到的记忆来源。"
+  }
+]

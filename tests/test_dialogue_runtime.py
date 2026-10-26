@@ -101,3 +101,68 @@ async def test_runtime_compaction_persists_conversation_summary(runtime, monkeyp
     summaries = [m for m in messages if "<conversation_summary>" in str(m.get("content"))]
     assert summaries and all(m["role"] == "user" for m in summaries)
     assert "Goal / Progress / Next Steps" not in str(calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context_source", ["prepared_group", "member_history"])
+async def test_final_review_is_the_reply_and_the_followup_history(runtime, monkeypatch, context_source):
+    import litellm
+    from langbot.pkg.provider.modelmgr.requesters import litellmchat
+    from test_dialogue_replay import replay
+
+    async def completion(**kwargs):
+        system = kwargs["messages"][0]["content"]
+        if "你核对一条即将发到群里的回复" in system:
+            answer = '{"action":"replace","reason":"原文重复复盘错误","text":"接着聊新话题。"}'
+        elif "[QunLing 本轮理解]" in system:
+            answer = '{"purpose":"继续群聊","context_message_ids":[],"information_needs":["history"]}'
+        else:
+            answer = "原始草稿：又解释了一遍旧错误。"
+        return litellm.ModelResponse(model="gpt-4.1", choices=[{"message": {"role": "assistant", "content": answer}}])
+
+    monkeypatch.setattr(litellmchat, "acompletion", completion)
+    case = {"id": "review-history", "route": "direct", "context_source": context_source, "dialogue": [["a", "换个话题"]],
+        "followups": [["a", "接着说"]], "criteria": "历史必须保存实际发出的回复", "tools": []}
+    result = await replay.replay(case, runtime, "offline")
+    assert [turn.get("reply") for turn in result["turns"]] == ["接着聊新话题。"] * 2, result
+    history = str(runtime.assembly_reports[1]["messages"])
+    assert "接着聊新话题。" in history and "原始草稿：" not in history
+    persisted = [json.loads(row[0]) for row in runtime.history.execute("SELECT item FROM turns ORDER BY seq")]
+    assert [item["content_json"]["content"] for item in persisted if item["role"] == "assistant"] == ["接着聊新话题。"] * 2
+    # Host understanding and final review must see the same canonical history
+    # as LocalAgent, including when spontaneous group participation is off.
+    second = result["turns"][1]
+    judge = next(call for call in second["calls"] if call["stage"] == "judge")
+    assert "接着聊新话题。" in str(judge["messages"])
+    review = next(call for call in second["calls"] if call["stage"] == "review")
+    evidence = json.loads(review["messages"][-1]["content"])["dialogue"]
+    assert "接着聊新话题。" in str(evidence["native_history"])
+    if context_source == "member_history":
+        assert [message["message_id"] for message in evidence["messages"]] == ["s3"]
+
+
+@pytest.mark.asyncio
+async def test_real_memory_listener_records_the_injected_profile(runtime, monkeypatch, caplog):
+    import litellm
+    from langbot.pkg.provider.modelmgr.requesters import litellmchat
+    from test_dialogue_replay import replay
+
+    async def completion(**kwargs):
+        system = kwargs["messages"][0]["content"]
+        answer = ('{"action":"keep","reason":"无实质问题"}'
+                  if "你核对一条即将发到群里的回复" in system else "你喝咖啡不加糖。")
+        return litellm.ModelResponse(model="gpt-4.1", choices=[{"message": {"role": "assistant", "content": answer}}])
+
+    monkeypatch.setattr(litellmchat, "acompletion", completion)
+    case = {"id": "memory-injection-audit", "route": "direct", "dialogue": [["a", "我喝咖啡加糖吗？"]],
+        "criteria": "真实记忆监听器写入注入审计，复核也收到同一画像", "tools": [],
+        "profiles": {"a": {"name": "小周", "preferences": ["喝咖啡不加糖"], "traits": [], "notes": ""}}}
+    result = await replay.replay(case, runtime, "offline")
+    assert "error" not in result["turns"][0], result
+    snapshot = await runtime.memory.memory_store.get_injection_snapshot("synthetic-bot:group_900000001")
+    assert snapshot["injected"] is True and snapshot["injection_chars"] > 0
+    assert snapshot["speaker"]["id"] == runtime.actor_id("a")
+    assert snapshot["speaker_profile"]["name"] == "小周"
+    assert "failed to persist injection snapshot" not in caplog.text
+    review = next(c for c in result["turns"][0]["calls"] if c["stage"] == "review")
+    assert "喝咖啡不加糖" in str(review["messages"])

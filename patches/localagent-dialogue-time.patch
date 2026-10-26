@@ -1,0 +1,19 @@
+diff --git a/pkg/context_pipeline.py b/pkg/context_pipeline.py
+--- a/pkg/context_pipeline.py
++++ b/pkg/context_pipeline.py
+@@ -383,9 +383,11 @@
+         system_instructions = []
+         if self.ctx.config.get("date-grounding", True) is not False:
+-            # Runtime clock, not the event timestamp: replayed events may be old.
+-            # UTC is explicit so a separate plugin process cannot imply Host/user time.
++            # Match the configured Host timezone; UTC midnight is not local midnight.
++            from qunling.dialogue_time import clock
++            local_clock = clock()
+             date_guidance = (
+-                f"Current date: {datetime.now(timezone.utc).strftime('%Y-%m-%d (%A)')} UTC. "
++                f"Current date: {local_clock['current_date']} {local_clock['timezone']} "
++                f"(UTC{local_clock['utc_offset']}). "
+                 'Resolve relative time references (e.g. "today", "this quarter", "latest", '
+-                '"currently") based on this date, not your training cutoff. For anything '
++                '"currently") in this local timezone, not your training cutoff. For anything '
+                 "time-sensitive that may have changed since training — stock prices, "

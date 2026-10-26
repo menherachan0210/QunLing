@@ -38,6 +38,10 @@ async def test_replay_followup_uses_its_actual_previous_reply_and_real_host_prom
     result = await replay.replay(case, provider, "offline")
     assert all("error" not in turn for turn in result["turns"])
     assert result["turns"][1]["input"][-2]["text"] == "本次模型实际生成的独特回答"
+    # Direct replies and free participation both retain their actual recipient
+    # in production, even when the platform message has no visible quote.
+    assert result["turns"][1]["input"][-2]["reply_to"] == "s1"
+    assert result["turns"][1]["input"][-2]["reply_recipient_id"] == "a"
     assert result["turns"][1]["input"][-1]["sender_id"] == "b"
     final = next(prompt for stage, prompt in reversed(provider.prompts) if stage not in {"judge", "reconcile"})
     assert "本次模型实际生成的独特回答" in "\n".join(final)

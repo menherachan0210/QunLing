@@ -58,6 +58,7 @@ PATCHES = (
     ("host-chinese-embedding.patch", "host", False),
     ("host-dialogue-provenance.patch", "host", False),
     ("host-dialogue-focus.patch", "host", False),
+    ("host-dialogue-review.patch", "host", False),
     ("sdk-image-tool-timeout.patch", "sdk", False),
     ("sdk-dedicated-background.patch", "sdk", False),
     ("sdk-windows-dependency-temp.patch", "sdk", True),

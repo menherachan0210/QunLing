@@ -262,7 +262,7 @@ async def test_free_reply_and_explicit_request_share_relevant_public_summary_onl
     assert seen == []
     bridge._complete.return_value = json.dumps({"action": "reply", "text": "是戴眼镜的白猫。"})
     await bridge.generate(context, Decision("reply", "m1"))
-    payload = bridge._complete.await_args.args[1]
+    payload = bridge._complete.await_args_list[-2].args[1]
     assert len(seen) == 1 and payload["dialogue"]["observations"]["shared_knowledge"][0]["subject"] == "小明的头像"
     assert payload["output"]["tools_available"] is False
     request = event("小明的头像是什么样", explicit=True, sender="20003")

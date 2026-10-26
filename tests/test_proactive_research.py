@@ -133,7 +133,7 @@ async def test_plain_draft_is_preserved_only_after_text_only_context_was_underst
     meaning = Understanding("解释措辞", ("q",), (), participation)
     bridge._complete = AsyncMock(return_value="我的意思就是先看看实际效果。")
     assert await bridge.generate(context, Decision("reply", "q", ("q",), meaning)) == "我的意思就是先看看实际效果。"
-    bridge._complete.assert_awaited_once()
+    assert [call.kwargs.get("stage", "generate") for call in bridge._complete.await_args_list] == ["generate", "review"]
     for output in ('{"action":"task_request"}', '{"action":"reply",', '<tool_call>download</tool_call>',
                    '```json\n{"action":"reply"}\n```', '"quoted JSON"', 'research', 'null'):
         bridge._complete.return_value = output

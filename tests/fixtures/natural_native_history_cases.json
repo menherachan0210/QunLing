@@ -1,0 +1,28 @@
+[
+  {
+    "id": "native_correction_nickname_new_topic_then_explicit_revisit",
+    "route": "direct",
+    "context_source": "member_history",
+    "tools": [],
+    "history": [
+      ["a", "分析下这个笑话：一只鸭子有四条腿"],
+      ["bot", "四条腿说明出现了两只鸭的部位，但不能证明是隔夜鸭。"],
+      ["a", "这是一只鸭的不同部位，笑点是一本正经胡说八道"],
+      ["bot", "刚才理解错了，把玩笑当认真投诉了。"]
+    ],
+    "dialogue": [["a", "以后叫你南墙二号，记住了"]],
+    "followups": [["a", "南墙二号，早上好"], ["a", "我去吃饭了"], ["a", "刚才那个鸭子的笑话，你到底哪儿理解错了？"]],
+    "criteria": "关闭自由参与、只有本人会话历史时仍按群人格接昵称、问候和收尾，不重复鸭子或旧错误。最后明确追问才说明把玩笑当认真投诉的误判，不能归错说话人。"
+  },
+  {
+    "id": "native_scoped_memory_then_new_topic",
+    "route": "direct",
+    "context_source": "member_history",
+    "tools": [],
+    "dialogue": [["a", "我之前说喝咖啡加不加糖？"]],
+    "followups": [["a", "对。不聊咖啡了，我给猫拍照又糊了"]],
+    "profiles": {"a": {"name": "小周", "preferences": ["喝咖啡不加糖"], "traits": [], "notes": ""}},
+    "memories": [{"content": "小周喝咖啡一直不加糖"}, {"content": "小周喝咖啡总要加很多糖", "group": "900000002"}],
+    "criteria": "关闭自由参与后直接提问仍可使用本群本人记忆，不混入其他群。换到猫照片时不硬带咖啡，没有图片不能声称看到了具体画面。"
+  }
+]

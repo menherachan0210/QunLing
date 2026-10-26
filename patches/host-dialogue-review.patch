@@ -1,0 +1,17 @@
+diff --git a/src/langbot/pkg/agent/runner/orchestrator.py b/src/langbot/pkg/agent/runner/orchestrator.py
+--- a/src/langbot/pkg/agent/runner/orchestrator.py
++++ b/src/langbot/pkg/agent/runner/orchestrator.py
+@@ -254,2 +254,6 @@
+         assistant_transcript_written = False
++        dialogue_review = None
++        if getattr(execution_query, '_qunling_dialogue_review', None) is not None:
++            from qunling.dialogue_review import RunReview
++            dialogue_review = RunReview(execution_query)
+         terminal_status: str | None = None
+@@ -366,2 +370,6 @@
+ 
++                        # Review before persistence and delivery so later turns see the sent reply.
++                        if dialogue_review is not None:
++                            result_dict = await dialogue_review.observe(result_dict)
++
+                         journal_started = time.monotonic()

@@ -33,6 +33,10 @@ def load_cases(path):
                 or case.get("route") not in {"free", "direct", "research", "routing"}
                 or not isinstance(case.get("criteria"), str) or not case.get("dialogue")):
             raise ValueError("Invalid or duplicate replay case")
+        if case.get("context_source", "prepared_group") not in {"prepared_group", "member_history"}:
+            raise ValueError("Invalid replay context source")
+        if case.get("context_source") == "member_history" and case["route"] != "direct":
+            raise ValueError("Member-only history requires a direct request")
         names.add(case["id"])
         for actor, text in [*case["dialogue"], *case.get("followups", [])]:
             if not isinstance(actor, str) or not isinstance(text, str) or not text:
@@ -121,7 +125,7 @@ async def replay(case, provider, label):
     bot = NS(bot_entity=NS(uuid=bot_id, workspace_uuid=execution.workspace_uuid, enable=True),
              enable=True, execution_context=execution, adapter=NS(bot_account_id="10000"))
     bridge = host.HostBridge.__new__(host.HostBridge)
-    bridge.bot, bridge._received_at = bot, {}
+    bridge.bot, bridge._received_at, bridge._request_contexts = bot, {}, {}
     bridge._preference_versions, bridge._preference_subjects = {}, {}
     bridge.store = NS(read_valid=True, read=lambda: {'revision': 'synthetic', 'enabled': True,
         'groups': {group_id: {'mode': mode}}})
@@ -144,10 +148,19 @@ async def replay(case, provider, label):
     mode = case.get("mode", settings.get("mode", "active"))
     display_name = case.get("display_name", settings.get("display_name", "群灵"))
     samples = case.get("examples", settings.get("examples", []))
+    if case.get("context_source") == "member_history":
+        # Exercise the actual disabled-public-participation boundary while
+        # retaining the administrator's persona and the member's native history.
+        mode = "off"
+        bridge.store.read = lambda: {"revision": "synthetic", "enabled": True,
+            "default_style": settings.get("default_style", ""),
+            "default_examples": settings.get("default_examples", []),
+            "groups": {group_id: {"mode": mode, "display_name": display_name,
+                                  "persona": persona, "examples": samples}}}
     evidence = [{"kind": "image_analysis" if case.get("media") else "text_read",
                  "source": "synthetic-fixture", "text": case["evidence"]}] if case.get("evidence") else []
 
-    def add(actor, text, *, is_bot=False):
+    def add(actor, text, *, is_bot=False, reply_target=None):
         if not is_bot and hasattr(provider, "actor_id"):
             actor = provider.actor_id(actor)
         key = "s" + str(len(messages) + 1)
@@ -157,6 +170,8 @@ async def replay(case, provider, label):
         msg = Message(bot_id, group_id, "s" + str(len(messages) + 1), "10000" if is_bot else actor,
                       text, time.time(), sender_name="机器人" if is_bot else "成员" + actor,
                       is_bot=is_bot, has_media=bool(attachment or (case.get("media") and not messages)),
+                      reply_to=reply_target.message_id if reply_target else None,
+                      reply_recipient_id=reply_target.sender_id if reply_target else None,
                       **({"attachments": attachment} if "attachments" in {field.name for field in fields(Message)} else {}))
         messages.append(msg)
         return msg
@@ -227,15 +242,20 @@ async def replay(case, provider, label):
                         "continuation_read_only": research, "research_request": research}
                     if handoff and decision.understanding:
                         state["understanding"] = asdict(decision.understanding)
-                    bridge.request_context = lambda _: (state, [asdict(m) for m in messages[:-1]])
+                    if case.get("context_source") != "member_history":
+                        bridge.request_context = lambda _: (state, [asdict(m) for m in messages[:-1]])
                     incoming = NS(group=NS(id=group_id), sender=NS(id=target.sender_id, nickname=target.sender_name),
                                   message_id=target.message_id, timestamp=target.timestamp, message_chain=[Plain(text=target.text)])
                     configured = getattr(provider, "runner", {}).get("prompt", [{"role": "system", "content": PROMPT}])
                     query = NS(adapter=bot.adapter, message_event=incoming, _execution_context=execution,
                                prompt=NS(messages=[ModelMessage(**item) for item in configured]))
+                    if hasattr(provider, "restore_query"):
+                        await provider.restore_query(query=query, target=target, case=case)
                     if hasattr(provider, "runner_reply"):
                         from qunling.dialogue_focus import prepare
                         await prepare(query)
+                    if hasattr(provider, "prepare_query"):
+                        await provider.prepare_query(query=query, target=target, case=case)
                     host.prepare_prompt(query)
                     if not any(item.content.startswith(host.PROMPT_MARKER) for item in query.prompt.messages):
                         raise ValueError("Host prompt was not prepared")
@@ -249,8 +269,14 @@ async def replay(case, provider, label):
                         response = await provider.invoke(messages=query.prompt.messages)
                     row["reply"], row["action"] = response.content, "reply"
                 if row.get("reply"):
-                    covered.append(target.message_id)
-                    previous = add("bot", row["reply"], is_bot=True)
+                    # The real adapter/engine records both the source message
+                    # and its sender after a confirmed reply. Dropping this
+                    # provenance makes a later member's "what about me?" look
+                    # like a correction of an answer meant for someone else.
+                    delivered_target = (next(m for m in messages if m.message_id == decision.target_message_id)
+                                        if case["route"] == "free" and not handoff else target)
+                    covered.append(delivered_target.message_id)
+                    previous = add("bot", row["reply"], is_bot=True, reply_target=delivered_target)
             except Exception as exc:
                 # Transport error strings can contain URLs/credentials. Store only a fixed type name.
                 row["error"] = type(exc).__name__
