@@ -1,0 +1,51 @@
+--- a/src/langbot/pkg/plugin/handler.py
++++ b/src/langbot/pkg/plugin/handler.py
+@@ -1283,6 +1283,11 @@
+         @self.action(PluginToRuntimeAction.CALL_PLATFORM_API)
+         async def call_platform_api(data: dict[str, Any]) -> handler.ActionResponse:
+             """Call a platform adapter API"""
++            if data.get('action') == 'qunling_qq':
++                from qunling.qq_actions import handle
++                binding, identity = await self._require_plugin_action_context()
++                result = await handle(self, data, binding, identity)
++                return handler.ActionResponse.success(data={'result': result})
+             if data.get('run_id') is not None:
+                 return await call_run_platform_api(data)
+             action_context, _ = await self._require_plugin_action_context()
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py
+@@ -102,6 +102,9 @@
+                 self._lookup.clear()
+ 
+     async def _receive_event(self, payload):
++        if payload.get('post_type') in {'notice', 'request'}:
++            from qunling.qq_operation_store import record_native
++            await asyncio.to_thread(record_native, self, payload)
+         await self._handle_native_event(aiocqhttp.Event.from_payload(payload))
+ 
+     def get_supported_events(self) -> list[str]:
+--- a/src/langbot/pkg/pipeline/preproc/preproc.py
++++ b/src/langbot/pkg/pipeline/preproc/preproc.py
+@@ -424,6 +424,10 @@
+         except Exception:
+             pass
+ 
++        if os.environ.get('QUNLING_DATA_DIR'):
++            from qunling.qq_event_context import prepare_prompt as prepare_qq_events
++            await prepare_qq_events(query)
++
+         # Emit PromptPreProcessing before the runner receives the query.
+ 
+         event = events.PromptPreProcessing(
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/message_converter.py
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/message_converter.py
+@@ -188,6 +188,9 @@
+                         url=segment.data.get('url') or segment.data.get('file') or '',
+                     )
+                 )
++            elif segment.type == 'video':
++                # Keep receipt metadata without downloading video during ordinary chat ingress.
++                components.append(platform_message.Plain(text='[QQ 视频：可用 qq_action 的 media/import_media/video_frames/analyze_images 按需读取]'))
+             elif segment.type == 'file':
+                 components.append(
+                     platform_message.File(

@@ -17,6 +17,26 @@ def test_defaults_do_not_authorize_or_create_storage(tmp_path):
     assert store.read_valid and not store.root.exists()
 
 
+def test_qq_tool_permissions_survive_legacy_console_and_reject_identity_injection(tmp_path):
+    store = ConfigStore("bot", tmp_path)
+    values = config(qq_actions={"enabled": True, "owner_ids": ["100", "100"], "transcription_model": "asr"})
+    values["groups"]["123456"]["qq_permissions"] = {k: k != "management" for k in ("interaction", "management", "files", "media")}
+    saved = store.save(values, {"123456"})
+    assert saved["qq_actions"]["owner_ids"] == ["100"]
+    legacy = deepcopy(saved)
+    legacy.pop("qq_actions")
+    legacy["groups"]["123456"].pop("qq_permissions")
+    preserved = store.save(legacy, {"123456"})
+    assert preserved["qq_actions"] == saved["qq_actions"]
+    assert not preserved["groups"]["123456"]["qq_permissions"]["management"]
+    for ids in ([100], ["100;exit"], ["00100"], ["@所有人"]):
+        changed = deepcopy(preserved)
+        changed["qq_actions"]["owner_ids"] = ids
+        with pytest.raises(ConfigError):
+            store.save(changed, {"123456"})
+    assert store.read() == preserved
+
+
 def test_dialogue_examples_survive_legacy_saves_restart_and_explicit_reset(tmp_path):
     store = ConfigStore("bot", tmp_path)
     initial = config(default_examples=[["默认问", "默认答"]])

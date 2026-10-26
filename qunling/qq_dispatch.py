@@ -26,6 +26,7 @@ _ARGUMENT_NAMES = ("bot_uuid", "launcher_type", "launcher_id", "sender_id", "mes
 # arbitrary execution or persistent memory mutation. Mixed-action tools use
 # an operation-level gate; an unknown tool or source is denied by default.
 CONTINUATION_READ_TOOLS = frozenset({
+    "qq_capabilities",
     "read_recent_group_context", "read_group_context_images", "read_forwarded_messages",
     "query_group_members", "read_qq_avatar", "read_text_attachment", "recall_memory",
     "search_web", "read_web_page", "search_web_images", "list_web_files", "list_edit_image_references",
@@ -36,6 +37,7 @@ CONTINUATION_READ_TOOLS = frozenset({
 # Scheduling only: these names describe bounded operations, never user text or
 # permissions. Unknown sources/tools stay in the conservative general lane.
 _QUICK_TOOLS = frozenset({
+    "qq_capabilities",
     "read_recent_group_context", "query_group_members", "read_web_page",
     "comic_translation_status", "list_edit_image_references",
     "read_bot_activity",
@@ -53,6 +55,11 @@ def _tool_lane(name, source, parameters):
     if name in _NETWORK_TOOLS:
         return "network"
     if isinstance(parameters, dict):
+        if name == "qq_action":
+            from qunling.qq_capabilities import OPS
+            operation = OPS.get(parameters.get("operation")) if isinstance(parameters.get("operation"), str) else None
+            if operation and operation.category in {"read", "interaction", "management", "account"} and parameters.get("operation") != "import_media":
+                return "quick"
         if name == "browse_group_files" and parameters.get("action", "list") == "list":
             return "quick"
         if (name == "file_task" and (parameters.get("action") == "list"
@@ -65,6 +72,9 @@ def continuation_tool_allowed(name, parameters=None):
     """Permit bounded retrieval/cache work, never delivery or external mutation."""
     if name in CONTINUATION_READ_TOOLS:
         return True
+    if name == "qq_action":
+        from qunling.qq_capabilities import continuation_allowed
+        return continuation_allowed(parameters)
     if not isinstance(parameters, dict):
         return False
     if name == "file_workspace":
@@ -792,7 +802,7 @@ async def run_pipeline(ap, query, pipeline):
             journal.record(query, 'running')
             object.__setattr__(query, '_request_phase', 'running')
             await pipeline.run(query)
-        if query.variables.get("_monitoring_has_error") and not getattr(query, "_qq_delivery_confirmed", False):
+        if query.variables.get("_monitoring_has_error") and not (getattr(query, "_qq_delivery_confirmed", False) or getattr(query, "_qq_action_confirmed", False)):
             reason = ('delivery_unconfirmed' if getattr(query, '_qq_delivery_attempted', False)
                       else getattr(query, '_request_error', 'pipeline_failed'))
             journal.record(query, 'ended', status='unconfirmed' if reason=='delivery_unconfirmed' else 'failed', reason=reason)
@@ -801,7 +811,7 @@ async def run_pipeline(ap, query, pipeline):
                        "这次请求处理失败，未获得可发送的结果；不会自动重复执行。")
             await service.once(task, "terminal", message)
         else:
-            confirmed = getattr(query, '_qq_delivery_confirmed', False)
+            confirmed = getattr(query, '_qq_delivery_confirmed', False) or getattr(query, '_qq_action_confirmed', False)
             journal.record(query, 'ended', status='completed' if confirmed else 'processed',
                            reason='' if confirmed else 'no_confirmed_reply')
     except TimeoutError as exc:
@@ -856,8 +866,9 @@ async def fail_cleanup(ap, query):
 def _continuation_tool_denied(code):
     return json.dumps({
         "status": "blocked", "error": code, "executed": False,
-        "instruction": "本次普通群聊续问只允许读取和查询；该工具未执行。可继续使用已有证据回答，"
-        "不要声称生成、修改或发送了内容。需要创建、编辑、上传、删除或管理任务时，需用户明确 @ 发起该操作。",
+        "instruction": "本次普通群聊续问只允许读取、查询和轻量 QQ 互动；该工具未执行。可继续使用已有证据回答，"
+        "不要声称生成、修改或发送了内容。创建、编辑、上传、删除或管理任务需要当前发言者的实际操作意图，"
+        "由参与判断转入任务流程，无须强制 @。",
     }, ensure_ascii=False)
 
 

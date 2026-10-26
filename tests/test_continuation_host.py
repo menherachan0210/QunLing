@@ -79,7 +79,9 @@ async def test_cross_member_tool_followup_keeps_real_identity_and_frozen_evidenc
     assert "future" not in {m["message_id"] for m in history}
     query = query_for(bridge, follow)
     host.prepare_prompt(query)
-    assert "只执行资料查询" in query.prompt.messages[1].content
+    assert "可执行资料查询" in query.prompt.messages[1].content
+    assert "interaction 类轻量互动" in query.prompt.messages[1].content
+    assert "管理、媒体发送与文件写入需要实际任务请求" in query.prompt.messages[1].content
     accept.assert_awaited_once()
     host.completed(bridge.bot.adapter, follow)
     assert not bridge.queued and not bridge._request_contexts

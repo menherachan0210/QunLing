@@ -3,16 +3,22 @@ kind: Plugin
 metadata:
   author: local
   name: QQGroupContext
-  version: 0.2.3
+  version: 0.3.0
   label:
     en_US: QQ Group Conversation Context
-    zh_Hans: QQ 群聊资料与图片理解
+    zh_Hans: QQ 互动、管理与群聊上下文
   description:
     en_US: On-demand recent group discussion and image understanding across participants.
-    zh_Hans: 按需查询群成员、识别头像、浏览群文件，理解群聊前文与图片。
+    zh_Hans: 按语境选择 QQ 互动、群管理、文件与媒体能力，查询成员、头像和群聊前文。
   icon: assets/icon.svg
 spec:
   config:
+    - name: vision_enabled
+      type: boolean
+      required: false
+      default: true
+      label: {en_US: Enable image understanding, zh_Hans: 启用图像理解}
+      description: {en_US: QQ tools remain available independently, zh_Hans: 与管理页图像理解开关联动，关闭不影响 QQ 互动工具。}
     - name: model_uuid
       type: string
       required: true

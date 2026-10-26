@@ -236,7 +236,7 @@ def prepare_sources(root: Path):
     )
 
 
-def package_metadata(package: Path) -> dict:
+def package_metadata(package: Path, *, source: Path | None = None) -> dict:
     import yaml
 
     with zipfile.ZipFile(package) as archive:
@@ -252,6 +252,18 @@ def package_metadata(package: Path) -> dict:
             ):
                 raise ValueError("A package contains excluded runtime/build files")
         metadata = yaml.safe_load(archive.read("manifest.yaml"))["metadata"]
+        if source is not None:
+            # The SDK logs individual ZIP failures but still exits successfully.
+            # Verify executable sources and tool manifests before publishing.
+            required = [source / "main.py", source / "requirements.txt"]
+            for directory in ("pkg", "components", "qunling"):
+                required.extend(p for p in (source / directory).rglob("*") if p.is_file())
+            for path in required:
+                if not path.is_file():
+                    continue
+                name = path.relative_to(source).as_posix()
+                if name not in archive.namelist() or archive.read(name) != path.read_bytes():
+                    raise ValueError(f"Plugin package source missing or changed: {name}")
     return {
         "filename": package.name,
         "identity": metadata["author"] + "/" + metadata["name"],
@@ -300,6 +312,11 @@ def build_packages(root: Path):
                 if not (root / notice).is_file():
                     raise ValueError("Shared package license metadata is missing")
                 shutil.copyfile(root / notice, staging / "qunling" / notice)
+            # Reproducible source archives may use epoch-zero timestamps, which
+            # the SDK's ZIP writer cannot represent. Only normalize staging.
+            for path in staging.rglob("*"):
+                if path.is_file() and path.stat().st_mtime < 315532800:
+                    os.utime(path, (946684800, 946684800))
             subprocess.run(
                 [sys.executable, "-m", "langbot_plugin.cli", "build", "-o", str(built)],
                 cwd=staging,
@@ -308,7 +325,7 @@ def build_packages(root: Path):
             artifacts = list(built.glob("*.lbpkg"))
             if len(artifacts) != 1:
                 raise ValueError("Plugin builder did not produce exactly one artifact")
-            metadata = package_metadata(artifacts[0])
+            metadata = package_metadata(artifacts[0], source=staging)
             if metadata["identity"].split("/")[-1] != name:
                 raise ValueError("Plugin package identity mismatch")
             target = output / artifacts[0].name

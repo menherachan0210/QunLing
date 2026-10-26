@@ -49,8 +49,9 @@ for(const [key,id] of Object.entries(aiFields))element('settings').elements[key]
 const featureFields=['memory','files','vision','image','search','comic'].map(name=>Object.assign(makeElement(),{value:name,type:'checkbox'}));
 element('settings').querySelectorAll=selector=>selector==='input[name="features"]'?featureFields:[];
 const pages=['overview','models','connection','proactive','requests','knowledge','maintenance','advanced'].map(id=>{const page=element(id);page.dataset.page=id==='proactive'?'groups':id;return page;});
-const tabs=['persona','activity','memory','defaults'].map(name=>{const tab=element('tab-'+name);tab.dataset.groupTab=name;return tab;});
-const panels=['persona','activity','memory','defaults'].map(name=>{const panel=element('panel-'+name);panel.dataset.groupPanel=name;return panel;});
+const tabs=['persona','activity','memory','defaults','qq'].map(name=>{const tab=element('tab-'+name);tab.dataset.groupTab=name;return tab;});
+const panels=['persona','activity','memory','defaults','qq'].map(name=>{const panel=element('panel-'+name);panel.dataset.groupPanel=name;return panel;});
+const qqFields=['qq-tools-enabled',...['interaction','management','files','media'].map(k=>'qq-permission-'+k),'qq-owner-ids','qq-transcription-model'].map(id=>Object.assign(element(id),{type:id==='qq-owner-ids'||id==='qq-transcription-model'?'text':'checkbox'}));
 const windowEvents={};
 const stored=new Map([['qqbot-setup','test-token']]);
 let config={version:1,revision:'r0',enabled:false,groups:{}};
@@ -77,6 +78,7 @@ const context=vm.createContext({
       if(selector==='[data-page]')return pages;
       if(selector==='[data-group-tab]')return tabs;
       if(selector==='[data-group-panel]')return panels;
+      if(selector==='[data-qq-edit]')return qqFields;
       if(selector==='#settings input, #settings select')return [...Object.values(element('settings').elements),...featureFields];
       return [];
     }
@@ -204,6 +206,29 @@ def test_default_samples_empty_validation_failed_save_and_restore():
   assert.equal(fields()[2].children[0].value,'默认回应');
   assert.deepEqual(posts[0].default_examples,[['默认群友','默认回应']]);
   assert.ok(!element('persona-effective').textContent.includes('默认回应'));
+""")
+
+
+def test_qq_tools_save_group_permissions_and_global_settings_without_erasing_persona():
+    run_browser(r"""
+  select('123');
+  element('tab-qq').click();
+  assert.equal(element('panel-qq').hidden,false);
+  assert.equal(element('qq-permission-management').checked,true);
+  change('qq-permission-management',false);
+  input('qq-owner-ids','123456\n123456\n987654');
+  input('qq-transcription-model','asr-test');
+  input('proactive-persona','群内性格');
+  select('456');
+  assert.equal(element('qq-permission-management').checked,true);
+  assert.equal(element('qq-transcription-model').value,'asr-test');
+  select('123');
+  assert.equal(element('qq-permission-management').checked,false);
+  await save();
+  assert.equal(posts[0].groups['123'].persona,'群内性格');
+  assert.equal(posts[0].groups['123'].qq_permissions.management,false);
+  assert.deepEqual(posts[0].qq_actions.owner_ids,['123456','987654']);
+  assert.equal(posts[0].qq_actions.transcription_model,'asr-test');
 """)
 
 

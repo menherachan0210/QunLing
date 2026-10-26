@@ -291,9 +291,9 @@ function renderPersonaPreview() {
   text("persona-effective-note", proactiveDirty ? "这里展示服务器已保存的内容；正在编辑的草稿尚未生效。" : "参与判断、@ 回复、自由对话及工具回复均使用以下内容。");
 }
 function setGroupTab(tab) {
-  if (!["persona", "activity", "memory", "defaults"].includes(tab)) return;
+  if (!["persona", "activity", "memory", "defaults", "qq"].includes(tab)) return;
   activeGroupTab = tab;
-  $("group-reset-action").hidden = tab === "memory" || tab === "defaults";
+  $("group-reset-action").hidden = ["memory", "defaults", "qq"].includes(tab);
   $("group-save-bar").hidden = tab === "memory";
   document.querySelectorAll("[data-group-tab]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.groupTab === tab)));
   document.querySelectorAll("[data-group-panel]").forEach(panel => { panel.hidden = panel.dataset.groupPanel !== tab; });
@@ -347,10 +347,14 @@ function exampleValidationError(value) {
 }
 function validProactiveConfig(value) {
   return value?.version === 1 && typeof value.revision === "string" && typeof value.enabled === "boolean" &&
+    (value.qq_actions === undefined || (value.qq_actions && typeof value.qq_actions.enabled === "boolean" &&
+      Array.isArray(value.qq_actions.owner_ids) && value.qq_actions.owner_ids.every(v => typeof v === "string") &&
+      typeof value.qq_actions.transcription_model === "string")) &&
     (value.default_style === undefined || typeof value.default_style === "string") && validExamples(value.default_examples) &&
     value.groups && !Array.isArray(value.groups) && typeof value.groups === "object" &&
     Object.entries(value.groups).every(([id, group]) => /^\d+$/.test(id) && group && Object.hasOwn(proactiveModes, group.mode) &&
       typeof group.display_name === "string" && typeof group.persona === "string" && validExamples(group.examples) && typeof group.quiet_hours?.enabled === "boolean" &&
+      (group.qq_permissions === undefined || (group.qq_permissions && ["interaction", "management", "files", "media"].every(k => typeof group.qq_permissions[k] === "boolean"))) &&
       typeof group.quiet_hours.start === "string" && typeof group.quiet_hours.end === "string");
 }
 function proactiveFeedback(message, state = "error") {
@@ -468,6 +472,13 @@ function renderProactiveEditor() {
   document.querySelectorAll("#proactive-mode option").forEach((option) => { option.disabled = !member && option.value !== "off"; });
   $("proactive-display-name").value = group.display_name;
   $("proactive-persona").value = group.persona;
+  const qq = proactiveDraft.qq_actions || {enabled: true, owner_ids: [], transcription_model: ""};
+  $("qq-tools-enabled").checked = qq.enabled;
+  $("qq-owner-ids").value = qq.owner_ids.join("\n");
+  $("qq-transcription-model").value = qq.transcription_model;
+  for (const category of ["interaction", "management", "files", "media"]) {
+    $("qq-permission-" + category).checked = group.qq_permissions?.[category] !== false;
+  }
   renderProactivePersonaCount();
   $("proactive-quiet-enabled").checked = group.quiet_hours.enabled;
   $("proactive-quiet-start").value = group.quiet_hours.start;
@@ -604,6 +615,7 @@ function editProactiveGroup() {
     display_name: $("proactive-display-name").value,
     persona: $("proactive-persona").value,
     examples: proactiveDraft.groups[proactiveSelected]?.examples || [],
+    ...(proactiveDraft.groups[proactiveSelected]?.qq_permissions ? {qq_permissions: {...proactiveDraft.groups[proactiveSelected].qq_permissions}} : {}),
     quiet_hours: {enabled: $("proactive-quiet-enabled").checked, start: $("proactive-quiet-start").value, end: $("proactive-quiet-end").value, timezone: "Asia/Shanghai"}
   };
   proactiveDraft.groups[proactiveSelected] = group;
@@ -613,6 +625,21 @@ function editProactiveGroup() {
   text("proactive-mode-note", proactiveModeNotes[group.mode]);
   proactiveSummary();
   renderProactiveGroups();
+}
+function editQQTools() {
+  if (!proactiveDraft || !proactiveSelected || $("proactive-group-settings").disabled) return;
+  const group = exampleOwner(false, true);
+  if (!group) return;
+  group.qq_permissions = Object.fromEntries(["interaction", "management", "files", "media"].map(category =>
+    [category, $("qq-permission-" + category).checked]));
+  proactiveDraft.qq_actions = {
+    enabled: $("qq-tools-enabled").checked,
+    owner_ids: [...new Set($("qq-owner-ids").value.split(/[\s,，]+/).filter(Boolean))],
+    transcription_model: $("qq-transcription-model").value.trim()
+  };
+  proactiveDirty = true;
+  proactiveSummary();
+  controls();
 }
 function exampleOwner(defaults, create = false) {
   if (!proactiveDraft) return null;
@@ -869,7 +896,9 @@ $("proactive-reset-style").addEventListener("click", () => {
 });
 $("proactive-reset-group").addEventListener("click", () => {
   if ($("proactive-reset-group").disabled || !proactiveDraft || !proactiveSelected) return;
-  delete proactiveDraft.groups[proactiveSelected];
+  const permissions = proactiveDraft.groups[proactiveSelected]?.qq_permissions;
+  if (permissions) proactiveDraft.groups[proactiveSelected] = {...proactiveDefaultGroup(), qq_permissions: {...permissions}};
+  else delete proactiveDraft.groups[proactiveSelected];
   proactiveDirty = true;
   renderProactiveEditor();
   renderProactiveGroups();
@@ -1015,6 +1044,7 @@ $("settings-reload").addEventListener("click", async () => {
   finally { settingsReloading = false; controls(); }
 });
 document.querySelectorAll("[data-group-tab]").forEach(button => button.addEventListener("click", () => setGroupTab(button.dataset.groupTab)));
+document.querySelectorAll("[data-qq-edit]").forEach(field => field.addEventListener(field.type === "checkbox" ? "change" : "input", editQQTools));
 window.addEventListener?.("beforeunload", event => {
   if (!(settingsDirty || proactiveDirty || settingsPending || configAction || proactiveAction || memoryDirty || memoryBusy)) return;
   event.preventDefault();

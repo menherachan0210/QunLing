@@ -7,13 +7,14 @@ from test_public_config import FakeLangBot, run_configure, row, settings
 
 def test_chat_only_does_not_need_optional_plugins_or_embedding_resources():
     api = FakeLangBot()
-    api.plugins = [p for p in api.plugins if p['manifest']['manifest']['metadata']['name'] == 'LocalAgent']
+    api.plugins = [p for p in api.plugins if p['manifest']['manifest']['metadata']['name'] in {'LocalAgent', 'QQGroupContext'}]
     record = run_configure(api, settings(image_model='', features=[]))
     pipeline = row(api, '/api/v1/pipelines', record['pipeline_uuid'])
-    assert pipeline['extensions_preferences']['plugins'] == [{'author':'langbot-team', 'name':'LocalAgent'}]
+    assert pipeline['extensions_preferences']['plugins'] == [{'author':'langbot-team', 'name':'LocalAgent'}, {'author':'local', 'name':'QQGroupContext'}]
     assert not api.records['/api/v1/knowledge/bases']
     assert not api.records['/api/v1/agents']
-    assert not any('/plugins/' in path and method == 'PUT' for method, path, _ in api.calls)
+    assert not any('/plugins/' in path and 'QQGroupContext' not in path and method == 'PUT' for method, path, _ in api.calls)
+    assert api.configs['local/QQGroupContext']['vision_enabled'] is False
 
 
 def test_independent_endpoints_never_receive_chat_credential_and_remain_private():
@@ -46,7 +47,7 @@ def test_deselection_preserves_memory_data_and_unrelated_operator_extensions():
     run_configure(api, settings(features=[]), record)
     assert api.memory_records and len(api.records['/api/v1/knowledge/bases']) == 1
     assert pipeline['extensions_preferences']['plugins'] == [
-        {'author':'operator','name':'custom'}, {'author':'langbot-team','name':'LocalAgent'}]
+        {'author':'operator','name':'custom'}, {'author':'langbot-team','name':'LocalAgent'}, {'author':'local','name':'QQGroupContext'}]
     assert row(api, '/api/v1/platform/bots', record['bot_uuid'])['plugin_processors'] == []
 
 
@@ -68,7 +69,7 @@ def test_migration_from_all_plugins_preserves_existing_third_party_tools():
                         'status': 'initialized', 'enabled': True})
     run_configure(api, settings(features=[]), record)
     assert pipeline['extensions_preferences']['plugins'] == [
-        {'author': 'operator', 'name': 'custom'}, {'author': 'langbot-team', 'name': 'LocalAgent'}]
+        {'author': 'operator', 'name': 'custom'}, {'author': 'langbot-team', 'name': 'LocalAgent'}, {'author':'local','name':'QQGroupContext'}]
 
 
 def test_fresh_setup_replaces_upstream_defaults_but_restart_preserves_user_budget():

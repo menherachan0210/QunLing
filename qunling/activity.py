@@ -9,9 +9,10 @@ from pathlib import Path
 import re
 import sqlite3
 import time
+from qunling.qq_capabilities import OPS as QQ_OPERATIONS
 
 OPERATIONS = frozenset({"list", "import", "inspect", "read", "search", "extract", "create",
-    "delete", "status", "cancel", "send", "download", "images", "text", "start", "resume"})
+    "delete", "status", "cancel", "send", "download", "images", "text", "start", "resume"}) | frozenset(QQ_OPERATIONS)
 
 
 def details(value):
@@ -71,7 +72,7 @@ def tool_finish(result, started):
     io = io if isinstance(io, dict) else {}
     status = value.get("status")
     outcomes = {"error": "error", "failed": "error", "cancelled": "error", "canceled": "error",
-        "ok": "ok", "success": "ok", "completed": "ok", "done": "ok", "ready": "ok", "unchanged": "unchanged"}
+        "ok": "ok", "confirmed": "ok", "success": "ok", "completed": "ok", "done": "ok", "ready": "ok", "unchanged": "unchanged"}
     outcome = outcomes.get(status, "unconfirmed") if isinstance(status, str) else "unconfirmed"
     return details({"elapsed_ms": (time.monotonic() - started) * 1000,
         "outcome": outcome,

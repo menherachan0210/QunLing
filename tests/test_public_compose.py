@@ -390,6 +390,7 @@ def test_build_packages_requires_all_seven_and_emits_verifiable_index(
     calls = []
     (tmp_path / "qunling").mkdir()
     (tmp_path / "qunling/__init__.py").write_text('"""Synthetic public source."""')
+    prepare.os.utime(tmp_path / "qunling/__init__.py", (0, 0))
     for notice in ("LICENSE", "NOTICE"):
         (tmp_path / notice).write_text("Synthetic license metadata")
     patch_plugin = Mock()
@@ -402,6 +403,7 @@ def test_build_packages_requires_all_seven_and_emits_verifiable_index(
         assert (cwd / "qunling/__init__.py").is_file()
         assert (cwd / "qunling/LICENSE").is_file()
         assert (cwd / "qunling/NOTICE").is_file()
+        assert (cwd / "qunling/__init__.py").stat().st_mtime >= 315532800
         calls.append(name)
         metadata = {
             "metadata": {
@@ -414,6 +416,8 @@ def test_build_packages_requires_all_seven_and_emits_verifiable_index(
         target.write_bytes(
             make_zip(
                 [("manifest.yaml", yaml.safe_dump(metadata)), ("main.py", b"pass\n")]
+                + [(p.relative_to(cwd).as_posix(), p.read_bytes())
+                   for p in (cwd / "qunling").rglob("*") if p.is_file()]
             )
         )
 
@@ -428,6 +432,24 @@ def test_build_packages_requires_all_seven_and_emits_verifiable_index(
         assert hashlib.sha256(package.read_bytes()).hexdigest() == item["sha256"]
     with pytest.raises(ValueError, match="stale"):
         prepare.build_packages(tmp_path)
+
+
+@pytest.mark.parametrize("payload", [None, b"stale tool code"])
+def test_package_validation_rejects_silently_dropped_or_changed_tool(tmp_path, payload):
+    source = tmp_path / "source"
+    tool = source / "components/tools/qq_action.py"
+    tool.parent.mkdir(parents=True)
+    tool.write_bytes(b"current tool code")
+    metadata = yaml.safe_dump(
+        {"metadata": {"author": "local", "name": "Example", "version": "1.0"}}
+    )
+    entries = [("manifest.yaml", metadata)]
+    if payload is not None:
+        entries.append(("components/tools/qq_action.py", payload))
+    package = tmp_path / "example.lbpkg"
+    package.write_bytes(make_zip(entries))
+    with pytest.raises(ValueError, match="source missing or changed"):
+        prepare.package_metadata(package, source=source)
 
 
 def test_entrypoint_init_calls_idempotent_state_preparer_only(

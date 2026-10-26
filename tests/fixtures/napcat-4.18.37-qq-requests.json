@@ -1,0 +1,4936 @@
+{
+  "_del_group_notice": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "notice_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id",
+      "notice_id"
+    ],
+    "additionalProperties": false
+  },
+  "_get_group_notice": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id"
+    ],
+    "additionalProperties": false
+  },
+  "_send_group_notice": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "content": {
+        "type": "string"
+      },
+      "image": {
+        "type": "string"
+      },
+      "pinned": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "type": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "confirm_required": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "is_show_edit_card": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "tip_window_type": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "group_id",
+      "content",
+      "pinned",
+      "type",
+      "confirm_required",
+      "is_show_edit_card",
+      "tip_window_type"
+    ],
+    "additionalProperties": false
+  },
+  "create_group_file_folder": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "folder_name": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id"
+    ],
+    "additionalProperties": false
+  },
+  "delete_essence_msg": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "msg_seq": {
+        "type": "string"
+      },
+      "msg_random": {
+        "type": "string"
+      },
+      "group_id": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "delete_group_file": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "file_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id",
+      "file_id"
+    ],
+    "additionalProperties": false
+  },
+  "delete_group_folder": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "folder_id": {
+        "type": "string"
+      },
+      "folder": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id"
+    ],
+    "additionalProperties": false
+  },
+  "delete_msg": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "message_id"
+    ],
+    "additionalProperties": false
+  },
+  "friend_poke": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "target_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "user_id"
+    ],
+    "additionalProperties": false
+  },
+  "get_ai_characters": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "chat_type": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "group_id",
+      "chat_type"
+    ],
+    "additionalProperties": false
+  },
+  "get_essence_msg_list": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id"
+    ],
+    "additionalProperties": false
+  },
+  "get_friend_list": {
+    "type": "object",
+    "properties": {
+      "no_cache": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "additionalProperties": false
+  },
+  "get_group_at_all_remain": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id"
+    ],
+    "additionalProperties": false
+  },
+  "get_group_file_system_info": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id"
+    ],
+    "additionalProperties": false
+  },
+  "get_group_files_by_folder": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "folder_id": {
+        "type": "string"
+      },
+      "folder": {
+        "type": "string"
+      },
+      "file_count": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "group_id",
+      "file_count"
+    ],
+    "additionalProperties": false
+  },
+  "get_group_honor_info": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "type": {
+        "enum": [
+          "all",
+          "talkative",
+          "performer",
+          "legend",
+          "strong_newbie",
+          "emotion"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id"
+    ],
+    "additionalProperties": false
+  },
+  "get_group_info": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id"
+    ],
+    "additionalProperties": false
+  },
+  "get_group_member_info": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "no_cache": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "group_id",
+      "user_id"
+    ],
+    "additionalProperties": false
+  },
+  "get_group_member_list": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "no_cache": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "group_id"
+    ],
+    "additionalProperties": false
+  },
+  "get_group_root_files": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "file_count": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "group_id",
+      "file_count"
+    ],
+    "additionalProperties": false
+  },
+  "get_group_shut_list": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id"
+    ],
+    "additionalProperties": false
+  },
+  "get_msg": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "message_id"
+    ],
+    "additionalProperties": false
+  },
+  "get_record": {
+    "type": "object",
+    "properties": {
+      "file": {
+        "type": "string"
+      },
+      "file_id": {
+        "type": "string"
+      },
+      "out_format": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "out_format"
+    ],
+    "additionalProperties": false
+  },
+  "get_status": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "group_poke": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "target_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "user_id"
+    ],
+    "additionalProperties": false
+  },
+  "move_group_file": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "file_id": {
+        "type": "string"
+      },
+      "current_parent_directory": {
+        "type": "string"
+      },
+      "target_parent_directory": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id",
+      "file_id",
+      "current_parent_directory",
+      "target_parent_directory"
+    ],
+    "additionalProperties": false
+  },
+  "rename_group_file": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "file_id": {
+        "type": "string"
+      },
+      "current_parent_directory": {
+        "type": "string"
+      },
+      "new_name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id",
+      "file_id",
+      "current_parent_directory",
+      "new_name"
+    ],
+    "additionalProperties": false
+  },
+  "send_group_ai_record": {
+    "type": "object",
+    "properties": {
+      "character": {
+        "type": "string"
+      },
+      "group_id": {
+        "type": "string"
+      },
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "character",
+      "group_id",
+      "text"
+    ],
+    "additionalProperties": false
+  },
+  "send_group_forward_msg": {
+    "type": "object",
+    "properties": {
+      "message_type": {
+        "enum": [
+          "private",
+          "group"
+        ],
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "group_id": {
+        "type": "string"
+      },
+      "message": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "type",
+            "data"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "node"
+              ]
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      },
+      "auto_escape": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "source": {
+        "type": "string"
+      },
+      "news": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      },
+      "summary": {
+        "type": "string"
+      },
+      "prompt": {
+        "type": "string"
+      },
+      "timeout": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "message"
+    ],
+    "additionalProperties": false
+  },
+  "send_group_msg": {
+    "type": "object",
+    "properties": {
+      "message_type": {
+        "enum": [
+          "private",
+          "group"
+        ],
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "group_id": {
+        "type": "string"
+      },
+      "message": {
+        "x-schema-id": "OB11MessageMixType",
+        "anyOf": [
+          {
+            "type": "array",
+            "items": {
+              "x-schema-id": "OB11MessageData",
+              "anyOf": [
+                {
+                  "x-schema-id": "OB11MessageText",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "text"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "text"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageFace",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "face"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "resultId": {
+                          "type": "string"
+                        },
+                        "chainCount": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageMFace",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "mface"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "emoji_package_id": {
+                          "type": "number"
+                        },
+                        "emoji_id": {
+                          "type": "string"
+                        },
+                        "key": {
+                          "type": "string"
+                        },
+                        "summary": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "emoji_package_id",
+                        "emoji_id",
+                        "key",
+                        "summary"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageAt",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "at"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "qq": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "qq"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageReply",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "reply"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "seq": {
+                          "type": "number"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageImage",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "image"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "allOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "file": {
+                              "type": "string"
+                            },
+                            "path": {
+                              "type": "string"
+                            },
+                            "url": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "thumb": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "file"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "summary": {
+                              "type": "string"
+                            },
+                            "sub_type": {
+                              "type": "number"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageRecord",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "record"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "x-schema-id": "FileBaseData",
+                      "type": "object",
+                      "properties": {
+                        "file": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "thumb": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "file"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageVideo",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "video"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "x-schema-id": "FileBaseData",
+                      "type": "object",
+                      "properties": {
+                        "file": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "thumb": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "file"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageFile",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "file"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "x-schema-id": "FileBaseData",
+                      "type": "object",
+                      "properties": {
+                        "file": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "thumb": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "file"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageIdMusic",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "music"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "qq",
+                            "163",
+                            "kugou",
+                            "migu",
+                            "kuwo"
+                          ],
+                          "type": "string"
+                        },
+                        "id": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "id"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageCustomMusic",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "music"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "qq",
+                            "163",
+                            "kugou",
+                            "migu",
+                            "kuwo",
+                            "custom"
+                          ],
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "null"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "audio": {
+                          "type": "string"
+                        },
+                        "image": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "id",
+                        "url",
+                        "image"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessagePoke",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "poke"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "id"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageDice",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "dice"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "result"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageRPS",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "rps"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "result"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageContact",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "contact"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "qq",
+                            "group"
+                          ],
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "id"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageLocation",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "location"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "lat": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        },
+                        "lon": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "lat",
+                        "lon"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageJson",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "json"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "object",
+                              "properties": {}
+                            }
+                          ]
+                        },
+                        "config": {
+                          "type": "object",
+                          "properties": {
+                            "token": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "token"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageXml",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "xml"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageMarkdown",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "markdown"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "content"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageMiniApp",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "miniapp"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageNode",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "node"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "user_id": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "uin": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "nickname": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "object"
+                        },
+                        "source": {
+                          "type": "string"
+                        },
+                        "news": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "text"
+                            ]
+                          }
+                        },
+                        "summary": {
+                          "type": "string"
+                        },
+                        "prompt": {
+                          "type": "string"
+                        },
+                        "time": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "nickname",
+                        "content"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageForward",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "forward"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageOnlineFile",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "onlinefile"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "msgId": {
+                          "type": "string"
+                        },
+                        "elementId": {
+                          "type": "string"
+                        },
+                        "fileName": {
+                          "type": "string"
+                        },
+                        "fileSize": {
+                          "type": "string"
+                        },
+                        "isDir": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "msgId",
+                        "elementId",
+                        "fileName",
+                        "fileSize",
+                        "isDir"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageFlashTransfer",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "flashtransfer"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "fileSetId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "fileSetId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "type": "string"
+          },
+          {
+            "x-schema-id": "OB11MessageData",
+            "anyOf": [
+              {
+                "x-schema-id": "OB11MessageText",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "text"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageFace",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "face"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "resultId": {
+                        "type": "string"
+                      },
+                      "chainCount": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "id"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageMFace",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "mface"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "emoji_package_id": {
+                        "type": "number"
+                      },
+                      "emoji_id": {
+                        "type": "string"
+                      },
+                      "key": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "emoji_package_id",
+                      "emoji_id",
+                      "key",
+                      "summary"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageAt",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "at"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "qq": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "qq"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageReply",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "reply"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "seq": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageImage",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "image"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "allOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "file": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "url": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "thumb": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "file"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "summary": {
+                            "type": "string"
+                          },
+                          "sub_type": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageRecord",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "record"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "x-schema-id": "FileBaseData",
+                    "type": "object",
+                    "properties": {
+                      "file": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "thumb": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "file"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageVideo",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "video"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "x-schema-id": "FileBaseData",
+                    "type": "object",
+                    "properties": {
+                      "file": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "thumb": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "file"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageFile",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "file"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "x-schema-id": "FileBaseData",
+                    "type": "object",
+                    "properties": {
+                      "file": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "thumb": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "file"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageIdMusic",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "music"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "qq",
+                          "163",
+                          "kugou",
+                          "migu",
+                          "kuwo"
+                        ],
+                        "type": "string"
+                      },
+                      "id": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "id"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageCustomMusic",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "music"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "qq",
+                          "163",
+                          "kugou",
+                          "migu",
+                          "kuwo",
+                          "custom"
+                        ],
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "null"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "audio": {
+                        "type": "string"
+                      },
+                      "image": {
+                        "type": "string"
+                      },
+                      "content": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "id",
+                      "url",
+                      "image"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessagePoke",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "poke"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "id"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageDice",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "dice"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "result": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "result"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageRPS",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "rps"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "result": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "result"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageContact",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "contact"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "qq",
+                          "group"
+                        ],
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "id"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageLocation",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "location"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "lat": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      },
+                      "lon": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      },
+                      "content": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "lat",
+                      "lon"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageJson",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "json"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "data": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {}
+                          }
+                        ]
+                      },
+                      "config": {
+                        "type": "object",
+                        "properties": {
+                          "token": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "token"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "data"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageXml",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "xml"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "data": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "data"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageMarkdown",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "markdown"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "content": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "content"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageMiniApp",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "miniapp"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "data": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "data"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageNode",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "node"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "user_id": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "uin": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "nickname": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "content": {
+                        "type": "object"
+                      },
+                      "source": {
+                        "type": "string"
+                      },
+                      "news": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "text"
+                          ]
+                        }
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "prompt": {
+                        "type": "string"
+                      },
+                      "time": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "nickname",
+                      "content"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageForward",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "forward"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "content": {
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "id"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageOnlineFile",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "onlinefile"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "msgId": {
+                        "type": "string"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      },
+                      "fileName": {
+                        "type": "string"
+                      },
+                      "fileSize": {
+                        "type": "string"
+                      },
+                      "isDir": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "msgId",
+                      "elementId",
+                      "fileName",
+                      "fileSize",
+                      "isDir"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageFlashTransfer",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "flashtransfer"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "fileSetId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "fileSetId"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "auto_escape": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "source": {
+        "type": "string"
+      },
+      "news": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      },
+      "summary": {
+        "type": "string"
+      },
+      "prompt": {
+        "type": "string"
+      },
+      "timeout": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "message"
+    ],
+    "additionalProperties": false
+  },
+  "send_like": {
+    "type": "object",
+    "properties": {
+      "user_id": {
+        "type": "string"
+      },
+      "times": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "user_id",
+      "times"
+    ],
+    "additionalProperties": false
+  },
+  "send_private_forward_msg": {
+    "type": "object",
+    "properties": {
+      "message_type": {
+        "enum": [
+          "private",
+          "group"
+        ],
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "group_id": {
+        "type": "string"
+      },
+      "message": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "type",
+            "data"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "node"
+              ]
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      },
+      "auto_escape": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "source": {
+        "type": "string"
+      },
+      "news": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      },
+      "summary": {
+        "type": "string"
+      },
+      "prompt": {
+        "type": "string"
+      },
+      "timeout": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "message"
+    ],
+    "additionalProperties": false
+  },
+  "send_private_msg": {
+    "type": "object",
+    "properties": {
+      "message_type": {
+        "enum": [
+          "private",
+          "group"
+        ],
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "group_id": {
+        "type": "string"
+      },
+      "message": {
+        "x-schema-id": "OB11MessageMixType",
+        "anyOf": [
+          {
+            "type": "array",
+            "items": {
+              "x-schema-id": "OB11MessageData",
+              "anyOf": [
+                {
+                  "x-schema-id": "OB11MessageText",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "text"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "text"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageFace",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "face"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "resultId": {
+                          "type": "string"
+                        },
+                        "chainCount": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageMFace",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "mface"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "emoji_package_id": {
+                          "type": "number"
+                        },
+                        "emoji_id": {
+                          "type": "string"
+                        },
+                        "key": {
+                          "type": "string"
+                        },
+                        "summary": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "emoji_package_id",
+                        "emoji_id",
+                        "key",
+                        "summary"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageAt",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "at"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "qq": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "qq"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageReply",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "reply"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "seq": {
+                          "type": "number"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageImage",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "image"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "allOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "file": {
+                              "type": "string"
+                            },
+                            "path": {
+                              "type": "string"
+                            },
+                            "url": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "thumb": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "file"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "summary": {
+                              "type": "string"
+                            },
+                            "sub_type": {
+                              "type": "number"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageRecord",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "record"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "x-schema-id": "FileBaseData",
+                      "type": "object",
+                      "properties": {
+                        "file": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "thumb": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "file"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageVideo",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "video"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "x-schema-id": "FileBaseData",
+                      "type": "object",
+                      "properties": {
+                        "file": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "thumb": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "file"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageFile",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "file"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "x-schema-id": "FileBaseData",
+                      "type": "object",
+                      "properties": {
+                        "file": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "thumb": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "file"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageIdMusic",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "music"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "qq",
+                            "163",
+                            "kugou",
+                            "migu",
+                            "kuwo"
+                          ],
+                          "type": "string"
+                        },
+                        "id": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "id"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageCustomMusic",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "music"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "qq",
+                            "163",
+                            "kugou",
+                            "migu",
+                            "kuwo",
+                            "custom"
+                          ],
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "null"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "audio": {
+                          "type": "string"
+                        },
+                        "image": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "id",
+                        "url",
+                        "image"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessagePoke",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "poke"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "id"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageDice",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "dice"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "result"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageRPS",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "rps"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "result"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageContact",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "contact"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "qq",
+                            "group"
+                          ],
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "id"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageLocation",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "location"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "lat": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        },
+                        "lon": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "lat",
+                        "lon"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageJson",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "json"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "object",
+                              "properties": {}
+                            }
+                          ]
+                        },
+                        "config": {
+                          "type": "object",
+                          "properties": {
+                            "token": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "token"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageXml",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "xml"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageMarkdown",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "markdown"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "content"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageMiniApp",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "miniapp"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageNode",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "node"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "user_id": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "uin": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "nickname": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "object"
+                        },
+                        "source": {
+                          "type": "string"
+                        },
+                        "news": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "text"
+                            ]
+                          }
+                        },
+                        "summary": {
+                          "type": "string"
+                        },
+                        "prompt": {
+                          "type": "string"
+                        },
+                        "time": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "nickname",
+                        "content"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageForward",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "forward"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageOnlineFile",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "onlinefile"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "msgId": {
+                          "type": "string"
+                        },
+                        "elementId": {
+                          "type": "string"
+                        },
+                        "fileName": {
+                          "type": "string"
+                        },
+                        "fileSize": {
+                          "type": "string"
+                        },
+                        "isDir": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "msgId",
+                        "elementId",
+                        "fileName",
+                        "fileSize",
+                        "isDir"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                },
+                {
+                  "x-schema-id": "OB11MessageFlashTransfer",
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "flashtransfer"
+                      ],
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "fileSetId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "fileSetId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "type": "string"
+          },
+          {
+            "x-schema-id": "OB11MessageData",
+            "anyOf": [
+              {
+                "x-schema-id": "OB11MessageText",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "text"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageFace",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "face"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "resultId": {
+                        "type": "string"
+                      },
+                      "chainCount": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "id"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageMFace",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "mface"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "emoji_package_id": {
+                        "type": "number"
+                      },
+                      "emoji_id": {
+                        "type": "string"
+                      },
+                      "key": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "emoji_package_id",
+                      "emoji_id",
+                      "key",
+                      "summary"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageAt",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "at"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "qq": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "qq"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageReply",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "reply"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "seq": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageImage",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "image"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "allOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "file": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "url": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "thumb": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "file"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "summary": {
+                            "type": "string"
+                          },
+                          "sub_type": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageRecord",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "record"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "x-schema-id": "FileBaseData",
+                    "type": "object",
+                    "properties": {
+                      "file": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "thumb": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "file"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageVideo",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "video"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "x-schema-id": "FileBaseData",
+                    "type": "object",
+                    "properties": {
+                      "file": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "thumb": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "file"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageFile",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "file"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "x-schema-id": "FileBaseData",
+                    "type": "object",
+                    "properties": {
+                      "file": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "thumb": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "file"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageIdMusic",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "music"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "qq",
+                          "163",
+                          "kugou",
+                          "migu",
+                          "kuwo"
+                        ],
+                        "type": "string"
+                      },
+                      "id": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "id"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageCustomMusic",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "music"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "qq",
+                          "163",
+                          "kugou",
+                          "migu",
+                          "kuwo",
+                          "custom"
+                        ],
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "null"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "audio": {
+                        "type": "string"
+                      },
+                      "image": {
+                        "type": "string"
+                      },
+                      "content": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "id",
+                      "url",
+                      "image"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessagePoke",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "poke"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "id"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageDice",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "dice"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "result": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "result"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageRPS",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "rps"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "result": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "result"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageContact",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "contact"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "qq",
+                          "group"
+                        ],
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "id"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageLocation",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "location"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "lat": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      },
+                      "lon": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      },
+                      "content": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "lat",
+                      "lon"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageJson",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "json"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "data": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {}
+                          }
+                        ]
+                      },
+                      "config": {
+                        "type": "object",
+                        "properties": {
+                          "token": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "token"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "data"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageXml",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "xml"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "data": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "data"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageMarkdown",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "markdown"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "content": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "content"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageMiniApp",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "miniapp"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "data": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "data"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageNode",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "node"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "user_id": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "uin": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "nickname": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "content": {
+                        "type": "object"
+                      },
+                      "source": {
+                        "type": "string"
+                      },
+                      "news": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "text"
+                          ]
+                        }
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "prompt": {
+                        "type": "string"
+                      },
+                      "time": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "nickname",
+                      "content"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageForward",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "forward"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "content": {
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "id"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageOnlineFile",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "onlinefile"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "msgId": {
+                        "type": "string"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      },
+                      "fileName": {
+                        "type": "string"
+                      },
+                      "fileSize": {
+                        "type": "string"
+                      },
+                      "isDir": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "msgId",
+                      "elementId",
+                      "fileName",
+                      "fileSize",
+                      "isDir"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "x-schema-id": "OB11MessageFlashTransfer",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "flashtransfer"
+                    ],
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "fileSetId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "fileSetId"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "auto_escape": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "source": {
+        "type": "string"
+      },
+      "news": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      },
+      "summary": {
+        "type": "string"
+      },
+      "prompt": {
+        "type": "string"
+      },
+      "timeout": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "message"
+    ],
+    "additionalProperties": false
+  },
+  "set_essence_msg": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "message_id"
+    ],
+    "additionalProperties": false
+  },
+  "set_friend_add_request": {
+    "type": "object",
+    "properties": {
+      "flag": {
+        "type": "string"
+      },
+      "approve": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "boolean"
+          }
+        ]
+      },
+      "remark": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "flag"
+    ],
+    "additionalProperties": false
+  },
+  "set_group_add_request": {
+    "type": "object",
+    "properties": {
+      "flag": {
+        "type": "string"
+      },
+      "approve": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "count": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "flag"
+    ],
+    "additionalProperties": false
+  },
+  "set_group_admin": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "enable": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "group_id",
+      "user_id"
+    ],
+    "additionalProperties": false
+  },
+  "set_group_ban": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "duration": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "group_id",
+      "user_id",
+      "duration"
+    ],
+    "additionalProperties": false
+  },
+  "set_group_card": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "card": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id",
+      "user_id"
+    ],
+    "additionalProperties": false
+  },
+  "set_group_kick": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "reject_add_request": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "group_id",
+      "user_id"
+    ],
+    "additionalProperties": false
+  },
+  "set_group_leave": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "is_dismiss": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "group_id"
+    ],
+    "additionalProperties": false
+  },
+  "set_group_name": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "group_name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id",
+      "group_name"
+    ],
+    "additionalProperties": false
+  },
+  "set_group_special_title": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "special_title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "group_id",
+      "user_id",
+      "special_title"
+    ],
+    "additionalProperties": false
+  },
+  "set_group_whole_ban": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "enable": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "group_id"
+    ],
+    "additionalProperties": false
+  },
+  "set_msg_emoji_like": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "emoji_id": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "set": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "message_id",
+      "emoji_id"
+    ],
+    "additionalProperties": false
+  },
+  "upload_group_file": {
+    "type": "object",
+    "properties": {
+      "group_id": {
+        "type": "string"
+      },
+      "file": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "folder": {
+        "type": "string"
+      },
+      "folder_id": {
+        "type": "string"
+      },
+      "upload_file": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "group_id",
+      "file",
+      "name",
+      "upload_file"
+    ],
+    "additionalProperties": false
+  }
+}

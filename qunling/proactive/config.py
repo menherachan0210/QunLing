@@ -25,6 +25,7 @@ DEFAULT_GROUP = {
     "mode": "off", "display_name": "群灵", "persona": "",
     "quiet_hours": {"enabled": False, "start": "23:00", "end": "08:00", "timezone": "Asia/Shanghai"},
 }
+QQ_CATEGORIES = frozenset({"interaction", "management", "files", "media"})
 _LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
 
@@ -48,13 +49,22 @@ def _text(value, limit, name, *, multiline=False):
 
 
 def validate(values: object) -> dict:
-    if (not isinstance(values, dict) or set(values) - {"default_style", "default_examples"} != {"version", "revision", "enabled", "groups"}
+    if (not isinstance(values, dict) or set(values) - {"default_style", "default_examples", "qq_actions"} != {"version", "revision", "enabled", "groups"}
             or type(values["version"]) is not int or values["version"] != 1
             or type(values["enabled"]) is not bool
             or not isinstance(values["revision"], str) or not REVISION.fullmatch(values["revision"])
             or not isinstance(values["groups"], dict) or len(values["groups"]) > MAX_GROUPS):
         raise ConfigError("invalid_config", "自由对话配置无效，最多保存 100 个群的设置。")
     result = {**values, "groups": {}}
+    if "qq_actions" in values:
+        actions = values["qq_actions"]
+        if (not isinstance(actions, dict) or set(actions) != {"enabled", "owner_ids", "transcription_model"}
+                or type(actions["enabled"]) is not bool or not isinstance(actions["owner_ids"], list)
+                or len(actions["owner_ids"]) > 20
+                or any(not isinstance(v, str) or not GROUP_ID.fullmatch(v) for v in actions["owner_ids"])):
+            raise ConfigError("invalid_config", "QQ 工具设置无效，最多填写 20 个机器人管理员 QQ 号。")
+        result["qq_actions"] = {"enabled": actions["enabled"], "owner_ids": list(dict.fromkeys(actions["owner_ids"])),
+                                "transcription_model": _text(actions["transcription_model"], 100, "语音识别模型")}
     if "default_style" in values:
         result["default_style"] = _text(values["default_style"], 6000, "默认语气", multiline=True)
     if "default_examples" in values:
@@ -65,7 +75,7 @@ def validate(values: object) -> dict:
     for group_id, entry in values["groups"].items():
         if not isinstance(group_id, str) or not GROUP_ID.fullmatch(group_id):
             raise ConfigError("invalid_config", "群号格式无效。")
-        if (not isinstance(entry, dict) or set(entry) - {"examples"} != set(DEFAULT_GROUP)
+        if (not isinstance(entry, dict) or set(entry) - {"examples", "qq_permissions"} != set(DEFAULT_GROUP)
                 or not isinstance(entry.get("mode"), str)
                 or entry.get("mode") not in {"off", "quiet", "natural", "active"}):
             raise ConfigError("invalid_config", "请选择有效的群参与模式。")
@@ -90,6 +100,12 @@ def validate(values: object) -> dict:
             "persona": _text(entry["persona"], MAX_PERSONA_CHARACTERS, "人设", multiline=True),
             "quiet_hours": dict(quiet),
         }
+        if "qq_permissions" in entry:
+            permissions = entry["qq_permissions"]
+            if (not isinstance(permissions, dict) or set(permissions) != QQ_CATEGORIES
+                    or any(type(v) is not bool for v in permissions.values())):
+                raise ConfigError("invalid_config", "本群 QQ 工具权限格式无效。")
+            result["groups"][group_id]["qq_permissions"] = dict(permissions)
         if "examples" in entry:
             try:
                 result["groups"][group_id]["examples"] = validate_examples(entry["examples"])
@@ -172,10 +188,14 @@ class ConfigStore:
                     candidate["default_style"] = current["default_style"]
                 if "default_examples" not in candidate and "default_examples" in current:
                     candidate["default_examples"] = current["default_examples"]
+                if "qq_actions" not in candidate and "qq_actions" in current:
+                    candidate["qq_actions"] = current["qq_actions"]
                 for group_id, policy in candidate["groups"].items():
                     before = current["groups"].get(group_id, {})
                     if "examples" not in policy and "examples" in before:
                         policy["examples"] = before["examples"]
+                    if "qq_permissions" not in policy and "qq_permissions" in before:
+                        policy["qq_permissions"] = before["qq_permissions"]
                 candidate = validate(candidate)
                 # An offline emergency pause is allowed only if policies are
                 # unchanged (or removed/turned off), never as an authorization path.

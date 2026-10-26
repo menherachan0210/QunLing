@@ -228,6 +228,8 @@ async def read_avatar(plugin, context, params, api=None):
             stage="guard", code="image_read_attempts_exhausted",
         )
     config = plugin.get_config()
+    if isinstance(config, dict) and config.get("vision_enabled", True) is not True:
+        raise VisionError("管理页已关闭图像理解。")
     model = config.get("model_uuid") if isinstance(config, dict) else None
     if not isinstance(model, str) or not model:
         raise VisionError("群聊图片分析模型尚未配置。")

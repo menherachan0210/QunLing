@@ -130,7 +130,7 @@
           <div class="proactive-workspace">
             <div class="proactive-groups"><div class="proactive-group-toolbar"><label for="proactive-search" class="visually-hidden">搜索群名或群号</label><input id="proactive-search" type="search" placeholder="搜索群名或群号" disabled><button id="proactive-refresh" type="button" class="icon-button" title="刷新群列表" aria-label="刷新群列表" disabled><svg class="icon"><use href="#i-refresh"/></svg></button></div><p id="proactive-groups-message" class="note" role="status" aria-live="polite">QQ 登录后可选择开放的群。</p><div id="proactive-group-list" class="proactive-group-list" aria-label="选择要设置的群"></div></div>
             <div class="proactive-editor">
-              <nav class="group-tabs" aria-label="群聊设置分类"><button type="button" data-group-tab="persona" aria-pressed="true">性格与称呼</button><button type="button" data-group-tab="activity" aria-pressed="false">自由对话</button><button type="button" data-group-tab="memory" aria-pressed="false">记忆管理</button><button type="button" data-group-tab="defaults" aria-pressed="false">默认语气</button></nav>
+              <nav class="group-tabs" aria-label="群聊设置分类"><button type="button" data-group-tab="persona" aria-pressed="true">性格与称呼</button><button type="button" data-group-tab="activity" aria-pressed="false">自由对话</button><button type="button" data-group-tab="qq" aria-pressed="false">QQ 工具</button><button type="button" data-group-tab="memory" aria-pressed="false">记忆管理</button><button type="button" data-group-tab="defaults" aria-pressed="false">默认语气</button></nav>
           <section class="proactive-default-style" data-group-panel="defaults" hidden>
             <h3>默认语气</h3>
             <p class="note">这里显示完整的默认对话设置，用于性格和对话示例都留空的群。参与判断、@ 回复、自由对话和工具完成后的回复统一采用所选设置；填写群内性格后由群内设置接管。修改后点击下方“保存群聊设置”生效。</p>
@@ -157,6 +157,19 @@
                 <p class="note proactive-editor-note">只控制主动发言，@ 请求仍可正常回复。各参与方式均有限频和每日预算，没人接话时会停下来。</p>
                 </section>
                 <div class="group-reset-action" id="group-reset-action"><button id="proactive-reset-group" type="button" class="secondary small" disabled>恢复此群默认设置</button><span class="note">还原称呼、性格与参与方式；保存后生效。</span></div>
+                <section data-group-panel="qq" hidden>
+                  <h3>让 AI 按对话选择 QQ 功能</h3>
+                  <p class="note">@ 回复与自由对话均可使用。AI 根据语境决定是否调用，也可与搜索、图片、GIF 和文件工具组合。实际操作仍需 QQ 账号权限，群管理只接受有权限成员的操作意图。</p>
+                  <h4>本群开放范围</h4>
+                  <div class="field"><label><input id="qq-permission-interaction" type="checkbox" data-qq-edit> 聊天互动</label><p class="note">戳一戳、表情回应、资料点赞、内置表情、骰子、猜拳、引用、@ 和合并转发。</p></div>
+                  <div class="field"><label><input id="qq-permission-management" type="checkbox" data-qq-edit> 群管理</label><p class="note">撤回、禁言、移出成员、群名片、头衔、管理员、公告、精华与入群申请。管理员任免和头衔需要机器人为群主；退出群仅限机器人管理员。</p></div>
+                  <div class="field"><label><input id="qq-permission-files" type="checkbox" data-qq-edit> 群文件整理</label><p class="note">上传到指定目录、创建或删除文件夹、删除、移动、重命名文件；整理操作需管理员身份。</p></div>
+                  <div class="field"><label><input id="qq-permission-media" type="checkbox" data-qq-edit> 语音与视频</label><p class="note">QQ 角色语音、语音识别、视频抽帧分析和图片／语音／视频发送。视频按需抽取最多 8 帧，不代表逐帧分析或识别了声音。</p></div>
+                  <h4>此机器人的全局设置</h4>
+                  <div class="field"><label><input id="qq-tools-enabled" type="checkbox" data-qq-edit> 开放 QQ 扩展工具</label><p class="note">关闭后暂停本页扩展操作，已有聊天、搜图和文件工具保持原有设置。</p></div>
+                  <div class="field"><label for="qq-owner-ids">机器人管理员 QQ 号<span>每行一个，最多 20 个</span></label><textarea id="qq-owner-ids" rows="3" maxlength="420" data-qq-edit></textarea><p class="note">可处理好友申请、机器人入群邀请、查看好友列表和退出群。留空时不开放这些账号操作；群管理员仍可管理自己的群。</p></div>
+                  <div class="field"><label for="qq-transcription-model">语音识别模型名<span>可选</span></label><input id="qq-transcription-model" maxlength="100" placeholder="填写服务商提供的语音识别模型名" data-qq-edit><p class="note">复用聊天服务的地址与凭据，需支持 /audio/transcriptions。留空不开启语音识别，不影响 QQ 角色语音。识别会产生模型调用费用。</p></div>
+                </section>
                 <section class="memory-workspace" data-group-panel="memory" hidden>
                   <div class="section-heading"><h3>群聊记忆</h3><button id="memory-export" type="button" class="secondary small">导出本群记忆</button></div>
                   <p class="note">查看群与成员资料、长期事件记忆。编辑独立保存，后续记忆检索使用新内容；已有聊天上下文仍会保留。若要完全从零开始，请使用下方整群清空。</p>

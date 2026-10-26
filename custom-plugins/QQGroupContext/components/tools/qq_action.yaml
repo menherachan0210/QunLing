@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: qq_action
+  label: {en_US: Use QQ capability, zh_Hans: 执行 QQ 功能}
+  description: {en_US: Execute a discovered QQ operation in the current conversation, zh_Hans: 按语境执行已查询的 QQ 接口，目标固定当前会话}
+spec:
+  parameters:
+    type: object
+    additionalProperties: false
+    properties:
+      operation: {type: string, maxLength: 60, description: Operation name from qq_capabilities}
+      arguments: {type: object, description: Follow the exact parameter schema returned by qq_capabilities}
+    required: [operation]
+  llm_prompt: >-
+    Execute the appropriate operation discovered with qq_capabilities. Chat, actor and bot are fixed by the host;
+    you cannot override them. Use actual user/message/resource IDs from this conversation or tool results.
+    Use members to resolve ambiguous names; do not guess among duplicates. Read files/notices/voices before operating on them.
+    Read media then import_media for received audio/video; transcribe recognizes audio, video_frames exports sample images,
+    analyze_images actually views those pixels. Sampled frames do not cover every frame or audio.
+    Results with confirmed mean QQ acknowledged; unconfirmed means do not repeat the operation or claim success.
+    Already-attempted operations must not be resubmitted with changed arguments to evade deduplication.
+    After a successful face/poke/reaction or message send, do not automatically add an explanatory text or duplicate the sent text.
+    Return to the original conversation using the configured personality. No special @ or command phrase is required.
+execution:
+  python: {path: qq_action.py, attr: QQAction}

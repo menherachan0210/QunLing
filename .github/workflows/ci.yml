@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install public test and document parser dependencies
-        run: python -m pip install pytest pytest-asyncio PyYAML requests qrcode Pillow aiohttp httpx tzdata -r qunling/requirements.txt
+        run: python -m pip install pytest pytest-asyncio jsonschema PyYAML requests qrcode Pillow aiohttp httpx tzdata -r qunling/requirements.txt
       - name: Require JavaScript runtime for console interaction tests
         # ubuntu-24.04 provides Node; fail visibly instead of silently skipping
         # the actual console script's authorization and conflict regressions.
@@ -73,7 +73,7 @@ jobs:
       - name: Download test-only wheels for the isolated image checks
         run: >-
           python -m pip download --only-binary=:all:
-          --dest "$RUNNER_TEMP/qunling-test-wheels" pytest pytest-asyncio
+          --dest "$RUNNER_TEMP/qunling-test-wheels" pytest pytest-asyncio jsonschema
       - name: Test actual SDK, proactive bridge, file worker and plugins without network access
         timeout-minutes: 15
         run: |
@@ -86,7 +86,7 @@ jobs:
             -e QQCOMIC_TEST_7Z=/usr/local/bin/7zz \
             -e QUNLING_TEST_7ZIP=/usr/local/bin/7zz \
             qq-ai-bot-local:4.11.0 -ec '
-              uv pip install --python "$VIRTUAL_ENV/bin/python" --no-index --find-links=/wheels pytest pytest-asyncio
+              uv pip install --python "$VIRTUAL_ENV/bin/python" --no-index --find-links=/wheels pytest pytest-asyncio jsonschema
               cd /workspace
               python -m pytest tests -q -p no:cacheprovider
               python -m qunling.daemon --once

@@ -107,7 +107,7 @@ def adopt_tool_settings(api, values):
 
 
 def enabled_plugins(config):
-    result = {"langbot-team/LocalAgent"}
+    result = {"langbot-team/LocalAgent", "local/QQGroupContext"}
     for feature in config.get("features", FEATURE_PLUGINS):
         result.update(FEATURE_PLUGINS[feature])
     return result
@@ -646,6 +646,7 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
         },
         "local/QQGroupContext": {
             "model_uuid": model_ids["vision_model"],
+            "vision_enabled": "vision" in config["features"],
             "history_hours": config["group_context_hours"],
             "history_max_messages": config["group_context_max_messages"],
         },

@@ -352,6 +352,8 @@ async def read_images(plugin, context, params):
             stage="guard",
             code="image_read_attempts_exhausted",
         )
+    if plugin.get_config().get("vision_enabled", True) is not True:
+        raise VisionError("管理页已关闭图像理解。")
     model = plugin.get_config().get("model_uuid")
     if not isinstance(model, str) or not model:
         raise VisionError("群聊图片分析模型尚未配置。")

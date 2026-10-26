@@ -184,6 +184,8 @@ def purge_cached(ap, runtime, bridge, group):
     context, bot = runtime.execution_context, str(runtime.bot_entity.uuid)
     clear_group(workspace_id=group_reset.scope(context, bot, group)[0], bot_id=bot, group_id=group)
     clear_batches(group_reset.scope(context, bot, group)[0], bot, group)
+    from qunling.qq_operation_store import OperationStore, scope_key
+    OperationStore().clear_events(scope_key(context.instance_uuid, context.workspace_uuid, bot), f"group:{group}")
     bridge.engine.reset_group_context(group)
     for mapping in (bridge._request_contexts, bridge._received_at, bridge._sent_receipts, bridge._continuation_ingress):
         for key in list(mapping):
