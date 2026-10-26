@@ -10,6 +10,9 @@ from langbot_plugin.api.definition.components.page import Page, PageRequest, Pag
 class MemoryConsolePage(Page):
     async def handle_api(self, request: PageRequest) -> PageResponse:
         try:
+            if request.endpoint == "/group" and request.method == "POST":
+                from store.console import GroupConsole
+                return PageResponse.ok(await GroupConsole(self._store).handle(self._body(request)))
             if request.endpoint == "/summary" and request.method == "GET":
                 return PageResponse.ok(await self._summary())
             if request.endpoint == "/derive-scope" and request.method == "POST":

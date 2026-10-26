@@ -58,7 +58,7 @@ runner['knowledge-bases'] = [memory_uuid]
 runner['box-enabled'] = False
 runner['max-tool-iterations'] = 24
 runner['prompt'] = [{'role': 'system', 'content': (
-    '你是一个中文 QQ 助手，回答自然、清楚，默认简洁。可以根据用户发送的图片回答问题。'
+    '以下为 QQ 工具协议，交流方式使用当前群设置。可以读取用户发送的图片。'
     '区分当前说话人与其他群成员，不把别人的信息归到当前用户。'
     '用户明确要求记住，或明确提供长期有效的偏好、身份信息时，使用可用记忆工具保存；'
     '相关时检索已有记忆，允许用户更正和删除。不要保存密钥、密码、验证码；'

@@ -208,7 +208,7 @@ class _Snapshot:
                                else "budget" if self.truncated else "complete"}
 
 
-async def read_forward_context(bot, params):
+async def read_forward_context(bot, params, *, after_time=0):
     """Discover current/quoted (or selected history) cards and parse bounded nodes.
 
     URLs stay internal to the plugin. Sender names inside a merged forward are
@@ -226,6 +226,10 @@ async def read_forward_context(bot, params):
         raise ValueError("Invalid forward context time")
     if type(window) is not int or not 3600 <= window <= 604800:
         raise ValueError("Invalid forward context window")
+    if after_time:
+        window = min(window, before - after_time)
+        if window <= 0:
+            return {"cards": [], "truncated": False, "unavailable_cards": 0, "stop_reason": "memory_reset"}
     source = _id(params["source_message_id"]) if "source_message_id" in params else None
     deadline = time.monotonic() + TOTAL_TIMEOUT
     snapshot = _Snapshot()
@@ -234,6 +238,8 @@ async def read_forward_context(bot, params):
         raw = await _call(bot, "get_msg", {"message_id": int(anchor)}, deadline)
         segments = _checked_message(raw, group, anchor, before, window, anchor=True)
         anchor_time = raw["time"]
+        if after_time:
+            window = min(window, anchor_time - after_time)
         if source and source != anchor:
             raw_source = await _call(bot, "get_msg", {"message_id": int(source)}, deadline)
             segments = _checked_message(raw_source, group, source, anchor_time, window)

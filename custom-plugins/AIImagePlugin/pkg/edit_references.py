@@ -569,7 +569,7 @@ async def list_references(plugin, api, variables, query_id, query_uuid):
             "按发言、来源和时间确认目标；同条消息图片顺序见message_image_index，"
             "候选按chronological_order展示，同秒群消息保留平台原顺序。"
             "最多展示24张候选图；历史或候选被截断时，不能声称已列出范围内全部图片。"
-            "不确定指的是哪几张时简短询问，不猜角色身份。"
+            "操作目标不明确时不能擅自选图，不猜角色身份；交流表达采用当前群设置。"
             "明确要求多图合成、交换服装或组合时，按用户要求选择1–4个本轮edit_ref_，"
             "传给edit_image的image_refs并在prompt中按相同顺序描述；不要求用户先拼图。"
             "本编号与QQGroupContext的img_不互通，不可混用。不会自动生成或发送图片。"

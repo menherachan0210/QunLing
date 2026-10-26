@@ -304,7 +304,7 @@ async def run_case(
     messages = [
         {
             "role": "system",
-            "content": "你是群聊助手，使用简体中文自然回答，简洁说明依据。\n"
+            "content": "当前交流设置：\n"
             + style
             + "\n"
             + guidance,

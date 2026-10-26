@@ -93,7 +93,7 @@ spec:
     or sequence changes. Partial results do not authorize another paid request.
     Generate and edit tools together allow at most one paid request per user message.
     Never retry either tool after an error, timeout, unconfirmed result or delivery failure.
-    On success, the image is already sent; acknowledge briefly without Markdown image links.
+    On success, the image is already sent. Use the current group communication settings for the response; do not emit Markdown image links.
     Reference images are sent to the editing service, but this tool does not
     visually inspect the edited output. Requested changes and instructions to
     retain features are intent, not proof that those details survived in the
@@ -101,8 +101,7 @@ spec:
     observations, preserving whose image and which stage they describe.
     Do not claim a verified visual comparison of source and result without having
     inspected both. Conversely, missing output pixels in this result does not
-    mean the image was never delivered or the source was never seen. Keep routine
-    delivery acknowledgements short rather than adding an unsolicited disclaimer.
+    mean the image was never delivered or the source was never seen.
 execution:
   python:
     path: edit_image.py

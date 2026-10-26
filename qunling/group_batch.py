@@ -79,6 +79,19 @@ def publish(workspace, bot, group, sender, anchor, messages, bot_account):
             db.close()
 
 
+def clear_group(workspace, bot, group):
+    if (data_root() / "group-batches.sqlite3").is_symlink():
+        raise ValueError("Invalid group batch storage")
+    db = _connect()
+    if db is None:
+        return
+    try:
+        with db:
+            db.execute("DELETE FROM batches WHERE workspace=? AND bot=? AND group_id=?", (workspace, bot, group))
+    finally:
+        db.close()
+
+
 def recall(workspace, bot, group, sender, anchor):
     """Return only this request owner's frozen image identities, never live data."""
     db = None

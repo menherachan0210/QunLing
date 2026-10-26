@@ -53,7 +53,8 @@ async def test_draft_promotes_spontaneous_comment_to_read_images_from_another_me
     host.prepare_prompt(query)
     assert "主动接话" in query.prompt.messages[1].content
     assert "read_group_context_images" in query.prompt.messages[1].content
-    assert "不必再提出一次看图请求" in query.prompt.messages[1].content
+    assert "read_group_context_images" in query.prompt.messages[1].content
+    assert "回复仍使用当前群交流设置" in query.prompt.messages[1].content
     assert not bridge.engine._groups["30000"].covered
     host.completed(bridge.bot.adapter, question)
     await bridge.engine.close()

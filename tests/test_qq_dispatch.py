@@ -23,8 +23,8 @@ from qunling import qq_dispatch as dispatch
 
 
 @pytest_asyncio.fixture
-async def managed(app, monkeypatch):
-    monkeypatch.setenv("QUNLING_DATA_DIR", "synthetic")
+async def managed(app, monkeypatch, tmp_path):
+    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path / "qunling"))
     app.adapter = AiocqhttpAdapter.model_construct(bot=None, bot_account_id="bot-account", config={})
     runtime = NS(ap=app, bot_entity=NS(adapter="onebot-v11", uuid="bot", enable=True),
                  enable=True, execution_context=app.scope, adapter=app.adapter)
@@ -46,12 +46,25 @@ async def managed(app, monkeypatch):
     await app.dispatch.close()
 
 
-async def put(app, sender, text, *, addressed=True, group="30000"):
+@pytest.mark.asyncio
+async def test_memory_reset_blocks_old_legacy_ingress_but_accepts_new_messages(managed):
+    import time
+    from qunling import group_reset
+    key = group_reset.scope(managed.scope, "bot", "30000")
+    group_reset.begin(key)
+    assert await put(managed, "1", "during reset", timestamp=time.time() + 10) is None
+    cutoff = group_reset.finish(key, "a" * 32)
+    assert await put(managed, "1", "stale replay", timestamp=cutoff - 1) is None
+    fresh = await put(managed, "1", "fresh conversation", timestamp=cutoff + 1)
+    assert fresh is not None
+
+
+async def put(app, sender, text, *, addressed=True, group="30000", timestamp=1609459200):
     chain = pm.MessageChain(([pm.At(target="bot-account")] if addressed else []) + [pm.Plain(text=text)])
     grp = pe.Group(id=group, name="Synthetic", permission=pe.Permission.Member)
     event = events.GroupMessage(type="GroupMessage", sender=pe.GroupMember(
         id=sender, member_name=sender, permission=pe.Permission.Member, group=grp),
-        message_chain=chain, time=1609459200)
+        message_chain=chain, time=timestamp)
     return await app.query_pool.add_query(
         bot_uuid="bot", launcher_type=LauncherTypes.GROUP, launcher_id=group,
         sender_id=sender, message_event=event, message_chain=chain,

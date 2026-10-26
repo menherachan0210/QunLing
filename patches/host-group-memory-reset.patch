@@ -1,0 +1,46 @@
+diff --git a/src/langbot/pkg/api/http/controller/groups/platform/bots.py b/src/langbot/pkg/api/http/controller/groups/platform/bots.py
+--- a/src/langbot/pkg/api/http/controller/groups/platform/bots.py
++++ b/src/langbot/pkg/api/http/controller/groups/platform/bots.py
+@@ -156,6 +156,19 @@
+         async def _(bot_uuid: str, request_context: RequestContext) -> str:
+             return self.success(data=await self.ap.bot_service.list_event_route_statuses(request_context, bot_uuid))
+ 
++        @self.route(
++            '/<bot_uuid>/proactive/memory/reset', methods=['POST'],
++            auth_type=group.AuthType.USER_TOKEN_OR_API_KEY, permission=Permission.RESOURCE_MANAGE,
++        )
++        async def clear_group_memory(bot_uuid: str, request_context: RequestContext):
++            from qunling.group_reset_host import reset_memory, MemoryResetError
++
++            values = await quart.request.get_json(silent=True)
++            try:
++                return self.success(data=await reset_memory(self.ap, request_context, bot_uuid, values))
++            except MemoryResetError as exc:
++                return quart.jsonify(code=exc.code, error_code=exc.code, msg=str(exc)), exc.status
++
+         async def _dry_run_event_route(bot_uuid: str, request_context: RequestContext) -> str:
+             json_data = await quart.request.json
+             if not isinstance(json_data, dict):
+diff --git a/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py b/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py
+@@ -151,6 +151,19 @@
+         handler = PLATFORM_API_MAP.get(action)
+         if handler is None:
+             raise NotSupportedError(f'call_platform_api:{action}')
++        runtime = getattr(self, '_runtime', None)
++        if runtime is not None and action in {'get_group_recent_context', 'get_group_forward_context'}:
++            from qunling.group_reset import for_context, filter_history
++
++            state = for_context(runtime.execution_context, str(runtime.bot_entity.uuid), params.get('group_id'))
++            if state and state['pending']:
++                raise RuntimeError('Group memory reset is pending')
++            if action == 'get_group_forward_context' and state:
++                from qunling.qq_forward import read_forward_context
++
++                return await read_forward_context(self.bot, params, after_time=state['cutoff'])
++            result = await handler(self.bot, params)
++            return filter_history(runtime, params.get('group_id'), result) if action == 'get_group_recent_context' else result
+         return await handler(self.bot, params)
+ 
+     def register_listener(

@@ -21,7 +21,7 @@ spec:
     Send an attachment only when the current user asks you to upload/send/provide the file in this chat.
     Use the exact file_ref from this query's download_web_file result, never a URL, local path, group ID or recipient.
     Each call uploads one file to the current trusted QQ conversation. At most two distinct attachments per query.
-    On status=sent, the attachment and source have been sent; give a brief acknowledgement, not manual download instructions.
+    On status=sent, the attachment and source have been sent and no manual download is required. Use the current group communication settings for the response.
     Failed or unconfirmed delivery must not be retried; never claim success unless the tool returns sent.
 execution:
   python:

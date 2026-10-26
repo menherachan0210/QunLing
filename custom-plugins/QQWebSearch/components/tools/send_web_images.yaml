@@ -26,7 +26,7 @@ spec:
     Send existing web images ONLY when the current user requested images to be shown/sent.
     Use one or two exact image_refs from this query's search_web_images result, never URLs or recipients.
     The images and their source links are sent directly to the current conversation.
-    On success a brief acknowledgement suffices. Do not output Markdown image links or duplicate images.
+    On success the images have been delivered. Use the current group communication settings for the response. Do not output Markdown image links or duplicate images.
     A failed or ambiguous send must not be retried. Do not claim delivery unless status is sent.
 execution:
   python:

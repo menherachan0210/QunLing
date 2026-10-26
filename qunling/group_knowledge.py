@@ -153,6 +153,23 @@ def publish(*, workspace_id, bot_id, group_id, question, source, subject, text,
             db.close()
 
 
+def clear_group(*, workspace_id, bot_id, group_id):
+    """Delete one proven group scope; errors must reach the reset coordinator."""
+    scope = _scope(workspace_id, bot_id, group_id)
+    if scope is None:
+        raise ValueError("Invalid group knowledge scope")
+    if (data_root() / "group-knowledge.sqlite3").is_symlink():
+        raise ValueError("Invalid group knowledge storage")
+    db = _connect(create=False)
+    if db is None:
+        return
+    try:
+        with db:
+            db.execute("DELETE FROM evidence WHERE workspace=? AND bot=? AND group_id=?", scope)
+    finally:
+        db.close()
+
+
 def _terms(value):
     value = value.casefold()
     terms = set(re.findall(r"[a-z0-9_]{3,}", value))

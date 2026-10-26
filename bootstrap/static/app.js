@@ -11,21 +11,36 @@ let qqStatusReceivedAt = 0;
 let updateState = null;
 let updateAction = false;
 let configAction = false;
+let settingsDirty = false;
+let settingsConflict = false;
+let settingsRevision = null;
+let settingsPending = false;
+let settingsReloading = false;
+let settingsDraftRestored = false;
+let groupDraftRestored = false;
+let activeGroupTab = "persona";
 let qrAction = false;
 let adminAction = false;
 let proactiveDraft = null;
 let proactiveGroups = [];
 let proactiveSelected = "";
+let memorySequence = 0, memorySelected = null, memoryDirty = false, memoryBusy = false;
+let memoryOffset = 0, memoryNext = null, memoryGroup = "";
+let taskTab = "requests", tasksSequence = 0, tasksBusy = false, tasksCursor = null, tasksOlder = false;
 let proactiveDirty = false;
 let proactiveConflict = false;
 let proactiveConfigReady = false;
 let proactiveGroupsReady = false;
 let proactiveAction = false;
+let memoryResetAction = false;
+let memoryResetFeedback = null;
 let proactiveLoading = false;
+let proactiveReplacing = false;
 let proactiveStatus = null;
 let proactiveSavedConfig = null;
 let proactiveBuiltinStyle = null;
 let proactiveLastPoll = 0;
+let proactiveGroupsLastPoll = 0;
 const proactiveModes = {off: "仅 @ 回复", quiet: "安静参与", natural: "自然参与", active: "活跃参与"};
 const proactiveModeNotes = {
   off: "保留原来的 @ 和 /ai 回复方式，不判断是否主动插话。",
@@ -34,6 +49,7 @@ const proactiveModeNotes = {
   active: "更积极地接话和参与讨论，发言间隔更短、额度更高；仍会合并消息，避免逐条刷屏。"
 };
 const proactiveRuntimeStates = {
+  memory_reset_pending: ["记忆清除未完成", "error", "本群已暂停接话，旧记忆不会继续使用。请点击“清空本群全部记忆”重试，完成后恢复。"],
   off: ["未开启", "neutral", "此群当前不参与自由对话，@ 和 /ai 仍可正常使用。"],
   quiet_hours: ["安静时段", "neutral", "正在执行已保存的安静时段，暂不主动发言。"],
   explicit_busy: ["有明确任务进行中", "neutral", "正在处理明确提问；同一个人的后续消息按顺序等待，其他人的对话可以继续。"],
@@ -113,6 +129,8 @@ function hideAdmin() {
   $("admin").setAttribute("aria-expanded", "false");
 }
 function locked(message) {
+  clearMemoryView();
+  clearTasks();
   authEpoch += 1;
   clearRequests();
   authenticated = false;
@@ -159,26 +177,137 @@ async function api(path, body, timeout = 15000) {
     throw error;
   } finally { clearTimeout(timer); }
 }
+function readDraft(kind) {
+  try { return JSON.parse(sessionStorage.getItem("qunling-console-draft:" + kind) || "null"); }
+  catch { return null; }
+}
+function writeDraft(kind, value) {
+  try {
+    const key = "qunling-console-draft:" + kind;
+    if (value) sessionStorage.setItem(key, JSON.stringify(value));
+    else sessionStorage.removeItem(key);
+  } catch { /* Browser storage may be full/disabled; leave protection still works. */ }
+}
+function persistGroupDraft() {
+  writeDraft("groups", proactiveDirty && proactiveDraft ? {config: proactiveDraft, selected: proactiveSelected} : null);
+}
+const aiDraftFields = ["base_url", "chat_model", "vision_model", "image_model", "search_model", "image_size", "image_quality", "image_timeout_seconds", "search_provider", "search_base_url", "search_timeout_seconds", "group_context_hours", "group_context_max_messages"];
+function persistSettingsDraft() {
+  const values = {};
+  for (const key of aiDraftFields) if ($("settings").elements[key]) values[key] = $("settings").elements[key].value;
+  writeDraft("ai", settingsDirty ? {values, revision: settingsRevision} : null);
+  text("settings-dirty", settingsConflict ? "服务器配置已变化，草稿保留；重新载入后再保存" : settingsDirty ? "有未保存的修改 · 密钥不写入浏览器草稿" : "已保存的密钥可留空保留");
+}
+function hydrateSettings(state) {
+  for (const [key, value] of Object.entries(state.settings || {})) {
+    if (aiDraftFields.includes(key) && $("settings").elements[key]) {
+      const inheritsChat = ["vision_model", "search_model"].includes(key) && value === state.settings.chat_model;
+      $("settings").elements[key].value = inheritsChat ? "" : value;
+    }
+  }
+  for (const key of ["api_key", "search_api_key"]) {
+    const field = $("settings").elements[key];
+    if (field) {
+      field.value = "";
+      field.type = "password";
+      field.placeholder = state.settings?.[key + "_saved"] ? "已保存 · 留空保留原密钥" : "填写服务提供方的 API Key";
+    }
+  }
+  $("show-key").setAttribute("aria-pressed", "false");
+  $("show-key").setAttribute("aria-label", "显示 API Key");
+  settingsRevision = state.settings_revision || null;
+  settingsDirty = settingsConflict = false;
+  loaded = true;
+  renderSearchProvider();
+}
+function renderSettingsState(state) {
+  if (settingsPending && !configAction && state.stage !== "configuring") {
+    settingsPending = false;
+    if (state.stage === "error") {
+      text("form-message", state.message || "配置未成功应用，输入已保留，请检查后重试。");
+      tone("form-message", "error");
+    } else if (state.configured) {
+      hydrateSettings(state);
+      text("form-message", "AI 与工具设置已应用。保存配置不会调用模型验证服务能力。");
+      tone("form-message", "success");
+    }
+  }
+  if (!loaded && !settingsDirty) hydrateSettings(state);
+  if (!settingsDraftRestored) {
+    settingsDraftRestored = true;
+    const cached = readDraft("ai");
+    if (cached?.values && typeof cached.values === "object" && !Array.isArray(cached.values)) {
+      for (const key of aiDraftFields) if (typeof cached.values[key] === "string" && $("settings").elements[key]) $("settings").elements[key].value = cached.values[key];
+      settingsRevision = cached.revision || null;
+      settingsDirty = true;
+      text("form-message", "已恢复未保存草稿；新输入的密钥不会暂存，需重新填写。尚未应用到机器人。");
+      tone("form-message", "neutral");
+    }
+  }
+  if (!settingsPending && !configAction && (state.settings_revision || null) !== settingsRevision) {
+    if (settingsDirty) settingsConflict = true;
+    else hydrateSettings(state);
+  }
+  persistSettingsDraft();
+}
+function renderSearchProvider() {
+  const independent = $("search-provider").value === "independent";
+  $("search-independent").hidden = !independent;
+  for (const id of ["search-base-url", "search-api-key"]) {
+    $(id).disabled = !independent || !authenticated || configAction || settingsPending || settingsReloading || setupState?.stage === "configuring";
+  }
+  $("search-base-url").required = independent;
+  $("search-api-key").required = independent && !setupState?.settings?.search_api_key_saved;
+  text("search-provider-note", independent ? "独立地址与密钥只用于联网搜索；修改通用 AI 服务不会覆盖它。需支持 Responses 的 web_search。" : "使用通用地址与密钥；已保存的独立服务配置保留，重新选择即可使用。联网模型需支持 Responses 的 web_search。");
+}
+function renderPersonaPreview() {
+  const saved = proactiveSavedConfig;
+  const persona = saved?.groups?.[proactiveSelected]?.persona?.trim();
+  const style = persona || saved?.default_style || proactiveBuiltinStyle || "";
+  text("persona-source", persona ? "本群独立性格" : "继承默认语气");
+  text("persona-effective", style || "尚未读取到生效设置。");
+  text("persona-effective-note", proactiveDirty ? "这里展示服务器已保存的内容；正在编辑的草稿尚未生效。" : "参与判断、@ 回复、自由对话及工具回复均使用以下内容。");
+}
+function setGroupTab(tab) {
+  if (!["persona", "activity", "memory", "defaults"].includes(tab)) return;
+  activeGroupTab = tab;
+  $("group-reset-action").hidden = tab === "memory" || tab === "defaults";
+  $("group-save-bar").hidden = tab === "memory";
+  document.querySelectorAll("[data-group-tab]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.groupTab === tab)));
+  document.querySelectorAll("[data-group-panel]").forEach(panel => { panel.hidden = panel.dataset.groupPanel !== tab; });
+  renderProactiveEditor();
+  if (tab === "memory" && proactiveSelected && memoryGroup !== proactiveSelected) loadMemory();
+}
 function controls() {
   const updating = updateAction || Boolean(updateExpected) || Boolean(updateState?.busy);
-  $("save").disabled = !authenticated || configAction || proactiveAction || updating || !setupState?.plugins_ready || setupState.stage === "configuring";
-  text("save-label", configAction || setupState?.stage === "configuring" ? "正在应用配置…" : "保存并启用");
+  const aiBusy = configAction || settingsPending || settingsReloading || setupState?.stage === "configuring";
+  $("save").disabled = !authenticated || aiBusy || settingsConflict || proactiveAction || updating || !setupState?.plugins_ready;
+  text("save-label", aiBusy ? "正在应用配置…" : "保存 AI 与工具设置");
+  for (const field of document.querySelectorAll("#settings input, #settings select")) field.disabled = !authenticated || aiBusy;
+  renderSearchProvider();
+  $("settings-reload").hidden = !settingsDirty && !settingsConflict;
+  $("settings-reload").disabled = !authenticated || aiBusy || !setupState?.settings;
   $("check-update").disabled = !authenticated || updating || !updateState?.available;
   $("apply-update").disabled = !authenticated || configAction || proactiveAction || updating || !updateState?.available || !updateState.update_available || !updateState.latest_revision || !setupState || ["starting", "configuring"].includes(setupState.stage);
   $("refresh").disabled = !authenticated || qrAction || updating || !setupState || qqHealth(setupState).loggedIn;
   $("admin").disabled = !authenticated || adminAction;
-  const proactiveBlocked = !authenticated || !setupState?.qq_logged_in || configAction || updating || proactiveAction || proactiveLoading || !proactiveConfigReady || !proactiveGroupsReady || proactiveConflict || proactiveStatus?.available === false;
-  document.querySelectorAll("[data-proactive-edit], .proactive-group").forEach((element) => { element.disabled = proactiveBlocked; });
-  $("proactive-group-settings").disabled = proactiveBlocked || !proactiveSelected;
-  $("proactive-default-style").disabled = proactiveBlocked || proactiveBuiltinStyle === null;
-  $("proactive-reset-style").disabled = proactiveBlocked || proactiveBuiltinStyle === null;
-  $("proactive-reset-group").disabled = proactiveBlocked || !proactiveSelected || !proactiveDraft || !Object.hasOwn(proactiveDraft.groups, proactiveSelected);
+  // Reading status is not a mutation. Offline/conflicted drafts stay editable;
+  // only applying them needs fresh membership, service state and a revision.
+  const editingBlocked = !authenticated || proactiveAction || proactiveReplacing || !proactiveDraft;
+  const proactiveBlocked = editingBlocked || !setupState?.qq_logged_in || aiBusy || updating || proactiveLoading || !proactiveConfigReady || !proactiveGroupsReady || proactiveConflict || proactiveStatus?.available === false;
+  document.querySelectorAll("[data-proactive-edit], .proactive-group").forEach((element) => { element.disabled = editingBlocked; });
+  $("proactive-group-settings").disabled = editingBlocked || !proactiveSelected;
+  $("proactive-default-style").disabled = editingBlocked || proactiveBuiltinStyle === null;
+  $("proactive-reset-style").disabled = editingBlocked || proactiveBuiltinStyle === null;
+  $("proactive-reset-group").disabled = editingBlocked || !proactiveSelected || !proactiveDraft || !Object.hasOwn(proactiveDraft.groups, proactiveSelected);
+  $("proactive-clear-memory").disabled = proactiveBlocked || !proactiveSelected || !proactiveGroups.some(group => group.group_id === proactiveSelected);
+  text("proactive-clear-memory", memoryResetAction ? "正在清空…" : "清空本群全部记忆");
   $("proactive-save").disabled = proactiveBlocked || !proactiveDirty;
   $("proactive-refresh").disabled = !authenticated || !setupState?.qq_logged_in || updating || proactiveLoading || proactiveAction;
-  $("proactive-search").disabled = !proactiveGroupsReady;
+  $("proactive-search").disabled = !proactiveDraft;
   $("proactive-reload").disabled = !authenticated || updating || proactiveAction || proactiveLoading;
   $("proactive-reload").hidden = !proactiveDirty && !proactiveConflict;
-  text("proactive-save-label", proactiveAction ? "正在保存…" : "保存自由对话设置");
+  text("proactive-save-label", proactiveAction && !memoryResetAction ? "正在保存…" : "保存群聊设置");
 }
 function proactiveDefaultGroup() {
   return {mode: "off", display_name: "群灵", persona: "", quiet_hours: {enabled: false, start: "23:00", end: "08:00", timezone: "Asia/Shanghai"}};
@@ -203,6 +332,8 @@ function proactiveSummary() {
   text("proactive-dirty", proactiveDirty ? "有未保存的修改，保存后才会生效" : "设置独立保存，不影响 AI 接口配置");
   text("proactive-state", proactiveDirty ? "待保存" : paused ? "已暂停" : count ? `${count} 个群已开放` : "尚未选群");
   tone("proactive-state", proactiveDirty ? "warning" : !paused && count ? "success" : "neutral");
+  persistGroupDraft();
+  renderPersonaPreview();
   renderProactiveRuntime();
 }
 function proactiveCount(value) {
@@ -214,7 +345,7 @@ function proactiveTime(value) {
   return new Date(value * 1000).toLocaleString("zh-CN", {timeZone: "Asia/Shanghai", hour12: false});
 }
 function renderProactiveRuntime() {
-  $("proactive-runtime").hidden = !authenticated || !proactiveSelected;
+  $("proactive-runtime").hidden = !authenticated || !proactiveSelected || activeGroupTab !== "activity";
   if (!authenticated || !proactiveSelected) return;
   const saved = proactiveSavedConfig;
   const status = proactiveStatus;
@@ -224,6 +355,7 @@ function renderProactiveRuntime() {
   if (!proactiveConfigReady || !status) code = "unavailable";
   else if (status.storage_healthy === false) code = "storage_error";
   else if (status.available === false) code = "unavailable";
+  else if (Array.isArray(status.memory_reset_pending) && status.memory_reset_pending.includes(proactiveSelected)) code = "memory_reset_pending";
   else if (!saved?.enabled || mode === "off") code = "off";
   else if (!setupState?.qq_logged_in || !setupState?.qq_connected) code = "disconnected";
   const [label, stateTone, description] = Object.hasOwn(proactiveRuntimeStates, code) ? proactiveRuntimeStates[code] : proactiveRuntimeStates.unknown;
@@ -236,7 +368,7 @@ function renderProactiveRuntime() {
     if (seconds > 0 && seconds <= 86400) detail += ` 普通插话还需约 ${seconds < 60 ? `${seconds} 秒` : `${Math.ceil(seconds / 60)} 分钟`}。`;
   }
   const conversations = [group?.active_conversations, group?.queued_conversations, group?.explicit_requests];
-  if (!["off", "unavailable", "disconnected", "storage_error", "unknown"].includes(code)
+  if (!["off", "unavailable", "disconnected", "storage_error", "unknown", "memory_reset_pending"].includes(code)
       && conversations.every(value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 1000000)) {
     detail += ` 当前 ${conversations[0]} 路接话处理中、${conversations[1]} 路等待、${conversations[2]} 个明确任务。`;
   }
@@ -263,9 +395,13 @@ function renderProactivePersonaCount() {
   $("proactive-persona").setAttribute("aria-invalid", String(over));
 }
 function renderProactiveEditor() {
+  const memoryFeedback = memoryResetFeedback?.group === proactiveSelected ? memoryResetFeedback : null;
+  text("proactive-memory-message", memoryFeedback?.message || "");
+  tone("proactive-memory-message", memoryFeedback?.tone || "neutral");
   const selected = proactiveSelected;
-  $("proactive-empty").hidden = Boolean(selected);
-  $("proactive-group-settings").hidden = !selected;
+  $("proactive-empty").hidden = Boolean(selected) || activeGroupTab === "defaults";
+  $("proactive-group-settings").hidden = !selected || activeGroupTab === "defaults";
+  renderPersonaPreview();
   renderProactiveRuntime();
   if (!selected || !proactiveDraft) return;
   const member = proactiveGroups.find((group) => group.group_id === selected);
@@ -315,10 +451,13 @@ function renderProactiveGroups() {
     button.append(title, badge);
     button.addEventListener("click", () => {
       if (button.disabled) return;
+      if (group.group_id !== proactiveSelected && !leaveMemory()) return;
       proactiveSelected = group.group_id;
       renderProactiveGroups();
       renderProactiveEditor();
+      persistGroupDraft();
       controls();
+      if (activeGroupTab === "memory" && memoryGroup !== proactiveSelected) loadMemory();
     });
     list.append(button);
   }
@@ -331,7 +470,20 @@ function applyProactive(value, replace = false) {
   proactiveStatus = value.status || {};
   proactiveSavedConfig = JSON.parse(JSON.stringify(value.config));
   proactiveBuiltinStyle = typeof value.builtin_style === "string" ? value.builtin_style : null;
-  if (replace || !proactiveDraft || !proactiveDirty) {
+  if (!groupDraftRestored) {
+    groupDraftRestored = true;
+    const cached = readDraft("groups");
+    if (!replace && validProactiveConfig(cached?.config)) {
+      proactiveDraft = cached.config;
+      proactiveDirty = true;
+      proactiveSelected = /^\d+$/.test(cached.selected || "") ? cached.selected : "";
+      $("proactive-enabled").checked = proactiveDraft.enabled;
+      $("proactive-default-style").value = proactiveDraft.default_style || proactiveBuiltinStyle || "";
+      renderProactiveEditor();
+      proactiveFeedback("已恢复此标签页的未保存草稿；尚未应用到机器人。", "neutral");
+    }
+  }
+  if (replace || !proactiveDraft || (!proactiveDirty && proactiveDraft.revision !== value.config.revision)) {
     proactiveDraft = JSON.parse(JSON.stringify(value.config));
     proactiveDirty = false;
     proactiveConflict = false;
@@ -342,7 +494,7 @@ function applyProactive(value, replace = false) {
     renderProactiveEditor();
   } else if (value.config.revision !== proactiveDraft.revision) {
     proactiveConflict = true;
-    proactiveFeedback("设置已在其他页面修改。当前编辑已保留，请重新载入已保存设置后再调整。");
+    proactiveFeedback("设置已在其他页面修改。草稿已保留，可复制需要的内容，重新载入已保存设置后再调整。");
   }
   proactiveSummary();
   if (proactiveStatus.available === false) proactiveFeedback(proactiveStatus.message || "自由对话服务暂不可用，请稍后重试。");
@@ -350,18 +502,21 @@ function applyProactive(value, replace = false) {
 async function pollProactive(epoch = authEpoch, force = false, replace = false) {
   if (!authenticated || proactiveLoading || proactiveAction || (!force && Date.now() - proactiveLastPoll < 15000)) return;
   proactiveLoading = true;
+  proactiveReplacing = replace;
   proactiveLastPoll = Date.now();
   controls();
   try {
+    const refreshGroups = force || !proactiveGroupsReady || Date.now() - proactiveGroupsLastPoll > 300000;
     const results = await Promise.allSettled([
       api("/api/proactive"),
-      setupState?.qq_logged_in ? api("/api/proactive/groups") : Promise.reject(new Error("请先登录 QQ，再选择开放自由对话的群。"))
+      refreshGroups ? (setupState?.qq_logged_in ? api("/api/proactive/groups") : Promise.reject(new Error("QQ 未登录；可继续编辑已有草稿，连接恢复后再保存。"))) : Promise.resolve({groups: proactiveGroups})
     ]);
     if (epoch !== authEpoch || !authenticated) return;
     const [configResult, groupsResult] = results;
     if (groupsResult.status === "fulfilled" && Array.isArray(groupsResult.value.groups) && groupsResult.value.groups.every((group) => /^\d+$/.test(String(group.group_id)) && typeof group.name === "string")) {
       proactiveGroups = groupsResult.value.groups.map((group) => ({group_id: String(group.group_id), name: group.name}));
       proactiveGroupsReady = true;
+      if (refreshGroups) proactiveGroupsLastPoll = Date.now();
     } else {
       proactiveGroupsReady = false;
       text("proactive-groups-message", groupsResult.status === "rejected" ? groupsResult.reason.message : "群列表读取失败，请刷新重试。已保存的设置不会被覆盖。");
@@ -373,9 +528,10 @@ async function pollProactive(epoch = authEpoch, force = false, replace = false) 
       proactiveConfigReady = false;
       proactiveFeedback(configResult.reason.message);
     }
-    if (proactiveDraft) renderProactiveGroups();
+    if (proactiveDraft && refreshGroups) renderProactiveGroups();
   } finally {
     proactiveLoading = false;
+    proactiveReplacing = false;
     renderProactiveRuntime();
     controls();
   }
@@ -431,16 +587,7 @@ function renderSetup(state) {
   if (showQR && $("qr").src !== state.qr_image) $("qr").src = state.qr_image;
   if (!showQR) $("qr").removeAttribute("src");
   text("qq-status", qq.connected ? runtimeReady ? "QQ 已连接，随时可以开始聊" : "QQ 已连接，功能组件正在恢复" : showQR ? qq.code === "offline" ? "QQ 已离线，请重新扫码并在手机上确认" : "使用手机 QQ 扫码，并在手机上确认" : qq.code === "waiting_login" ? "正在等待登录二维码…" : qq.detail);
-  if (!loaded && state.settings?.base_url) {
-    for (const [key, value] of Object.entries(state.settings)) {
-      if (key !== "api_key" && $("settings").elements[key]) {
-        const inheritsChat = (key === "vision_model" || key === "search_model") && value === state.settings.chat_model;
-        $("settings").elements[key].value = inheritsChat ? "" : value;
-      }
-    }
-    $("settings").elements.api_key.placeholder = "已保存 · 留空保留原密钥";
-    loaded = true;
-  }
+  renderSettingsState(state);
 }
 function renderCleanup(value) {
   if (!value) {
@@ -598,6 +745,46 @@ $("proactive-reset-group").addEventListener("click", () => {
   proactiveSummary();
   proactiveFeedback("已恢复此群默认设置，保存后将仅响应 @ 和 /ai。", "success");
 });
+$("proactive-clear-memory").addEventListener("click", async () => {
+  if ($("proactive-clear-memory").disabled || !authenticated || proactiveAction) return;
+  const group = proactiveSelected;
+  const name = proactiveGroups.find(item => item.group_id === group)?.name || "所选群";
+  const confirmation = window.prompt(`即将永久清空「${name}」（${group}）的全部记忆，从零开始。性格和群设置保留。\n请输入群号 ${group} 确认：`);
+  if (confirmation === null) return;
+  if (confirmation.trim() !== group) {
+    memoryResetFeedback = {group, message: "群号不一致，未清空任何记忆。", tone: "error"};
+    renderProactiveEditor();
+    return;
+  }
+  const epoch = authEpoch;
+  const key = `qunling-memory-reset:${group}`;
+  let requestId = sessionStorage.getItem(key);
+  if (!/^[a-f0-9]{32}$/.test(requestId || "")) {
+    const bytes = new Uint8Array(16);
+    window.crypto.getRandomValues(bytes);
+    requestId = Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
+    sessionStorage.setItem(key, requestId);
+  }
+  proactiveAction = memoryResetAction = true;
+  memoryResetFeedback = {group, message: "正在清空，请稍候…", tone: "neutral"};
+  renderProactiveEditor();
+  controls();
+  try {
+    const result = await api("/api/proactive/memory/reset", {group_id: group, confirmation: group, request_id: requestId}, 60000);
+    if (epoch !== authEpoch || !authenticated) return;
+    if (result.cleared !== true || result.group_id !== group) throw Error("未确认清空结果，请再次点击清空核对；重复核对不会再次删除新的记忆。");
+    sessionStorage.removeItem(key);
+    memoryResetFeedback = {group, message: `「${name}」（${group}）的记忆已清空，之后将从新的对话开始。`, tone: "success"};
+    clearMemoryView();
+  } catch (error) {
+    if (epoch !== authEpoch || !authenticated) return;
+    memoryResetFeedback = {group, message: `${error.message} 如未确认结果，可再次点击清空核对。`, tone: "error"};
+  } finally {
+    proactiveAction = memoryResetAction = false;
+    renderProactiveEditor();
+    controls();
+  }
+});
 for (const id of ["proactive-mode", "proactive-quiet-enabled", "proactive-quiet-start", "proactive-quiet-end"]) {
   $(id).addEventListener("change", editProactiveGroup);
 }
@@ -626,7 +813,7 @@ $("proactive-form").addEventListener("submit", async (event) => {
     const value = await api("/api/proactive", config, 60000);
     if (epoch !== authEpoch || !authenticated) return;
     applyProactive(value, true);
-    proactiveFeedback("自由对话设置已保存。只有明确选择的群会开放主动参与。", "success");
+    proactiveFeedback("群聊设置已保存。性格设置对各种回复统一生效，主动参与只在已开启的群生效。", "success");
   } catch (error) {
     if (epoch !== authEpoch) return;
     if (error.status === 409) proactiveConflict = true;
@@ -639,19 +826,56 @@ $("settings").addEventListener("submit", async (event) => {
   const form = event.currentTarget;
   text("form-message", "");
   configAction = true; controls();
+  const epoch = authEpoch;
   try {
-    await api("/api/configure", Object.fromEntries(new FormData(form)));
-    form.elements.api_key.value = "";
-    form.elements.api_key.type = "password";
-    $("show-key").setAttribute("aria-pressed", "false");
-    $("show-key").setAttribute("aria-label", "显示 API Key");
-    $("show-key").title = "显示 API Key";
-    text("form-message", "配置已提交，正在应用到机器人。");
-    tone("form-message", "success");
+    // Read disabled fields explicitly: the form is locked during application,
+    // and native FormData would omit them once controls() disables the inputs.
+    const payload = {};
+    for (const key of [...aiDraftFields, "api_key", "search_api_key"]) if (form.elements[key]) payload[key] = form.elements[key].value;
+    if (settingsRevision) payload.settings_revision = settingsRevision;
+    await api("/api/configure", payload);
+    if (epoch !== authEpoch || !authenticated) return;
+    settingsPending = true;
+    text("form-message", "配置已提交，正在应用；完成后会显示结果。");
+    tone("form-message", "neutral");
   } catch (error) {
+    if (epoch !== authEpoch) return;
+    if (error.status === 409) settingsConflict = true;
     text("form-message", error.message);
     tone("form-message", "error");
-  } finally { await poll(true); configAction = false; controls(); }
+  } finally { await poll(true); configAction = false; persistSettingsDraft(); controls(); }
+});
+function editSettings() {
+  if (!authenticated || configAction || settingsPending || settingsReloading || setupState?.stage === "configuring") return;
+  settingsDirty = true;
+  persistSettingsDraft();
+  controls();
+}
+$("settings").addEventListener("input", editSettings);
+$("settings").addEventListener("change", editSettings);
+$("search-provider").addEventListener("change", renderSearchProvider);
+$("settings-reload").addEventListener("click", async () => {
+  if ($("settings-reload").disabled) return;
+  if (settingsDirty && !window.confirm("重新载入会丢弃未保存的 AI 与工具修改，改用服务器配置。继续吗？")) return;
+  const epoch = authEpoch;
+  settingsReloading = true;
+  controls();
+  try {
+    const state = await api("/api/status");
+    if (epoch !== authEpoch || !authenticated) return;
+    setupState = state;
+    hydrateSettings(state);
+    persistSettingsDraft();
+    text("form-message", "已重新载入服务器配置。");
+    tone("form-message", "success");
+  } catch (error) { text("form-message", error.message); tone("form-message", "error"); }
+  finally { settingsReloading = false; controls(); }
+});
+document.querySelectorAll("[data-group-tab]").forEach(button => button.addEventListener("click", () => setGroupTab(button.dataset.groupTab)));
+window.addEventListener?.("beforeunload", event => {
+  if (!(settingsDirty || proactiveDirty || settingsPending || configAction || proactiveAction || memoryDirty || memoryBusy)) return;
+  event.preventDefault();
+  event.returnValue = "";
 });
 $("show-key").addEventListener("click", () => {
   const input = $("settings").elements.api_key;
@@ -712,9 +936,12 @@ $("admin").addEventListener("click", async () => {
 async function unlock() {
   const value = $("token").value.trim();
   if (!value || polling) return;
+  if (token !== value) { writeDraft("ai", null); writeDraft("groups", null); }
   token = value;
   $("token").value = "";
   loaded = false;
+  settingsDirty = settingsConflict = settingsPending = settingsDraftRestored = groupDraftRestored = false;
+  settingsRevision = null;
   proactiveDraft = null;
   proactiveSavedConfig = null;
   proactiveStatus = null;
@@ -736,22 +963,34 @@ $("token").addEventListener("keydown", (event) => {
 });
 $("refresh-state").addEventListener("click", poll);
 const navLinks = [...document.querySelectorAll(".nav-link")];
-function selectNav(id) {
+const consolePages = {
+  overview: ["工作台", "运行状态与日常管理，一眼找到。"],
+  models: ["AI 服务", "统一管理模型、图片与联网搜索参数。"],
+  groups: ["群聊管理", "管理每个群的性格、参与方式和记忆。"],
+  connection: ["QQ 连接", "查看在线状态，管理扫码登录。"],
+  requests: ["任务中心", "查看消息、文件任务和自由对话的进度与结果。"],
+  maintenance: ["版本维护", "检查更新、切换版本与查看维护记录。"],
+  advanced: ["高级管理", "前往 LangBot 管理其他插件与流水线参数。"]
+};
+function selectNav(id, focus = false) {
+  id = id === "proactive" ? "groups" : Object.hasOwn(consolePages, id) ? id : "overview";
+  document.querySelectorAll("[data-page]").forEach(page => { page.hidden = page.dataset.page !== id; });
+  text("page-title", consolePages[id][0]);
+  text("page-description", consolePages[id][1]);
+  document.title = `QunLing 群灵 · ${consolePages[id][0]}`;
   navLinks.forEach((link) => {
     const active = link.getAttribute("href") === "#" + id;
     link.classList.toggle("is-active", active);
-    if (active) link.setAttribute("aria-current", "location");
+    if (active) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   });
+  if (focus) {
+    window.scrollTo?.({top: 0, left: 0, behavior: "instant"});
+    $("page-title").focus?.({preventScroll: true});
+  }
 }
-navLinks.forEach((link) => link.addEventListener("click", () => selectNav(link.getAttribute("href").slice(1))));
-if (typeof IntersectionObserver !== "undefined") {
-  const observer = new IntersectionObserver((entries) => {
-    const visible = entries.filter((entry) => entry.isIntersecting);
-    if (visible.length) selectNav(visible[0].target.id);
-  }, {rootMargin: "-10% 0px -65% 0px"});
-  ["overview", "models", "connection", "proactive", "requests", "maintenance", "advanced"].forEach((id) => observer.observe($(id)));
-}
+window.addEventListener?.("hashchange", () => selectNav(location.hash.slice(1), true));
+selectNav(location.hash.slice(1));
 const requestPhases = {received:"收到请求",queued:"排队",preparing:"准备上下文",runtime_wait:"等待功能组件",running:"处理消息",model:"生成回复",tool_wait:"等待工具",tool:"执行工具",retry_wait:"准备有限重试",resuming:"等待继续回复",sending:"发送回复",delivered:"发送已确认",ended:"处理结束"};
 const requestStatuses = {active:"处理中",completed:"回复已发送",processed:"流程已结束",failed:"处理失败",cancelled:"已取消",interrupted:"执行中断",unconfirmed:"结果未确认",rejected:"未能排队"};
 const requestReasons = {queue_full:"请求队列已满",queue_timeout:"排队超时",execution_timeout:"请求总时限已到",tool_timeout:"工具执行超时",tool_queue_timeout:"等待工具超时",runtime_unavailable:"功能组件暂不可用",upstream_unavailable:"上游服务暂不可用",upstream_timeout:"服务响应超时",rate_limited:"服务调用限流",authentication:"接口认证失败",permission:"权限或工作区绑定已失效",network:"连接异常",tool_failed:"工具执行失败",pipeline_failed:"消息处理异常",no_confirmed_reply:"流程结束，未记录文本回复的发送确认",delivery_unconfirmed:"回复发送未确认",restart_before_execution:"服务重启，尚未开始执行",restart_interrupted:"服务重启，执行被中断",restart_unconfirmed:"服务重启，操作结果未确认",cancelled:"用户取消",shutdown:"服务关闭，执行已中断",capacity:"长任务容量已满",admission_failed:"请求未能开始执行"};
@@ -846,6 +1085,205 @@ $("requests-refresh").addEventListener("click", () => loadRequests());
 $("requests-older").addEventListener("click", () => loadRequests(true));
 $("requests-group").addEventListener("change", () => loadRequests());
 $("requests-status").addEventListener("change", () => loadRequests());
+
+function clearMemoryView() {
+  memorySequence += 1;
+  memorySelected = null; memoryDirty = false; memoryGroup = ""; memoryOffset = 0; memoryNext = null;
+  $("memory-list").replaceChildren(); $("memory-editor").hidden = true;
+  for (const id of ["memory-name", "memory-traits", "memory-preferences", "memory-notes", "memory-content"]) $(id).value = "";
+  $("memory-prev").hidden = $("memory-next").hidden = true;
+  text("memory-note", "点击查询读取本群记忆。");
+}
+function leaveMemory() {
+  if (memoryBusy || memoryDirty && !window.confirm("这条记忆的修改尚未保存，放弃修改并离开？")) return false;
+  clearMemoryView();
+  return true;
+}
+function memoryControls() {
+  for (const id of ["memory-save", "memory-delete", "memory-cancel", "memory-name", "memory-traits", "memory-preferences", "memory-notes", "memory-content", "memory-refresh", "memory-prev", "memory-next", "memory-export", "memory-kind", "memory-query"]) {
+    $(id).disabled = memoryBusy || !authenticated;
+  }
+  $("memory-save").disabled ||= !memoryDirty;
+}
+function openMemory(item) {
+  if (memoryBusy || memoryDirty && !window.confirm("放弃当前记忆的未保存修改，打开另一条？")) return;
+  memorySelected = {...item, group: proactiveSelected}; memoryDirty = false;
+  $("memory-editor").hidden = false;
+  text("memory-editor-title", item.kind === "profile" ? "编辑「" + item.title + "」" : "编辑长期事件记忆");
+  $("memory-profile-fields").hidden = item.kind !== "profile";
+  $("memory-episode-fields").hidden = item.kind !== "episode";
+  if (item.kind === "profile") {
+    for (const [id, field] of [["memory-name", "name"], ["memory-traits", "traits"], ["memory-preferences", "preferences"], ["memory-notes", "notes"]])
+      $(id).value = Array.isArray(item.value[field]) ? item.value[field].join("\n") : item.value[field] || "";
+  } else $("memory-content").value = item.value;
+  text("memory-editor-message", "修改只影响这条记忆。保存前会检查它是否被更新。"); tone("memory-editor-message", "neutral");
+  memoryControls();
+  $("memory-editor").scrollIntoView?.({block: "nearest", behavior: "smooth"});
+}
+async function loadMemory(offset = 0) {
+  if (!authenticated || !proactiveSelected || memoryBusy) return;
+  const group = proactiveSelected, epoch = authEpoch, sequence = ++memorySequence;
+  if (memoryGroup !== group) { memorySelected = null; memoryDirty = false; $("memory-editor").hidden = true; }
+  memoryGroup = group; memoryOffset = offset;
+  text("memory-note", "正在读取本群记忆…");
+  $("memory-list").replaceChildren(); $("memory-prev").hidden = $("memory-next").hidden = true;
+  try {
+    const data = await api("/api/memory", {group_id: group, action: "list", offset, query: $("memory-query").value.trim(), kind: $("memory-kind").value || "all"}, 60000);
+    if (!authenticated || epoch !== authEpoch || group !== proactiveSelected || sequence !== memorySequence) return;
+    for (const item of data.items || []) {
+      const row = requestNode("article", ""); row.className = "memory-row";
+      const button = requestNode("button", (item.kind === "profile" ? "资料 · " : "事件 · ") + item.title);
+      button.type = "button"; button.className = "memory-open"; button.addEventListener("click", () => openMemory(item));
+      const preview = item.kind === "profile" ? [item.value.name, ...(item.value.traits || []), ...(item.value.preferences || []), item.value.notes].filter(Boolean).join(" · ") : item.value;
+      const status = {active: "使用中", superseded: "已被新记忆替代", archived: "已归档", deleted: "已停用"};
+      row.append(button, requestNode("p", preview.slice(0, 240)), requestNode("small", [item.updated_at, status[item.status]].filter(Boolean).join(" · ")));
+      $("memory-list").append(row);
+    }
+    memoryNext = data.next_offset ?? null;
+    $("memory-prev").hidden = offset === 0; $("memory-next").hidden = memoryNext === null;
+    text("memory-note", data.total ? `共 ${data.total} 条匹配记忆 · 第 ${Math.floor(offset / 30) + 1} 页 · 点击记录编辑` : "暂无匹配记忆。可以更换关键词或类型；聊天上下文不在此列表中。");
+  } catch (error) {
+    if (authenticated && epoch === authEpoch && group === proactiveSelected && sequence === memorySequence) text("memory-note", error.message);
+  }
+}
+async function changeMemory(action) {
+  const item = memorySelected;
+  if (!authenticated || !item || memoryBusy || item.group !== proactiveSelected) return;
+  if (action === "delete" && !window.confirm(`删除「${item.title}」这条记忆？此操作不可撤销。`)) return;
+  const epoch = authEpoch;
+  const body = {group_id: item.group, action, kind: item.kind, revision: item.revision};
+  if (item.kind === "profile") body.sender_id = item.sender_id;
+  else { body.collection_id = item.collection_id; body.id = item.id; }
+  if (action === "save") body.value = item.kind === "profile" ? {
+    name: $("memory-name").value, notes: $("memory-notes").value,
+    traits: $("memory-traits").value.split("\n").map(value => value.trim()).filter(Boolean),
+    preferences: $("memory-preferences").value.split("\n").map(value => value.trim()).filter(Boolean)
+  } : $("memory-content").value;
+  memoryBusy = proactiveAction = true; controls(); memoryControls();
+  text("memory-editor-message", action === "save" ? "正在保存这条记忆…" : "正在删除这条记忆…");
+  let success = false;
+  try {
+    const result = await api("/api/memory", body, 60000);
+    if (!authenticated || epoch !== authEpoch) return;
+    if (result[action === "save" ? "saved" : "deleted"] !== true || result.group_id !== item.group) throw Error("未确认操作结果，请刷新核对。草稿仍保留。");
+    success = true; memoryDirty = false; memorySelected = null; $("memory-editor").hidden = true;
+  } catch (error) {
+    if (authenticated && epoch === authEpoch) { text("memory-editor-message", error.message + " 草稿已保留，可关闭编辑后刷新核对。"); tone("memory-editor-message", "error"); }
+  } finally {
+    memoryBusy = proactiveAction = false; controls(); memoryControls();
+    if (success) { await loadMemory(0); text("memory-note", (action === "save" ? "已保存。" : "已删除。") + $("memory-note").textContent); }
+  }
+}
+async function exportMemory() {
+  if (!authenticated || !proactiveSelected || memoryBusy) return;
+  const group = proactiveSelected, epoch = authEpoch;
+  memoryBusy = true; memoryControls(); text("memory-note", "正在导出本群已保存的记忆…");
+  try {
+    const data = await api("/api/memory", {group_id: group, action: "export"}, 60000);
+    if (!authenticated || epoch !== authEpoch || group !== proactiveSelected) return;
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], {type: "application/json;charset=utf-8"}));
+    const link = document.createElement("a"); link.href = url; link.download = `qunling-memory-${group}-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    text("memory-note", `已导出 ${data.count} 条记忆。文件包含本群资料和长期事件，不含性格设置或 QQ 历史消息。`);
+  } catch (error) { if (authenticated && epoch === authEpoch && group === proactiveSelected) text("memory-note", error.message); }
+  finally { memoryBusy = false; memoryControls(); }
+}
+$("memory-refresh").addEventListener("click", () => loadMemory());
+$("memory-kind").addEventListener("change", () => loadMemory());
+$("memory-query").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); loadMemory(); } });
+$("memory-name").addEventListener("keydown", event => { if (event.key === "Enter") event.preventDefault(); });
+$("memory-prev").addEventListener("click", () => loadMemory(Math.max(0, memoryOffset - 30)));
+$("memory-next").addEventListener("click", () => { if (memoryNext !== null) loadMemory(memoryNext); });
+$("memory-save").addEventListener("click", () => changeMemory("save"));
+$("memory-delete").addEventListener("click", () => changeMemory("delete"));
+$("memory-cancel").addEventListener("click", () => { if (leaveMemory()) loadMemory(); });
+$("memory-export").addEventListener("click", exportMemory);
+for (const id of ["memory-name", "memory-traits", "memory-preferences", "memory-notes", "memory-content"]) $(id).addEventListener("input", () => { memoryDirty = true; memoryControls(); });
+
+const taskStatuses = {pending:"排队中", running:"处理中", waiting:"等待继续", partial:"部分完成", completed:"处理完成", failed:"处理失败", cancelled:"已取消"};
+const deliveryStatuses = {not_scheduled:"未安排自动发送", queued:"等待发送", claimed:"等待发送", started:"正在发送", sent:"QQ 发送已确认", unconfirmed:"QQ 发送未确认", cancelled:"发送已取消", failed:"发送失败", expired:"发送已过期"};
+const taskErrors = {network:"网络连接异常", timeout:"处理超时", rate_limit:"服务限流", service:"服务不可用", invalid_input:"输入无效", permission:"权限失效", needs_input:"等待补充信息", delivery_unconfirmed:"发送结果未确认", budget:"超出任务限额", cancelled:"任务取消", internal:"处理异常"};
+function clearTasks() {
+  tasksSequence += 1; tasksCursor = null; tasksBusy = false; tasksOlder = false;
+  for (const id of ["tasks-list", "tasks-counts", "tasks-live-list"]) $(id).replaceChildren();
+  $("tasks-older").hidden = true;
+  text("tasks-note", ""); text("tasks-live-note", "");
+}
+function setTaskTab(tab) {
+  taskTab = tab;
+  for (const name of ["requests", "files", "live"]) {
+    $("task-panel-" + name).hidden = name !== tab;
+    $("task-tab-" + name).setAttribute("aria-pressed", String(name === tab));
+  }
+  if (tab === "files") loadTasks();
+  if (tab === "live") renderLiveTasks();
+}
+async function loadTasks(older = false, automatic = false) {
+  if (!authenticated || automatic && (tasksBusy || tasksOlder)) return;
+  const cursor = older ? tasksCursor : null;
+  if (older && !cursor) return;
+  const sequence = ++tasksSequence, epoch = authEpoch;
+  tasksBusy = true; tasksOlder = Boolean(cursor); $("tasks-refresh").disabled = true;
+  const filters = {limit:30};
+  if ($("tasks-group").value.trim()) filters.group = $("tasks-group").value.trim();
+  if ($("tasks-status").value) filters.status = $("tasks-status").value;
+  if (cursor) filters.before = cursor;
+  text("tasks-note", "正在读取后台任务…");
+  try {
+    const data = await api("/api/tasks?" + new URLSearchParams(filters));
+    if (!authenticated || epoch !== authEpoch || sequence !== tasksSequence) return;
+    $("tasks-list").replaceChildren(); $("tasks-counts").replaceChildren();
+    for (const [label, count] of [["排队 / 处理", (data.counts?.pending || 0) + (data.counts?.running || 0)], ["等待 / 部分完成", (data.counts?.waiting || 0) + (data.counts?.partial || 0)], ["处理完成", data.counts?.completed || 0], ["失败 / 取消", (data.counts?.failed || 0) + (data.counts?.cancelled || 0)]]) {
+      const card = requestNode("div", ""); card.append(requestNode("span", label), requestNode("strong", String(count))); $("tasks-counts").append(card);
+    }
+    for (const item of data.tasks || []) {
+      const row = requestNode("article", ""); row.className = "request-row";
+      const conversation = item.conversation?.startsWith("group:") ? "群 " + item.conversation.slice(6) : "私聊 " + (item.actor || "");
+      row.append(requestNode("h3", (taskStatuses[item.status] || "未知状态") + " · " + conversation));
+      const delivery = requestNode("span", deliveryStatuses[item.delivery] || "发送状态未知"); delivery.className = "phase";
+      delivery.dataset.tone = item.delivery === "sent" ? "success" : ["unconfirmed", "failed", "expired"].includes(item.delivery) ? "warning" : "neutral";
+      row.append(delivery, requestNode("p", `${requestTime(item.created_at)} · 发起人 ${item.actor} · 耗时 ${item.elapsed_seconds} 秒 · 已执行 ${item.attempts} 次`));
+      if (item.error_code) row.append(requestNode("p", taskErrors[item.error_code] || "任务异常，请核对处理记录。"));
+      if (item.delivery_error && item.delivery_error !== item.error_code) row.append(requestNode("p", "交付：" + (taskErrors[item.delivery_error] || "发送环节未完成，请核对 QQ 中的实际结果。")));
+      if (item.retry_at) row.append(requestNode("small", "下一次执行时间：" + requestTime(item.retry_at)));
+      row.append(requestNode("small", `任务 ${item.id} · 已产生 ${item.result_count} 个结果`));
+      $("tasks-list").append(row);
+    }
+    tasksCursor = data.next_before || null; $("tasks-older").hidden = !tasksCursor;
+    text("tasks-note", (data.tasks?.length ? "统计按所选群汇总，不受状态筛选影响。" : "当前筛选下暂无后台任务。") + "采样于 " + requestTime(data.sampled_at) + (cursor ? " · 较早记录，刷新返回最新。" : ""));
+  } catch (error) {
+    if (authenticated && epoch === authEpoch && sequence === tasksSequence) {
+      $("tasks-list").replaceChildren(); $("tasks-counts").replaceChildren(); $("tasks-older").hidden = true; tasksCursor = null;
+      text("tasks-note", error.message);
+    }
+  } finally { if (sequence === tasksSequence) { tasksBusy = false; $("tasks-refresh").disabled = false; } }
+}
+function renderLiveTasks() {
+  $("tasks-live-list").replaceChildren();
+  if (!authenticated || !proactiveConfigReady || !proactiveStatus?.available) { text("tasks-live-note", "当前状态暂不可用，请刷新。不会将旧状态当作正在运行。"); return; }
+  const entries = Object.entries(proactiveStatus.groups || {});
+  for (const [group, value] of entries) {
+    if ((proactiveSavedConfig?.groups?.[group]?.mode || "off") === "off") continue;
+    const row = requestNode("article", ""); row.className = "request-row";
+    const name = proactiveGroups.find(item => item.group_id === group)?.name || group;
+    const code = !proactiveSavedConfig?.enabled ? "off" : !setupState?.qq_connected ? "disconnected" : value.status_code;
+    row.append(requestNode("h3", name + " · " + (proactiveRuntimeStates[code]?.[0] || "未知状态")));
+    row.append(requestNode("p", `群 ${group} · ${value.active_conversations || 0} 路接话 · ${value.queued_conversations || 0} 路等待 · ${value.explicit_requests || 0} 个明确任务`));
+    if (value.last_event) row.append(requestNode("small", (proactiveEventNames[value.last_event.code] || "最近处理") + " · " + proactiveTime(value.last_event.at)));
+    $("tasks-live-list").append(row);
+  }
+  text("tasks-live-note", ($("tasks-live-list").children.length ? "状态采样：" : "暂无已配置参与的群。状态采样：") + proactiveTime(proactiveStatus.generated_at));
+}
+for (const tab of ["requests", "files", "live"]) $("task-tab-" + tab).addEventListener("click", () => setTaskTab(tab));
+$("tasks-refresh").addEventListener("click", () => loadTasks());
+$("tasks-older").addEventListener("click", () => loadTasks(true));
+for (const id of ["tasks-group", "tasks-status"]) $(id).addEventListener("change", () => loadTasks());
+$("tasks-live-refresh").addEventListener("click", async () => { await pollProactive(authEpoch, true); renderLiveTasks(); });
+setInterval(() => {
+  if (!authenticated || $("requests").hidden) return;
+  if (taskTab === "files") loadTasks(false, true);
+  if (taskTab === "live") renderLiveTasks();
+}, 10000);
 poll();
 setInterval(poll, 4000);
 setInterval(expireQQStatus, 1000);

@@ -23,8 +23,8 @@ PLUGINS = {
     "local/QQWebSearch",
 }
 PROMPT = """[QQBOT SETUP v1]
-你是中文QQ助手，自然清楚地回答。区分本轮提问者和其他成员，不把他人经历归给当前人。
-需要群聊背景时用群聊前文工具，当前问题优先；新话题不硬接旧梗。
+以下是QQ工具执行协议；对话风格由当前群交流设置提供。区分本轮提问者和其他成员，不把他人经历归给当前人。
+需要群聊背景时可用群聊前文工具读取。
 用户要求记住长期有效信息时使用记忆工具，允许回忆、更正和删除，不保存密钥、密码、验证码或猜测。
 用户明确要求生图、改图、联网、找图、下载并发送文件时使用对应工具，不要求固定口令。
 处理附件先用file_workspace列出、导入和检查，再按实际格式分页阅读、检索或提取；未知格式仍可保存和发送。
@@ -42,6 +42,79 @@ GROUP_CONTEXT_SETTINGS = {
     "group_context_hours": (24, 1, 168, "近期群聊小时数"),
     "group_context_max_messages": (1000, 100, 1000, "近期群聊消息上限"),
 }
+TOOL_LIMITS = {
+    "image_timeout_seconds": (300, 30, 300, "图片请求超时"),
+    "search_timeout_seconds": (65, 30, 90, "搜索请求超时"),
+}
+TOOL_CHOICES = {
+    "image_size": ("1024x1024", {"1024x1024", "1280x1280", "768x1280", "1280x768", "720x1280", "1280x720", "1024x768", "768x1024"}),
+    "image_quality": ("auto", {"auto", "low", "medium", "high", "xhigh", "max"}),
+    "search_provider": ("shared", {"shared", "independent"}),
+}
+TOOL_FIELDS = set(TOOL_LIMITS) | set(TOOL_CHOICES) | {"search_base_url", "search_api_key"}
+
+
+def tool_settings(values, previous=None):
+    previous = previous or {}
+    result = {}
+    for key, (default, choices) in TOOL_CHOICES.items():
+        value = values.get(key, previous.get(key, default))
+        if not isinstance(value, str) or value not in choices:
+            raise SetupError("图片尺寸、画质或搜索服务选项无效。")
+        result[key] = value
+    for key, (default, minimum, maximum, label) in TOOL_LIMITS.items():
+        value = values.get(key, previous.get(key, default))
+        if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 3:
+            value = int(value)
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise SetupError(f"{label}需为 {minimum}–{maximum} 之间的整数（秒）。")
+        result[key] = value
+    return result
+
+
+def validate_service_url(value, label):
+    try:
+        parsed = urlsplit(value)
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username or parsed.password or parsed.query or parsed.fragment):
+            raise ValueError
+        parsed.port
+    except ValueError:
+        raise SetupError(f"{label}需为完整 HTTP(S) 接口地址，例如 https://api.example.com/v1。") from None
+    return value.rstrip("/")
+
+
+def adopt_tool_settings(api, values):
+    """Transfer existing plugin choices once, before the console takes ownership.
+
+    Older ai.json files did not contain these fields. Reading their effective
+    values before applying defaults avoids resetting an administrator's choices
+    on the first restart after upgrading. A failed read must not overwrite them.
+    """
+    config = dict(values)
+    if TOOL_FIELDS <= config.keys():
+        return config
+    image = api.call("GET", "/api/v1/plugins/langbot-team/AIImagePlugin/config")["config"]
+    search = api.call("GET", "/api/v1/plugins/local/QQWebSearch/config")["config"]
+    for field, source in (("image_size", "image_size"), ("image_quality", "quality"),
+                          ("image_timeout_seconds", "request_timeout_seconds")):
+        if field not in config and source in image:
+            config[field] = image[source]
+    if "search_timeout_seconds" not in config and "request_timeout_seconds" in search:
+        config["search_timeout_seconds"] = search["request_timeout_seconds"]
+    if "search_provider" not in config:
+        base = search.get("api_base_url", "").rstrip("/")
+        key = search.get("api_key", "")
+        independent = bool(base and (base != config.get("base_url", "").rstrip("/")
+                           or key not in {"", "***", config.get("api_key", "")}))
+        if independent and key == "***":
+            raise SetupError("已有独立搜索服务的密钥无法读取，请在 AI 服务页填写独立搜索地址和密钥后保存；原配置未覆盖。")
+        config.update(search_provider="independent" if independent else "shared",
+                      search_base_url=base if independent else "",
+                      search_api_key=key if independent else "")
+        if search.get("model_name"):
+            config["search_model"] = search["model_name"]
+    return config
 
 
 def group_context_settings(values, previous=None):
@@ -72,8 +145,10 @@ def settings_from_input(values, previous=None):
         "vision_model",
         "image_model",
         "search_model",
+        "search_base_url",
+        "search_api_key",
     }
-    allowed = text_fields | GROUP_CONTEXT_SETTINGS.keys()
+    allowed = text_fields | GROUP_CONTEXT_SETTINGS.keys() | TOOL_FIELDS
     if set(values) - allowed:
         raise SetupError("包含不支持的配置项。")
     config = {}
@@ -81,7 +156,7 @@ def settings_from_input(values, previous=None):
         # Saving only the context controls must not erase the AI configuration.
         value = values.get(key, previous.get(key, ""))
         if not isinstance(value, str) or len(value) > (
-            4096 if key == "api_key" else 1024
+            4096 if key.endswith("api_key") else 1024
         ):
             raise SetupError("AI 配置格式不正确。")
         if any(ord(char) < 32 or ord(char) == 127 for char in value):
@@ -89,25 +164,16 @@ def settings_from_input(values, previous=None):
         config[key] = value.strip()
     if not config["api_key"] and previous:
         config["api_key"] = previous.get("api_key", "")
+    if not config["search_api_key"] and previous:
+        config["search_api_key"] = previous.get("search_api_key", "")
     if not config["api_key"] or not config["chat_model"] or not config["image_model"]:
         raise SetupError("请填写 API Key、聊天模型名和图片模型名，以配置完整功能。")
-    try:
-        parsed = urlsplit(config["base_url"])
-        if (
-            parsed.scheme not in {"http", "https"}
-            or not parsed.hostname
-            or parsed.username
-            or parsed.password
-            or parsed.query
-            or parsed.fragment
-        ):
-            raise ValueError
-        parsed.port
-    except ValueError:
-        raise SetupError(
-            "AI 地址需为完整 HTTP(S) 接口地址，例如 https://api.example.com/v1。"
-        ) from None
-    config["base_url"] = config["base_url"].rstrip("/")
+    config["base_url"] = validate_service_url(config["base_url"], "AI 地址")
+    config.update(tool_settings(values, previous))
+    if config["search_base_url"]:
+        config["search_base_url"] = validate_service_url(config["search_base_url"], "搜索地址")
+    if config["search_provider"] == "independent" and (not config["search_base_url"] or not config["search_api_key"]):
+        raise SetupError("独立搜索服务需要填写地址和 API Key；已保存的密钥可以留空保留。")
     config["vision_model"] = config["vision_model"] or config["chat_model"]
     config["search_model"] = config["search_model"] or config["chat_model"]
     config.update(group_context_settings(values, previous))
@@ -115,11 +181,13 @@ def settings_from_input(values, previous=None):
 
 
 def public_settings(config):
-    fields = {"base_url", "chat_model", "vision_model", "image_model", "search_model"}
+    fields = {"base_url", "chat_model", "vision_model", "image_model", "search_model", "search_base_url"}
     return {
         **{k: v for k, v in config.items() if k in fields},
         **group_context_settings(config),
+        **tool_settings(config),
         "api_key_saved": bool(config.get("api_key")),
+        "search_api_key_saved": bool(config.get("search_api_key")),
     }
 
 
@@ -260,7 +328,7 @@ def ensure_plugins(api, package_dir, progress=lambda text: None, sleep=time.slee
 def configure(api, config, record, persist, onebot_token, langbot_url, archive_path):
     """Only manages resources recorded here; preserves memories and other resources."""
     # Persisted settings from earlier versions have no group-context controls.
-    config = settings_from_input(config)
+    config = settings_from_input(adopt_tool_settings(api, config))
     record = deepcopy(record)
     fingerprints = record.setdefault("applied_fingerprints", {})
 
@@ -407,21 +475,18 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
     ai = pipeline_config.setdefault("ai", {})
     ai.setdefault("runner", {})["id"] = RUNNER
     runner = ai.setdefault("runner_config", {}).setdefault(RUNNER, {})
-    runner.update(
-        {
-            "model": {
-                "primary": model_ids["chat_model"],
-                "fallbacks": [],
-                "reasoning": {},
-            },
-            "knowledge-bases": list(
-                dict.fromkeys([*runner.get("knowledge-bases", []), memory])
-            ),
-            "box-enabled": False,
-            "max-tool-iterations": 24,
-            "timeout": max(600, int(runner.get("timeout", 300))),
-        }
-    )
+    # The console owns the primary model and its memory binding. Advanced
+    # runner options remain owned by LangBot and must survive ordinary saves.
+    model = runner.setdefault("model", {})
+    model["primary"] = model_ids["chat_model"]
+    model.setdefault("fallbacks", [])
+    model.setdefault("reasoning", {})
+    runner["knowledge-bases"] = list(dict.fromkeys([*runner.get("knowledge-bases", []), memory]))
+    for key, default in (("box-enabled", False), ("max-tool-iterations", 24), ("timeout", 600)):
+        if not record.get("configured"):
+            runner[key] = default
+        else:
+            runner.setdefault(key, default)
     prompts = [
         p
         for p in runner.get("prompt", [])
@@ -442,18 +507,18 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
             "api_base_url": config["base_url"],
             "openai_api_key": config["api_key"],
             "model_name": config["image_model"],
-            "image_size": "1024x1024",
-            "quality": "auto",
-            "request_timeout_seconds": 300,
+            "image_size": config["image_size"],
+            "quality": config["image_quality"],
+            "request_timeout_seconds": config["image_timeout_seconds"],
             "history_hours": config["group_context_hours"],
             "history_max_messages": config["group_context_max_messages"],
         },
         "local/QQWebSearch": {
-            "api_base_url": config["base_url"],
-            "api_key": config["api_key"],
+            "api_base_url": config["search_base_url"] if config["search_provider"] == "independent" else config["base_url"],
+            "api_key": config["search_api_key"] if config["search_provider"] == "independent" else config["api_key"],
             "model_name": config["search_model"],
             "vision_model_uuid": model_ids["vision_model"],
-            "request_timeout_seconds": 65,
+            "request_timeout_seconds": config["search_timeout_seconds"],
         },
         "local/QQGroupContext": {
             "model_uuid": model_ids["vision_model"],

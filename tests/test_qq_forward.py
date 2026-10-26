@@ -34,6 +34,18 @@ def setup():
 
 
 @pytest.mark.asyncio
+async def test_reset_prevents_automatic_rediscovery_of_old_forward_cards(setup):
+    bot, params, anchor = setup
+    now = params["before_time"]
+    anchor["message"] = [text("之前的内容呢")]
+    old = {**anchor, "message_id": 122, "time": now - 100, "message": [card()]}
+    bot.call_action.side_effect = [anchor, {"messages": [old]}]
+    result = await forward.read_forward_context(bot, params, after_time=now - 10)
+    assert not result["cards"]
+    assert [call.args[0] for call in bot.call_action.await_args_list] == ["get_msg", "get_group_msg_history"]
+
+
+@pytest.mark.asyncio
 async def test_current_forward_returns_text_labels_and_actual_image_references(setup):
     bot, params, anchor = setup
     url = "https://example.org/image.png?key=private"

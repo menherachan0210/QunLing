@@ -472,11 +472,11 @@ def test_listener_and_tool_discovery_prompts_expose_the_same_reference_policy():
     tool_prompt = document["spec"]["llm_prompt"]
     assert "提问者自己" in document["metadata"]["description"]["zh_Hans"]
     assert "is_questioner" in GUIDANCE and "is_questioner" in tool_prompt
-    assert "先调用read_recent_group_context" in GUIDANCE
-    assert "BEFORE asking the user to repeat" in tool_prompt
-    assert "不是关键词清单" in GUIDANCE and "not keyword triggers" in tool_prompt
-    assert "多个合理指代" in GUIDANCE and "multiple plausible referents" in tool_prompt
-    assert "独立问题或背景已充分时不必读取" in GUIDANCE
-    assert "self-contained questions" in tool_prompt
+    assert "read_recent_group_context可读取" in GUIDANCE
+    assert "current group communication settings" in tool_prompt
+    assert "不能单独证明话题关系" in GUIDANCE and "not keyword triggers" in tool_prompt
+    assert "缺少必要操作对象时不能擅自选择" in GUIDANCE and "multiple plausible referents" in tool_prompt
+    assert "用于当前交流实际依赖的背景" in GUIDANCE
+    assert "Self-contained questions" in tool_prompt
     assert "negation or numbers" in tool_prompt
     assert document["spec"]["parameters"]["additionalProperties"] is False
