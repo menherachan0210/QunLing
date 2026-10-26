@@ -63,6 +63,9 @@ class QueuedJournal:
             raise ValueError("Invalid diagnostic code")
         if "tool" in values:
             values["tool"] = _tool(values["tool"])
+        if "details" in values:
+            from qunling.activity import details
+            values["details"] = details(values["details"])
         self._submit("record", (_id(request_id), phase), {**values, "at": time.time()})
 
     def flush(self, timeout=2):

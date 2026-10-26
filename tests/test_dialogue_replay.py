@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("dialogue_replay", ROOT / "scripts/Evaluate-Dialogue.py")
@@ -29,6 +30,18 @@ def test_interjection_cases_cover_silence_banter_real_help_and_custom_style():
     assert any(case.get("persona") for case in cases)
     assert any(case.get("media") for case in cases)
     assert any("task_request" in case.get("actions", []) for case in cases)
+
+
+def test_observed_failures_preserve_attachment_sources_and_reject_invalid_origins(tmp_path):
+    cases = replay.load_cases(ROOT / "tests/fixtures/observed_conversation_failures.json")
+    assert len(cases) == 8
+    assert cases[0]["media_messages"] == {"1": "image"}
+    assert cases[0]["dialogue"][0][0] != cases[0]["dialogue"][-1][0]
+    path = tmp_path / "invalid.json"
+    cases[0]["media_messages"] = {"200": "image"}
+    path.write_text(json.dumps(cases), encoding="utf-8")
+    with pytest.raises(ValueError, match="attachment source"):
+        replay.load_cases(path)
 
 
 def test_report_escapes_model_text_and_retains_failures(tmp_path):

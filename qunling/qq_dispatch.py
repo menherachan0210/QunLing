@@ -30,6 +30,7 @@ CONTINUATION_READ_TOOLS = frozenset({
     "query_group_members", "read_qq_avatar", "read_text_attachment", "recall_memory",
     "search_web", "read_web_page", "search_web_images", "list_web_files", "list_edit_image_references",
     "collect_web_materials",
+    "read_bot_activity",
 })
 
 # Scheduling only: these names describe bounded operations, never user text or
@@ -37,6 +38,7 @@ CONTINUATION_READ_TOOLS = frozenset({
 _QUICK_TOOLS = frozenset({
     "read_recent_group_context", "query_group_members", "read_web_page",
     "comic_translation_status", "list_edit_image_references",
+    "read_bot_activity",
 })
 _NETWORK_TOOLS = frozenset({
     "search_web", "search_web_images", "read_group_context_images", "read_qq_avatar",
@@ -311,6 +313,7 @@ class Task:
     terminal: str = ""
     notices: set = field(default_factory=set)
     continuation: _ContinuationGrant | None = None
+    history_reads: dict = field(default_factory=dict)
 
 
 class Dispatch:
@@ -883,6 +886,21 @@ async def invoke_tool(ap, query, invoke, name="", *, source="", parameters=None)
     async with task.tool_lock:
         if task.done.is_set():
             raise RuntimeError("The owning QQ request was cancelled")
+        from qunling.activity import tool_start, tool_finish
+        detail = tool_start(name, parameters, query.query_uuid)
+        detail["call_id"] = uuid.uuid4().hex[:16]
+        read_key = None
+        if source == "plugin" and name == "read_recent_group_context" and isinstance(parameters, dict):
+            normalized = {"limit": 60, "min_age_seconds": 0, **parameters}
+            read_key = json.dumps(normalized, sort_keys=True, ensure_ascii=True)
+            previous = task.history_reads.get(read_key)
+            if previous and 0 <= time.monotonic() - previous[0] < 45:
+                journal.record(query, 'tool', tool=name, details={**detail, "cache": "deduplicated",
+                    "outcome": "unchanged", "elapsed_ms": 0, "downloaded_bytes": 0})
+                return json.dumps({"status": "unchanged", "previous_call_id": previous[1],
+                    "instruction": "同一轮相同筛选的群记录刚刚已经返回，没有新增消息。使用前次结果继续回应；"
+                                   "确实缺少更早背景才用已返回的 next_before_ref 翻页，不能通过重复读取得到新资料。",
+                    "io": {"cache": "deduplicated", "downloaded_bytes": 0}}, ensure_ascii=False)
         lane = _tool_lane(name, source, parameters)
         capacity = {"general": service.tools, "quick": service.quick_tools,
                     "network": service.network_tools}[lane]
@@ -916,12 +934,23 @@ async def invoke_tool(ap, query, invoke, name="", *, source="", parameters=None)
                 task.phase, task.changed = "tool", time.monotonic()
                 object.__setattr__(query, '_request_phase', 'tool')
                 object.__setattr__(query, '_request_tool_failed', False)
-                journal.record(query, 'tool', tool=name, attempt=1, uncertain=True)
+                journal.record(query, 'tool', tool=name, attempt=1, uncertain=True, details=detail)
                 timeout = 420 if name in {"generate_image", "edit_image"} else service.tool_timeout
+                tool_started = time.monotonic()
                 async with asyncio.timeout(timeout):
                     result = await invoke()
+                if read_key is not None:
+                    try:
+                        parsed = json.loads(result) if isinstance(result, str) else result
+                        if isinstance(parsed, dict) and isinstance(parsed.get("messages"), list) and parsed.get("status") != "error":
+                            if len(task.history_reads) >= 8:
+                                task.history_reads.pop(next(iter(task.history_reads)))
+                            task.history_reads[read_key] = (time.monotonic(), detail["call_id"])
+                    except (ValueError, TypeError):
+                        pass
                 if not getattr(query, '_request_tool_failed', False):
-                    journal.record(query, 'tool', tool=name, uncertain=False)
+                    journal.record(query, 'tool', tool=name, uncertain=False,
+                                   details={**detail, **tool_finish(result, tool_started)})
                 return result
             finally:
                 capacity.release()

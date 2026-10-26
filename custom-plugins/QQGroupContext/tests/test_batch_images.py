@@ -40,7 +40,10 @@ async def test_later_batch_image_and_own_image_reach_pixels_and_shared_evidence(
     refs = [ref for row in page['messages'] for ref in row['image_refs']]
     assert len(refs) == 2 and page['batch_images_unavailable'] == 0
     calls = plugin.call_platform_api.await_count
-    assert await read_context(plugin, item, {}) == page
+    cached = await read_context(plugin, item, {})
+    assert {k: v for k, v in cached.items() if k != 'io'} == {k: v for k, v in page.items() if k != 'io'}
+    assert page['io']['cache'] == 'miss' and cached['io']['cache'] == 'hit'
+    assert cached['io']['downloaded_bytes'] == 0
     assert plugin.call_platform_api.await_count == calls
     load = AsyncMock(return_value='data:image/jpeg;base64,AA==')
     monkeypatch.setattr('pkg.tools.load_image', load)

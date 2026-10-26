@@ -129,7 +129,7 @@ async def test_semantic_references_cross_preliminary_topic_groups_without_changi
     context = ConversationContext("bot", "30000", "active", "自然交流", (picture, target), (), "", None, None,
                                   participant_id="20001", focus_message_ids=("pic",), topic_message_ids=("unrelated",),
                                   reply_candidate_ids=("question",))
-    meaning = Understanding("接住另一位群友对图中文字的吐槽", ("pic",), ("image",))
+    meaning = Understanding("接住另一位群友对图中文字的吐槽", ("pic",), ("image", "memory"))
     recall = AsyncMock(return_value={})
     monkeypatch.setattr(group_memory, "recall_group_memory", recall)
     bridge._complete = AsyncMock(return_value='{"action":"research"}')

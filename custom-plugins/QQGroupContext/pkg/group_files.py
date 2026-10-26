@@ -153,6 +153,7 @@ async def _list(plugin, context, params, state):
     folder_ref = params.get("folder_ref")
     if folder_ref == "":
         raise VisionError("读取根目录时请省略 folder_ref。")
+    cache_hit = (folder_ref or "root") in state["directories"]
     directory = await _directory(plugin, context, state, folder_ref)
     needle = params.get("search_text", "").strip().casefold()
     refs = [ref for ref in directory["refs"]
@@ -163,6 +164,7 @@ async def _list(plugin, context, params, state):
     return {
         "status": "partial" if directory["truncated"] or directory["unavailable_entries"] else "ok",
         "entries": [dict(state["entries"][ref]["public"]) for ref in selected],
+        "io": {"cache": "hit" if cache_hit else "miss", "downloaded_bytes": 0, "items": len(selected)},
         "folder_ref": folder_ref,
         "search_scope": "current_folder",
         "matching_entries": len(refs),
@@ -185,7 +187,8 @@ async def _import(plugin, context, params, api, state):
     if (scope.bot_id != context.bot or scope.conversation_id != f"group:{context.group}"
             or scope.actor_id != context.sender):
         raise AssetError("scope_mismatch", "群文件与当前请求的会话不匹配。")
-    if ref not in state["imported"]:
+    cache_hit = ref in state["imported"]
+    if not cache_hit:
         if state["import_attempts"] >= MAX_IMPORT_ATTEMPTS:
             raise VisionError("本轮群文件下载已达到预算，请先处理已经导入的文件。")
         if entry["public"].get("size", 0) > MAX_ASSET_BYTES:
@@ -214,6 +217,8 @@ async def _import(plugin, context, params, api, state):
             raise VisionError("选定群文件下载失败，暂时无法读取；可以重新尝试或选择其他文件。") from None
     return {
         "status": "ok", "file_ref": ref, "asset": dict(state["imported"][ref]),
+        "io": {"cache": "hit" if cache_hit else "miss",
+               "downloaded_bytes": 0 if cache_hit else state["imported"][ref]["size"]},
         "instruction": "已把选定群文件的实际字节导入当前请求，可将 asset_ref 交给文件读取、"
                        "转换或漫画工具。尚未分析文件内容，也未向群里发送文件。",
     }

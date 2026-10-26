@@ -1170,12 +1170,36 @@ async function showRequest(requestId) {
     const item = data.requests?.[0];
     if (!data.available || !item) throw Error("该记录已过期或暂不可用，请刷新列表。");
     const events = document.createElement("ol");
+    const detailedTools = (item.events || []).some(event => event.details?.kind === "tool");
     for (const event of item.events || []) {
+      if (detailedTools && event.phase === "tool" && !event.details) continue;
       const parts = [requestTime(event.at), requestPhases[event.phase] || "未知阶段"];
       if (event.tool) parts.push(event.tool);
       if (event.attempt) parts.push("第 " + event.attempt + " 次尝试");
       if (event.reason) parts.push(requestReasons[event.reason] || "未分类异常");
       events.append(requestNode("li", parts.join(" · ")));
+      const info = event.details;
+      if (info?.kind === "tool") {
+        const labels = {list:"列出内容",import:"导入文件",read:"读取",search:"搜索",inspect:"检查",extract:"解压提取",create:"创建",send:"发送",download:"下载",status:"查询状态"};
+        const facts = [];
+        if (info.operation) facts.push("操作：" + (labels[info.operation] || info.operation));
+        if (info.cache) facts.push("缓存：" + ({hit:"已复用",miss:"未命中",deduplicated:"相同读取已省略",unknown:"未报告"}[info.cache] || "未知"));
+        if (Number.isFinite(info.downloaded_bytes)) facts.push("实际下载 " + info.downloaded_bytes + " 字节");
+        if (Number.isFinite(info.elapsed_ms)) facts.push("工具耗时 " + Math.round(info.elapsed_ms) + " 毫秒");
+        if (info.outcome) facts.push("结果：" + ({ok:"完成",error:"失败",unchanged:"没有新增信息",unconfirmed:"未确认"}[info.outcome] || "未知"));
+        if (info.call_id) facts.push("调用 " + info.call_id);
+        events.append(requestNode("li", facts.join(" · ")));
+      } else if (info?.kind === "participation") {
+        const roles = {addressed:"被叫到",continuing:"接续机器人",joining:"主动加入",observing:"旁观"};
+        const actions = {silence:"不参与",wait:"等待说完",reply:"准备接话",followup:"准备续聊",research:"补充资料",tool_followup:"续聊查资料",task_request:"执行实际请求"};
+        events.append(requestNode("li", "参与判断：" + (actions[info.action] || "未记录") + " · " + (roles[info.role] || "未记录参与位置") + " · 目标消息 " + (info.target_message_id || "未知")));
+        if (info.purpose) events.append(requestNode("li", "交流目的：" + info.purpose));
+        if (info.entry_point) events.append(requestNode("li", "切入点：" + info.entry_point));
+        if (Number.isFinite(info.elapsed_ms)) events.append(requestNode("li", "判断耗时：" + Math.round(info.elapsed_ms) + " 毫秒"));
+        if (typeof info.context_sufficient === "boolean") events.append(requestNode("li", "前情：" + (info.context_sufficient ? "判断为足够" : "判断为不足")));
+        events.append(requestNode("li", "关联消息：" + (info.context_message_ids || []).join("、") + "；资料需求：" + ((info.information_needs || []).join("、") || "当前对话已够用")));
+        events.append(requestNode("li", "这是当时的参与判断，可能有误；不代表已经发送或执行工具。"));
+      }
     }
     box.replaceChildren(requestNode("h3", "请求 " + item.request_id), events);
     if (item.timing?.phase_seconds) {
@@ -1211,7 +1235,7 @@ async function loadRequests(older = false) {
       button.type = "button";
       button.className = "secondary small";
       button.addEventListener("click", () => showRequest(item.request_id));
-      const detail = [item.origin === "continuation" ? "续问查询" : "@ /ai 请求", "发起人 " + item.sender, requestPhases[item.phase] || "未知阶段", "耗时 " + item.elapsed_seconds + " 秒"];
+      const detail = [item.origin === "participation" ? "自由对话参与判断" : item.origin === "continuation" ? "续问查询" : "@ /ai 请求", "发起人 " + item.sender, requestPhases[item.phase] || "未知阶段", "耗时 " + item.elapsed_seconds + " 秒"];
       if (item.reason) detail.push(requestReasons[item.reason] || "未分类异常");
       row.append(button, requestNode("p", detail.join(" · ")));
       $("requests-list").append(row);

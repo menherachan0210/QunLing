@@ -23,6 +23,7 @@ from typing import Awaitable, Callable, Mapping
 from zoneinfo import ZoneInfo
 
 from qunling.group_context import MAX_CHARACTERS, MAX_MESSAGES, WINDOW_SECONDS, metadata, topic_roots
+from qunling.media_context import normalize as normalize_media
 from qunling.dialogue import Understanding, validate_understanding
 
 
@@ -65,6 +66,7 @@ class Message:
     is_bot: bool = False
     has_media: bool = False
     reply_recipient_id: str | None = None
+    attachments: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -596,7 +598,8 @@ class ProactiveEngine:
                           message.sender_id, message.text[:2000], message.timestamp,
                           message.reply_to, message.explicit_request, message.sender_name[:80],
                           tuple(str(item) for item in message.mentions[:20]), message.is_bot,
-                          message.has_media or not bool(message.text.strip()))
+                          message.has_media or not bool(message.text.strip()), None,
+                          normalize_media(message.attachments))
         state.messages.append(message)
         self._prune(state, now)
         lane = self._lane(state, message.sender_id)

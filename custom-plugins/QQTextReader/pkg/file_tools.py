@@ -63,6 +63,7 @@ async def workspace(plugin, api, context, scope, store, params):
         incoming.sort(key=lambda entry: not entry["current"])
         return {
             "status": "ok", "incoming": incoming,
+            "io": {"cache": "unknown", "downloaded_bytes": 0, "items": len(incoming)},
             **store.list(scope, cursor=args.get("cursor"), context=context),
             "unresolved_quote": context["unresolved_quote"],
             "warnings": context.get("warnings", []),

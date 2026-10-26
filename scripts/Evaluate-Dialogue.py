@@ -36,6 +36,13 @@ def load_cases(path):
         for actor, text in [*case["dialogue"], *case.get("followups", [])]:
             if not isinstance(actor, str) or not isinstance(text, str) or not text:
                 raise ValueError("Invalid synthetic conversation turn")
+        media = case.get("media_messages", {})
+        if (not isinstance(media, dict) or any(
+                not isinstance(index, str) or not index.isascii() or not index.isdecimal()
+                or str(int(index)) != index or not 1 <= int(index) <= len(case["dialogue"])
+                or not isinstance(kind, str) or kind not in {"image", "file", "audio", "video", "forward"}
+                for index, kind in media.items())):
+            raise ValueError("Invalid attachment source in replay case")
     return cases
 
 
@@ -131,9 +138,14 @@ async def replay(case, provider, label):
                  "source": "synthetic-fixture", "text": case["evidence"]}] if case.get("evidence") else []
 
     def add(actor, text, *, is_bot=False):
+        key = "s" + str(len(messages) + 1)
+        media_kind = case.get("media_messages", {}).get(str(len(messages) + 1))
+        attachment = ({"kind": media_kind, "source": "message", "message_id": key,
+                       "sender_id": "10000" if is_bot else actor},) if media_kind else ()
         msg = Message(bot_id, group_id, "s" + str(len(messages) + 1), "10000" if is_bot else actor,
                       text, time.time(), sender_name="机器人" if is_bot else "成员" + actor,
-                      is_bot=is_bot, has_media=bool(case.get("media") and not messages))
+                      is_bot=is_bot, has_media=bool(attachment or (case.get("media") and not messages)),
+                      **({"attachments": attachment} if "attachments" in {field.name for field in fields(Message)} else {}))
         messages.append(msg)
         return msg
 
@@ -243,6 +255,9 @@ class Provider:
             text = response.choices[0].message.content
             if not text:
                 raise ValueError("No text response")
+            # This harness sends synthetic messages only. Preserve the actual
+            # model draft so protocol failures can be inspected, not retried away.
+            observation["response_text"] = text
             return NS(content=text, tool_calls=None)
         finally:
             observation["seconds"] = round(time.monotonic() - started, 3)

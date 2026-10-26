@@ -23,3 +23,18 @@ def decode_object(text):
     if not isinstance(value, dict):
         raise ValueError('Expected an object')
     return value
+
+
+def plain_draft(text):
+    """Recover only ordinary prose, never broken control data or tool markup."""
+    if not isinstance(text, str) or not 0 < len(text.strip()) <= 2000:
+        return None
+    text = text.strip()
+    if text.startswith(('{', '[', '```', '<', '"')) or text in {
+            'reply', 'silence', 'research', 'wait', 'followup', 'tool_followup', 'task_request'}:
+        return None
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    return None

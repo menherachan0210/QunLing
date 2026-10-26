@@ -11,6 +11,7 @@ import pytest
 from qunling import qq_dispatch
 from qunling.proactive import host
 from qunling.proactive.engine import ConversationContext, Decision, Message, validate_decision
+from qunling.dialogue import Understanding, Participation
 from test_proactive_engine import Harness
 from test_proactive_host import bridge, event, query_for, dialogue_prompt
 
@@ -120,6 +121,29 @@ async def test_draft_protocol_cannot_leak_control_json_or_expand_tool_authority(
             assert result == json.loads(output)["text"]
         else:
             assert result == ""
+    bridge.bot.adapter.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_plain_draft_is_preserved_only_after_text_only_context_was_understood(bridge):
+    target = Message("bot", "30000", "q", "20002", "刚才那句是什么意思？", time.time())
+    context = ConversationContext("bot", "30000", "active", "", (target,), (), "", None, None,
+                                  reply_candidate_ids=("q",))
+    participation = Participation("正在解释刚才的措辞", "addressed", "说明已有表述", True)
+    meaning = Understanding("解释措辞", ("q",), (), participation)
+    bridge._complete = AsyncMock(return_value="我的意思就是先看看实际效果。")
+    assert await bridge.generate(context, Decision("reply", "q", ("q",), meaning)) == "我的意思就是先看看实际效果。"
+    bridge._complete.assert_awaited_once()
+    for output in ('{"action":"task_request"}', '{"action":"reply",', '<tool_call>download</tool_call>',
+                   '```json\n{"action":"reply"}\n```', '"quoted JSON"', 'research', 'null'):
+        bridge._complete.return_value = output
+        with pytest.raises(host.ProactiveUnavailable, match="草稿格式"):
+            await bridge.generate(context, Decision("reply", "q", ("q",), meaning))
+    bridge._complete.return_value = "需要再看看之前那张图。"
+    for unknown in (replace(meaning, information_needs=("image",)),
+                    replace(meaning, participation=replace(participation, context_sufficient=False))):
+        with pytest.raises(host.ProactiveUnavailable, match="草稿格式"):
+            await bridge.generate(context, Decision("reply", "q", ("q",), unknown))
     bridge.bot.adapter.send_message.assert_not_called()
 
 

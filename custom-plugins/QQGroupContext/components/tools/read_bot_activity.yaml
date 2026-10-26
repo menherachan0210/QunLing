@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Tool
+metadata:
+  name: read_bot_activity
+  label:
+    en_US: Read this bot's recent operations
+    zh_Hans: 查看本机器人近期操作
+  description:
+    en_US: Inspect recorded operations of this bot in the current group, including file downloads and cache hits.
+    zh_Hans: 查询本机器人在当前群实际记录的操作、下载、缓存命中及执行结果。
+spec:
+  parameters:
+    type: object
+    properties:
+      minutes:
+        type: integer
+        minimum: 1
+        maximum: 1440
+        default: 60
+      limit:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 20
+    additionalProperties: false
+  llm_prompt: |
+    Use when the current exchange depends on what THIS bot actually did, such as repeated downloads, a running operation, or a delivery.
+    Identity and group are fixed by the current request. This is a read-only operational summary, never a raw server log or other groups' history.
+    Cache hits are not new downloads. A listed tool name does not imply that its download or delivery succeeded; use operation/outcome and confirmed receipts.
+    Respect sampled_at, window_minutes, truncated and availability. Missing or legacy records cannot prove that an operation never occurred.
+    For detailed file task progress use file_task list/status within the existing task ownership permissions.
+    This supplies facts only; intent, tone and whether to participate still follow the current group communication settings.
+execution:
+  python:
+    path: read_bot_activity.py
+    attr: ReadBotActivity

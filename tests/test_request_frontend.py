@@ -39,3 +39,18 @@ def test_late_diagnostic_response_cannot_reveal_records_after_lock():
   assert.equal(element('request-detail').hidden,true);
   assert.equal(element('console-content').hidden,true);
 """)
+
+
+def test_participation_and_download_facts_are_text_only_and_not_duplicate_tool_attempts():
+    run_browser(r"""
+  requestsData.requests=[{request_id:'new',group_id:'30000',sender:'a',origin:'participation',events:[
+    {at:1,phase:'ended',details:{kind:'participation',action:'research',role:'addressed',target_message_id:'m1',purpose:'<img src=x>',entry_point:'核对自己的下载记录',context_message_ids:['m0'],information_needs:['activity'],context_sufficient:true}},
+    {at:2,phase:'tool',tool:'browse_group_files',attempt:1},
+    {at:3,phase:'tool',tool:'browse_group_files',details:{kind:'tool',operation:'import',cache:'hit',downloaded_bytes:0,elapsed_ms:12,outcome:'ok',call_id:'call1'}}
+  ]}];
+  await evaluate('showRequest("new")');
+  const text=element('request-detail').children[1].children.map(node=>node.textContent).join('\n');
+  assert.ok(text.includes('<img src=x>') && text.includes('核对自己的下载记录'));
+  assert.ok(text.includes('实际下载 0 字节') && text.includes('已复用'));
+  assert.ok(!text.includes('第 1 次尝试'));
+""")

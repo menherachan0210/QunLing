@@ -15,7 +15,7 @@ async def import_attachment(plugin, store: AssetStore, scope: Scope, incoming_re
     inbox = Inbox(store)
     source = inbox.get(scope, incoming_ref, before=before, include_refs=current_refs)
     if source.get("asset_ref"):
-        return store.get(scope, source["asset_ref"])
+        return {**store.get(scope, source["asset_ref"]), "io": {"cache": "hit", "downloaded_bytes": 0}}
     url = source.get("url")
     if not url:
         kind, chat_id = scope.conversation_id.split(":", 1)
@@ -37,7 +37,7 @@ async def import_attachment(plugin, store: AssetStore, scope: Scope, incoming_re
     name = image_name(fetched.body) if source.get("media_type") == "image" else source["name"]
     item = store.put(scope, name, fetched.body, origin="upload")
     inbox.attach(scope, incoming_ref, item["asset_ref"])
-    return item
+    return {**item, "io": {"cache": "miss", "downloaded_bytes": len(fetched.body)}}
 
 
 async def send_attachment(store, scope, context, api, ref, *, caption=None):

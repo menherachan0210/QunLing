@@ -137,13 +137,18 @@ class Journal:
 
     def prune(self, db, now):
         db.execute("DELETE FROM requests WHERE status<>'active' AND updated<?", (now-KEEP_SECONDS,))
+        db.execute("DELETE FROM requests WHERE request_id IN (SELECT request_id FROM requests "
+                   "WHERE origin='participation' AND status<>'active' ORDER BY created DESC LIMIT -1 OFFSET 400)")
         db.execute("""DELETE FROM requests WHERE request_id IN (
             SELECT request_id FROM requests WHERE status<>'active' ORDER BY created DESC LIMIT -1 OFFSET ?)""", (MAX_RECORDS,))
 
     @staticmethod
-    def _events(previous, now, phase, reason='', tool='', attempt=0):
+    def _events(previous, now, phase, reason='', tool='', attempt=0, details=None):
         events = json.loads(previous)
         entry = dict(at=now, phase=phase, reason=reason, tool=tool, attempt=attempt)
+        if details:
+            from qunling.activity import details as clean_details
+            entry['details'] = clean_details(details)
         events.append(entry)
         if len(events) > MAX_EVENTS:
             events = [events[0], *events[-(MAX_EVENTS-1):]]
@@ -160,12 +165,12 @@ class Journal:
         with self.connect() as db:
             db.execute('INSERT OR IGNORE INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 (request_id, self.instance, _id(workspace), _id(bot), _id(group), _id(sender), message_id,
-                 'continuation' if origin == 'continuation' else 'mention', self.boot_id, now, now,
+                 origin if origin in {'continuation', 'participation'} else 'mention', self.boot_id, now, now,
                  'received', 'active', '', '', 0, 0, events))
             self.prune(db, now)
         return request_id
 
-    def record(self, request_id, phase, *, status='active', reason='', tool='', attempt=0, uncertain=None, at=None):
+    def record(self, request_id, phase, *, status='active', reason='', tool='', attempt=0, uncertain=None, at=None, details=None):
         if phase not in PHASES or status not in STATUSES or reason not in REASONS:
             raise ValueError('Invalid diagnostic code')
         tool, now = _tool(tool), self.clock() if at is None else at
@@ -174,7 +179,7 @@ class Journal:
                              (request_id, self.instance, self.boot_id)).fetchone()
             if row is None or row['status'] != 'active':
                 return
-            events = self._events(row['events'], now, phase, reason, tool, attempt)
+            events = self._events(row['events'], now, phase, reason, tool, attempt, details)
             db.execute('''UPDATE requests SET phase=?,status=?,reason=?,tool=?,updated=?,attempts=?,
                 uncertain=?,events=? WHERE request_id=?''',
                 (phase, status, reason, tool, now, max(row['attempts'], attempt),

@@ -276,6 +276,7 @@ async def read_context(plugin, context, params):
 
 
 async def _read_snapshot(plugin, context, limit, before_ref=None, search_text=None, min_age_seconds=0):
+    cache_hit = context.history is not None
     if context.history is None:
         window_seconds, max_messages = history_limits(plugin)
         try:
@@ -311,7 +312,10 @@ async def _read_snapshot(plugin, context, limit, before_ref=None, search_text=No
         from pkg.batch_images import merge_batch_images
         history = await merge_batch_images(plugin, context, history)
         plugin.contexts.save_history(context, history)
-    return present_history(context, limit, before_ref, search_text, min_age_seconds)
+    result = present_history(context, limit, before_ref, search_text, min_age_seconds)
+    result["io"] = {"cache": "hit" if cache_hit else "miss", "downloaded_bytes": 0,
+                    "items": result.get("shown_messages", 0)}
+    return result
 
 
 async def read_images(plugin, context, params):
@@ -472,7 +476,20 @@ async def execute(tool, action, params, query_id, query_uuid):
         context = tool.plugin.contexts.get(tool.plugin, variables, query_id, query_uuid)
         if str(await api.get_bot_uuid()) != context.bot:
             raise VisionError("机器人与当前群上下文不匹配。")
-        if action in {"members", "avatar", "group_files", "forwarded"}:
+        if action == "activity":
+            from pkg.group_api import validate_group_access
+            from qunling.activity import read_activity
+            if set(params) - {"minutes", "limit"}:
+                raise VisionError("只接受时间范围和条数，不能查询其他群或机器人的记录。")
+            minutes = checked_integer(params.get("minutes", 60), 1, 1440)
+            limit = checked_integer(params.get("limit", 20), 1, 50)
+            binding = tool.plugin.get_installation_binding()
+            if binding is None:
+                raise VisionError("运行环境未提供可验证的操作记录范围。")
+            await validate_group_access(tool.plugin, context)
+            result = await asyncio.to_thread(read_activity, binding.instance_uuid,
+                binding.workspace_uuid, context.bot, context.group, minutes=minutes, limit=limit)
+        elif action in {"members", "avatar", "group_files", "forwarded"}:
             from pkg.group_members import group_members, read_avatar
             from pkg.group_files import group_files
             from pkg.forward_tools import forward_tools
