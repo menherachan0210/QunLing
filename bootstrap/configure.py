@@ -36,6 +36,7 @@ TOOL_CHOICES = {
     "image_quality": ("auto", {"auto", "low", "medium", "high", "xhigh", "max"}),
 }
 TOOL_LIMITS = {"image_timeout_seconds": (300, 30, 300), "search_timeout_seconds": (65, 30, 90)}
+TOOL_FIELDS = set(TOOL_CHOICES) | set(TOOL_LIMITS) | {"search_base_url", "search_api_key", "search_provider"}
 
 
 def legacy_search_settings(values):
@@ -69,6 +70,42 @@ def tool_settings(values, previous=None):
     return result
 
 
+def adopt_tool_settings(api, values):
+    """Adopt existing plugin preferences before applying newly exposed defaults.
+
+    Old deployments stored these choices only in plugin configuration. Read
+    only selected plugins with missing settings; a basic-chat installation must
+    not require image/search workers. The caller retains the saved legacy form
+    until an explicit settings submission normalizes it.
+    """
+    config = legacy_search_settings(values)
+    features = config.get("features", list(FEATURE_PLUGINS) if config.get("image_model") else [])
+    image_fields = {"image_size": "image_size", "image_quality": "quality",
+                    "image_timeout_seconds": "request_timeout_seconds"}
+    if "image" in features and not image_fields.keys() <= config.keys():
+        image = api.call("GET", "/api/v1/plugins/langbot-team/AIImagePlugin/config")["config"]
+        for field, source in image_fields.items():
+            if field not in config and source in image:
+                config[field] = image[source]
+    search_fields = {"search_base_url", "search_api_key", "search_timeout_seconds"}
+    if "search" in features and not search_fields <= config.keys():
+        search = api.call("GET", "/api/v1/plugins/local/QQWebSearch/config")["config"]
+        if "search_timeout_seconds" not in config and "request_timeout_seconds" in search:
+            config["search_timeout_seconds"] = search["request_timeout_seconds"]
+        if "search_base_url" not in config:
+            base = search.get("api_base_url", "").rstrip("/")
+            key = search.get("api_key", "")
+            independent = bool(base and (base != config.get("base_url", "").rstrip("/")
+                               or key not in {"", "***", config.get("api_key", "")}))
+            if independent and key == "***":
+                raise SetupError("已有独立搜索服务的密钥无法读取，请填写独立地址和密钥后保存；原配置未覆盖。")
+            config.update(search_base_url=base if independent else "",
+                          search_api_key=key if independent else "")
+            if search.get("model_name"):
+                config["search_model"] = search["model_name"]
+    return config
+
+
 def enabled_plugins(config):
     result = {"langbot-team/LocalAgent"}
     for feature in config.get("features", FEATURE_PLUGINS):
@@ -82,8 +119,8 @@ def role_settings(config, role):
     return {**config, "base_url": endpoint or config["base_url"],
             "api_key": config.get(role + "_api_key") or config["api_key"]}
 PROMPT = """[QQBOT SETUP v1]
-你是中文QQ助手，自然清楚地回答。区分本轮提问者和其他成员，不把他人经历归给当前人。
-需要群聊背景时用群聊前文工具，当前问题优先；新话题不硬接旧梗。
+以下是QQ工具执行协议；对话风格由当前群交流设置提供。区分本轮提问者和其他成员，不把他人经历归给当前人。
+需要群聊背景时可用群聊前文工具读取。
 用户要求记住长期有效信息时使用记忆工具，允许回忆、更正和删除，不保存密钥、密码、验证码或猜测。
 用户明确要求生图、改图、联网、找图、下载并发送文件时使用对应工具，不要求固定口令。
 处理附件先用file_workspace列出、导入和检查，再按实际格式分页阅读、检索或提取；未知格式仍可保存和发送。
@@ -366,7 +403,7 @@ def ensure_plugins(api, package_dir, progress=lambda text: None, sleep=time.slee
 def configure(api, config, record, persist, onebot_token, langbot_url, archive_path):
     """Only manages resources recorded here; preserves memories and other resources."""
     # Persisted settings from earlier versions have no group-context controls.
-    config = settings_from_input(config)
+    config = settings_from_input(adopt_tool_settings(api, config))
     selected = enabled_plugins(config)
     record = deepcopy(record)
     fingerprints = record.setdefault("applied_fingerprints", {})

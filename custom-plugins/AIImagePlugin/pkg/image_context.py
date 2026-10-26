@@ -85,6 +85,11 @@ def _scope(plugin: Any, query: Any) -> tuple[str, str]:
         value is None or str(value) == "" for value in identities
     ):
         raise ValueError("Incomplete platform image scope")
+    from qunling.group_reset import for_context
+    reset = (for_context(binding or query, str(identities[0]), str(identities[2]))
+             if launcher_type == "group" else None)
+    if reset and reset["pending"]:
+        raise ValueError("Group memory reset is pending")
     return owner, _digest(
         [
             owner,
@@ -92,6 +97,7 @@ def _scope(plugin: Any, query: Any) -> tuple[str, str]:
             getattr(query, "workspace_uuid", None),
             getattr(query, "placement_generation", None),
             *[str(value) for value in identities],
+            *([reset["generation"]] if reset else []),
         ]
     )
 

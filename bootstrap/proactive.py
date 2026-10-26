@@ -45,3 +45,19 @@ def save(manager, values):
         if not status.get("qq_logged_in") or not status.get("qq_connected"):
             raise SetupError("QQ 尚未连接，请登录后再保存自由对话设置。")
         return manager.api.call("POST", _path(manager), values)
+
+
+def clear_memory(manager, values):
+    from qunling.group_reset_host import validate, MemoryResetError
+    try:
+        validate(values)
+    except MemoryResetError as exc:
+        raise SetupError(str(exc)) from None
+    with manager.lock:
+        if manager.update_inflight or manager.update_status()["busy"]:
+            raise SetupError("版本更新正在进行，完成后再清空记忆。")
+        status = manager.snapshot()
+        if (manager.pending or not status.get("configured") or not status.get("plugins_ready")
+                or status.get("stage") != "ready" or not status.get("qq_connected") or not status.get("qq_logged_in")):
+            raise SetupError("机器人尚未准备好，请连接 QQ 后重试。")
+        return manager.api.call("POST", _path(manager) + "/memory/reset", values)

@@ -278,7 +278,9 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("sdk-transport-recovery.patch", "sdk", False) in patcher.PATCHES
     assert ("host-request-diagnostics.patch", "host", False) in patcher.PATCHES
     assert ("sdk-utf8-chunk-performance.patch", "sdk", False) in patcher.PATCHES
-    assert len(names) == 33
+    assert ("host-group-memory-reset.patch", "host", False) in patcher.PATCHES
+    assert ("host-admin-console.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 35
     assert "host-model-usage.patch" in names
     assert {"host-web-knowledge.patch", "host-memory-recall.patch"} <= names
     assert "host-animation-vision.patch" in names
@@ -366,7 +368,7 @@ def test_cli_uses_real_virtualenv_instead_of_symlink_target(
     probe = "import sysconfig; print(sysconfig.get_path('purelib'))"
     purelib = Path(
         subprocess.check_output(
-            [str(python), "-I", "-c", probe], text=True, encoding="utf-8"
+            [str(python), "-I", "-X", "utf8", "-c", probe], text=True, encoding="utf-8"
         ).strip()
     ).resolve()
     assert purelib.is_relative_to(environment.resolve())

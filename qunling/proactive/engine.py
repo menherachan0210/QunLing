@@ -336,6 +336,19 @@ class ProactiveEngine:
             raise ValueError("invalid budget time")
         return sorted(at for at in values if -30 <= now - at < 86400)
 
+    def reset_group_context(self, group_id: str) -> None:
+        state = self._groups.get(group_id)
+        if state and any(lane.task is not None and not lane.task.done() for lane in state.lanes.values()):
+            raise RuntimeError("Group is still processing a response")
+        # Rate limits and delivery IDs remain; messages, topics, drafts and
+        # reply text disappear. Clearing memory must not bypass sending limits.
+        if not self._persist():
+            raise RuntimeError("Group participation state could not be saved")
+        for key in list(self._pending):
+            if key[0] == group_id:
+                self._pending.pop(key, None)
+        self._groups.pop(group_id, None)
+
     def _restored_state(self, group_id: str) -> _Group:
         row = self._history.get(group_id, {})
         state = _Group(judgments=deque(row.get("judgments", [])),

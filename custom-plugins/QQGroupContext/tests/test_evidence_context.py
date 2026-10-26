@@ -211,9 +211,9 @@ def test_discovery_policy_is_evidence_based_and_has_explicit_negative_cases():
         (Path(__file__).resolve().parents[1] / "components/tools/read_group_context_images.yaml").read_text(encoding="utf-8")
     )
     prompt = document["spec"]["llm_prompt"]
-    assert "回答需要哪些证据" in GUIDANCE
-    assert "文字证据已经足够" in GUIDANCE
-    assert "不把所有表态都解释成反话或玩笑" in GUIDANCE
+    assert "需要实际画面依据时" in GUIDANCE
+    assert "工具查询只补充资料" in GUIDANCE
+    assert "不规定这次应当闲聊、论证还是解决任务" in GUIDANCE
     assert "Skip vision when text already supplies" in prompt
     assert "message_refs" in prompt and "original words and speaker" in prompt
     assert "不预设普通陈述一定是反话或玩笑" in VISION_SYSTEM

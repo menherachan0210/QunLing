@@ -34,10 +34,18 @@ def member_key(query) -> str | None:
     )
     if not canonical and not legacy:
         return None
-    return json.dumps([
+    values = [
         "qq-member", _identity(query.launcher_id, "group"),
         _identity(query.sender_id, "sender"),
-    ], ensure_ascii=True, separators=(",", ":"))
+    ]
+    from qunling.group_reset import for_context
+    state = for_context(getattr(runtime, "execution_context", None),
+                        str(getattr(query, "bot_uuid", "")), str(query.launcher_id))
+    if state:
+        if state["pending"]:
+            raise RuntimeError("Group memory reset is pending")
+        values.append(state["generation"])
+    return json.dumps(values, ensure_ascii=True, separators=(",", ":"))
 
 
 def session_key_id(query):

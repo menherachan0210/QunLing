@@ -240,7 +240,7 @@ async def test_delivery_result_distinguishes_requested_traits_from_observed_outp
     assert "图片已生成并发送" in result
     assert "没有对成图做像素识别" in result
     assert "生成描述是本次要求" in result
-    assert "可以简短说明" in result
+    assert "交流表达采用当前群设置" in result
     assert "若此前确实识别过原图" in result
     assert "不要因本轮未识别成图而否认已经发图或此前看过原图" in result
     assert "紫色" not in result and "白色" not in result and "水彩" not in result

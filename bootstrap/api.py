@@ -51,7 +51,7 @@ class LangBotAPI:
             if response.status_code == 401 and _refresh and "/user/" not in path:
                 self.login()
                 return self.call(method, path, data, _refresh=False)
-            if "/proactive" in path and not response.ok:
+            if ("/proactive" in path or "/console/" in path) and not response.ok:
                 # Only fixed public errors cross this management boundary;
                 # never echo provider responses or private adapter details.
                 try:
@@ -59,12 +59,26 @@ class LangBotAPI:
                 except (ValueError, AttributeError):
                     reason = None
                 messages = {
+                    "memory_conflict": (409, "这条记忆已变化，请关闭编辑并刷新后重试。"),
+                    "memory_missing": (409, "这条记忆已不存在，请刷新列表。"),
+                    "memory_shared": (400, "当前记忆跨群共享，无法作为本群记忆管理。"),
+                    "memory_invalid": (400, "记忆内容格式或长度不正确，请检查后重试。"),
+                    "memory_too_large": (400, "记忆数量超过单次管理上限，请前往高级记忆控制台。"),
+                    "memory_busy": (409, "本群记忆正在操作或清空尚未完成，请稍后核对。"),
+                    "memory_unavailable": (503, "记忆服务暂不可用，请稍后刷新核对。"),
+                    "invalid_group": (400, "只能管理当前 QQ 已加入的群。"),
+                    "invalid_memory_reset": (400, "请确认当前已加入的群号后再清空记忆。"),
+                    "memory_reset_busy": (409, "这个群正在处理请求或清空记忆，请稍候再试。"),
+                    "memory_reset_changed": (409, "原清空操作已结束或发生变化，未再次清空记忆。"),
+                    "memory_reset_shared": (400, "当前使用跨群共享记忆，无法安全地只清空一个群。"),
+                    "memory_reset_failed": (503, "记忆未完全清空，该群已暂停接话。请再次点击清空重试。"),
                     "revision_conflict": (409, "设置已在其他页面修改，请重新载入后再保存。"),
                     "group_not_joined": (400, "只能为当前 QQ 已加入的群开启自由对话。"),
                     "groups_unavailable": (503, "群列表暂不可用，请确认 QQ 已连接后重试。"),
                     "invalid_config": (400, "自由对话配置无效，请检查群模式、人设和安静时段。"),
                 }
-                status, message = messages.get(reason, (503, "自由对话管理暂不可用，请稍后重试。"))
+                fallback = "后台管理暂不可用，请稍后刷新核对。" if "/console/" in path else "自由对话管理暂不可用，请稍后重试。"
+                status, message = messages.get(reason, (503, fallback))
                 raise ProactiveAPIError(message, status)
             response.raise_for_status()
             body = response.json()

@@ -15,8 +15,9 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 from bootstrap.api import LangBotAPI, NapCatAPI, SetupError
-from bootstrap import diagnostics, proactive, knowledge
+from bootstrap import console, diagnostics, proactive, knowledge
 from bootstrap.configure import (
+    adopt_tool_settings,
     configure,
     ensure_plugins,
     link_napcat,
@@ -117,16 +118,32 @@ class SetupManager:
                 )
 
     def submit(self, values):
-        config = settings_from_input(values, self.state.read("ai.json", {}))
+        if not isinstance(values, dict):
+            raise SetupError("请填写 AI 配置。")
+        values = dict(values)
+        expected = values.pop("settings_revision", None)
         with self.lock:
             if self.update_inflight or self.update_status()["busy"]:
                 raise SetupError("版本更新正在进行，完成后再保存 AI 配置。")
             if self.status["stage"] in {"starting", "configuring"} or self.pending:
                 raise SetupError("初始化或配置仍在进行，请稍候。")
+            previous = self.state.read("ai.json", {})
+            if expected is not None and expected != self.settings_revision(previous):
+                error = SetupError("AI 配置已在其他页面修改，请重新载入后再保存。当前草稿已保留。")
+                error.status = 409
+                raise error
+            config = settings_from_input(values, adopt_tool_settings(self.api, previous) if previous else {})
             self.pending = config
             self.status.update(
                 stage="configuring", message="正在统一配置模型、工具和记忆。"
             )
+
+    def settings_revision(self, config):
+        import hashlib
+        import hmac
+        # A keyed revision detects secret rotations without publishing a key hash.
+        return hmac.new(self.secrets["setup_token"].encode(),
+                        json.dumps(config, sort_keys=True).encode(), hashlib.sha256).hexdigest()
 
     def proactive_settings(self):
         return proactive.settings(self)
@@ -143,11 +160,20 @@ class SetupManager:
     def request_diagnostics(self, filters):
         return diagnostics.requests(self, filters)
 
+    def console_tasks(self, filters):
+        return console.tasks(self, filters)
+
+    def console_memory(self, values):
+        return console.memory(self, values)
+
     def proactive_groups(self):
         return proactive.groups(self)
 
     def save_proactive(self, values):
         return proactive.save(self, values)
+
+    def clear_group_memory(self, values):
+        return proactive.clear_memory(self, values)
 
     def update_status(self):
         with self.lock:
@@ -226,7 +252,7 @@ class SetupManager:
 
     def _apply(self, config):
         saved_config = config
-        config = settings_from_input(config)
+        config = settings_from_input(adopt_tool_settings(self.api, config))
         record = self.state.read(default={})
         selected = enabled_plugins(config)
         ensure_plugins(self.api, self.packages, lambda text: self.update(message=text), identities=selected)
@@ -249,6 +275,7 @@ class SetupManager:
             capabilities={name: "ready" if name in config.get("features", FEATURE_PLUGINS) else "disabled"
                           for name in FEATURE_PLUGINS},
             settings=public_settings(config),
+            settings_revision=self.settings_revision(saved_config),
             stage="waiting_qq",
             message="聊天与所选功能已配置，请用 QQ 扫码登录。",
         )
@@ -504,7 +531,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(getattr(exc, "status", 503), {"error": str(exc)})
             except Exception:
                 return self._send(503, {"error": "知识库设置暂时无法读取。"})
-        if path == "/api/requests":
+        if path in {"/api/requests", "/api/tasks"}:
             try:
                 query = urlsplit(self.path).query
                 if len(query) > 1024:
@@ -512,12 +539,16 @@ class Handler(BaseHTTPRequestHandler):
                 values = parse_qs(query, keep_blank_values=True, max_num_fields=5)
                 if any(len(value) != 1 for value in values.values()):
                     raise ValueError('Duplicate filter')
-                from qunling.request_journal import parse_filters
+                if path == "/api/tasks":
+                    from qunling.console_tasks import parse_filters
+                else:
+                    from qunling.request_journal import parse_filters
                 filters = parse_filters({key: value[0] for key, value in values.items()})
             except ValueError:
                 return self._send(400, {"error": "诊断筛选条件无效。"})
             try:
-                return self._send(200, self.server.manager.request_diagnostics(filters))
+                method = self.server.manager.console_tasks if path == "/api/tasks" else self.server.manager.request_diagnostics
+                return self._send(200, method(filters))
             except Exception:
                 return self._send(503, {"error": "请求记录暂时无法读取，请稍后刷新。"})
         if path in {"/api/proactive", "/api/proactive/groups"}:
@@ -547,7 +578,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._reject_post(415, {"error": "需要 JSON 请求。"})
         try:
             size = int(self.headers.get("Content-Length", ""))
-            maximum = 256 * 1024 if self.path == "/api/proactive" else 16 * 1024
+            maximum = 256 * 1024 if self.path in {"/api/proactive", "/api/memory"} else 16 * 1024
             if not 0 < size <= maximum:
                 return self._reject_post(413, {"error": "请求过大。"})
             self.connection.settimeout(10)
@@ -560,6 +591,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, knowledge.save(self.server.manager, body))
             elif self.path == "/api/capabilities":
                 return self._send(202, self.server.manager.test_capabilities(body))
+            elif self.path == "/api/proactive/memory/reset":
+                return self._send(200, self.server.manager.clear_group_memory(body))
+            elif self.path == "/api/memory":
+                return self._send(200, self.server.manager.console_memory(body))
             elif self.path == "/api/qr/refresh":
                 self.server.manager.refresh_qr()
             elif self.path == "/api/update/check":

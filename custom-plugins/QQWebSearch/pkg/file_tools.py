@@ -160,5 +160,5 @@ async def send_file(context, api, params, *, plugin=None):
         "status": "sent",
         "name": item["name"],
         "size": item["size"],
-        "instruction": "附件与来源已发送到当前聊天，简短回应即可，不要再次发送。",
+        "instruction": "附件与来源已发送到当前聊天，不要再次发送；交流表达采用当前群设置。",
     }

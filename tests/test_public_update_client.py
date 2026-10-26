@@ -427,6 +427,7 @@ function element(id) {
   return nodes.get(id);
 }
 element("settings").elements.api_key = {value:"", placeholder:"", type:"password"};
+element("settings").elements.image_model = element("image-model");
 element("admin-info").hidden = true;
 const stored = new Map([["qqbot-setup", "fixture"]]);
 const old = "a".repeat(40), target = "b".repeat(40);
@@ -603,6 +604,24 @@ def test_browser_configuration_completion_waits_for_a_fresh_nonoverlapping_poll(
   setup = {...setup, stage:"ready"};
   await vm.runInContext("poll()", context);
   assert.equal(element("save").disabled, false);
+""")
+
+
+def test_browser_configure_disconnect_keeps_pending_until_fresh_status():
+    _run_browser_regression(r"""
+  holdConfigure = true;
+  const submit = element("settings").submit({preventDefault() {}, currentTarget:element("settings")});
+  await settle();
+  offline = true;
+  releaseConfigure();
+  await submit;
+  assert.equal(element("save").disabled, true);
+  assert.equal(vm.runInContext("settingsPending", context), true);
+  offline = false;
+  setup = {...setup, stage:"ready"};
+  await vm.runInContext("poll()", context);
+  assert.equal(element("save").disabled, false);
+  assert.equal(vm.runInContext("settingsPending", context), false);
 """)
 
 

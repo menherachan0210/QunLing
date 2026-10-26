@@ -550,6 +550,14 @@ async def intercept_add(pool, arguments):
     ap = _managed_app(pool, arguments)
     if ap is None:
         return False, None
+    from qunling.group_reset import allows, event_timestamp
+    runtime = arguments["adapter"]._runtime
+    if (getattr(arguments.get("launcher_type"), "value", None) == "group"
+            and not allows(getattr(runtime, "execution_context", None), arguments["bot_uuid"],
+                           str(arguments["launcher_id"]), event_timestamp(arguments["message_event"]))):
+        from qunling.proactive.host import completed
+        completed(arguments["adapter"], arguments["message_event"])
+        return True, None
     if continuation is not None:
         if (not isinstance(continuation, _ContinuationGrant) or continuation.ap is not ap
                 or continuation.consumed or time.monotonic() - continuation.created > 15

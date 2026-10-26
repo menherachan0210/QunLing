@@ -36,8 +36,8 @@
     <a class="nav-link is-active" href="#overview"><svg class="icon"><use href="#i-grid"/></svg><span>工作台</span></a>
     <a class="nav-link" href="#models"><svg class="icon"><use href="#i-spark"/></svg><span>AI 服务</span></a>
     <a class="nav-link" href="#connection"><svg class="icon"><use href="#i-chat"/></svg><span>QQ 连接</span></a>
-    <a class="nav-link" href="#proactive"><svg class="icon"><use href="#i-spark"/></svg><span>自由对话</span></a>
-    <a class="nav-link" href="#requests"><svg class="icon"><use href="#i-grid"/></svg><span>请求诊断</span></a>
+    <a class="nav-link" href="#groups"><svg class="icon"><use href="#i-spark"/></svg><span>群聊管理</span></a>
+    <a class="nav-link" href="#requests"><svg class="icon"><use href="#i-grid"/></svg><span>任务中心</span></a>
     <a class="nav-link" href="#knowledge"><svg class="icon"><use href="#i-grid"/></svg><span>资料知识库</span></a>
     <a class="nav-link" href="#maintenance"><svg class="icon"><use href="#i-refresh"/></svg><span>版本维护</span></a>
     <a class="nav-link" href="#advanced"><svg class="icon"><use href="#i-sliders"/></svg><span>高级管理</span></a>
@@ -59,23 +59,33 @@
     <p class="note unlock-help">找不到链接？在项目目录运行 <code>bash bot.sh url</code>；Windows 双击 <code>Open-Bot.cmd</code>。</p>
   </section>
   <div id="console-content" hidden>
-    <header class="page-header" id="overview">
-      <div><p class="eyebrow">QUNLING CONSOLE</p><h1>工作台<span class="heading-dot">.</span></h1><p class="page-description">连接你的 AI，让群聊多一点灵气。</p></div>
+    <header class="page-header">
+      <div><p class="eyebrow">QUNLING CONSOLE</p><h1 id="page-title" tabindex="-1">工作台</h1><p class="page-description" id="page-description">运行状态与日常管理，一眼找到。</p></div>
       <div class="header-actions"><div class="sync-info"><span class="live-pill" data-tone="neutral"><span class="status-dot"></span><span id="global-state">正在连接</span></span><span id="last-sync">尚未同步</span></div><button class="icon-button refresh-state" id="refresh-state" type="button" title="刷新服务状态" aria-label="刷新服务状态"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
     </header>
+    <section id="overview" data-page="overview" aria-label="工作台">
     <section class="summary-grid" aria-label="服务概览">
       <a class="summary-card" href="#connection" data-tone="neutral"><div class="summary-top"><span>QQ 连接</span><svg class="icon"><use href="#i-chat"/></svg></div><strong id="summary-qq">正在读取</strong><p id="summary-qq-detail">等待登录服务状态</p><svg class="summary-arrow icon"><use href="#i-arrow"/></svg></a>
       <a class="summary-card" href="#models" data-tone="neutral"><div class="summary-top"><span>AI 服务</span><svg class="icon"><use href="#i-spark"/></svg></div><strong id="summary-ai">正在读取</strong><p id="summary-ai-detail">等待模型配置状态</p><svg class="summary-arrow icon"><use href="#i-arrow"/></svg></a>
       <a class="summary-card" href="#models" data-tone="neutral"><div class="summary-top"><span>功能组件</span><svg class="icon"><use href="#i-box"/></svg></div><strong id="summary-plugins">正在读取</strong><p id="summary-plugins-detail">等待插件加载状态</p><svg class="summary-arrow icon"><use href="#i-arrow"/></svg></a>
       <a class="summary-card" href="#maintenance" data-tone="neutral"><div class="summary-top"><span>版本维护</span><svg class="icon"><use href="#i-refresh"/></svg></div><strong id="summary-update">正在读取</strong><p id="summary-update-detail">等待部署版本状态</p><svg class="summary-arrow icon"><use href="#i-arrow"/></svg></a>
     </section>
+    <div class="overview-links">
+      <a class="card overview-link" href="#groups"><span class="eyebrow">群聊管理</span><h2>让每个群有自己的交流方式</h2><p>性格与称呼、自由对话和记忆管理，都从这里开始。</p><span class="link-action">管理群聊 →</span></a>
+      <a class="card overview-link" href="#models"><span class="eyebrow">AI 与工具</span><h2>调整模型和工具参数</h2><p>聊天与视觉模型、图片尺寸与画质、独立搜索服务。</p><span class="link-action">查看 AI 服务 →</span></a>
+      <a class="card overview-link" href="#requests"><span class="eyebrow">运行排查</span><h2>看看任务走到哪一步</h2><p>检查消息、后台文件任务与自由对话的进度和结果。</p><span class="link-action">打开任务中心 →</span></a>
+    </div>
+    <div class="overview-note"><svg class="icon"><use href="#i-shield"/></svg><p>人格只在「群聊管理」中的<strong>性格与交流习惯</strong>和<strong>默认语气</strong>设置。群内性格优先；未单独填写的群使用默认语气。</p></div>
+    </section>
     <div class="dashboard-grid">
-      <section class="card model-card" id="models" aria-labelledby="model-heading">
-        <div class="card-heading"><div class="heading-icon"><svg class="icon"><use href="#i-spark"/></svg></div><div><h2 id="model-heading">AI 服务</h2><p>先配置聊天，再按需开启各项功能。</p></div><span class="section-label">模型配置</span></div>
+      <section class="card model-card" id="models" data-page="models" hidden aria-labelledby="model-heading">
+        <div class="card-heading"><div class="heading-icon"><svg class="icon"><use href="#i-spark"/></svg></div><div><h2 id="model-heading">AI 服务</h2><p>常用模型与工具参数统一在这里保存。</p></div><span class="section-label">模型配置</span></div>
         <form id="settings" autocomplete="off">
+          <div class="settings-section"><h3>通用 AI 服务</h3><p class="note">默认使用此聊天接口，各功能可在下方配置独立服务。</p>
           <div class="field"><label for="base-url">API 地址<span>兼容 OpenAI 的服务地址</span></label><input id="base-url" name="base_url" type="url" placeholder="https://api.example.com/v1" spellcheck="false" required></div>
           <div class="field"><label for="api-key">API Key<span>仅保存在自己的部署中</span></label><div class="input-with-action"><input id="api-key" name="api_key" type="password" placeholder="填写服务提供方的 API Key" autocomplete="off" spellcheck="false"><button class="input-action" id="show-key" type="button" aria-label="显示 API Key" aria-pressed="false" title="显示 API Key"><svg class="icon"><use href="#i-eye"/></svg></button></div></div>
           <div class="form-row"><div class="field"><label for="chat-model">聊天模型</label><input id="chat-model" name="chat_model" placeholder="填写准确模型名" spellcheck="false" required></div><div class="field"><label for="image-model">图片生成 / 编辑模型</label><input id="image-model" name="image_model" placeholder="启用图片生成时填写" spellcheck="false"></div></div>
+          </div>
           <details class="config-details"><summary><svg class="icon"><use href="#i-sliders"/></svg><span>视觉、联网与调度模型<small>可选</small></span><svg class="chevron icon"><use href="#i-chevron"/></svg></summary><div class="details-body"><div class="form-row"><div class="field"><label for="vision-model">视觉模型</label><input id="vision-model" name="vision_model" placeholder="留空使用聊天模型" spellcheck="false"></div><div class="field"><label for="search-model">联网模型</label><input id="search-model" name="search_model" placeholder="留空使用聊天模型" spellcheck="false"></div></div><div class="field"><label for="decision-model">自由对话参与判断模型</label><input id="decision-model" name="decision_model" placeholder="留空使用聊天模型" spellcheck="false"></div><div class="field"><label for="reconcile-model">自由对话内容复核模型</label><input id="reconcile-model" name="reconcile_model" placeholder="留空使用聊天模型" spellcheck="false"></div><p class="note">参与判断与内容复核可以各选一个模型；实际回复使用聊天模型。模型需能遵循结构化输出和工具意图判断；配置后观察自由对话中的耗时与失败统计。</p></div></details>
           <details class="config-details" open><summary><svg class="icon"><use href="#i-clock"/></svg><span>近期群聊范围</span><svg class="chevron icon"><use href="#i-chevron"/></svg></summary><div class="details-body"><div class="form-row"><div class="field"><label for="context-hours">回看时长</label><div class="input-with-unit"><input id="context-hours" name="group_context_hours" type="number" min="1" max="168" step="1" value="24" required><span>小时</span></div></div><div class="field"><label for="context-messages">消息上限</label><div class="input-with-unit"><input id="context-messages" name="group_context_max_messages" type="number" min="100" max="1000" step="1" value="1000" required><span>条</span></div></div></div><p class="note">文字与历史图片共用此范围，仅用于近期群聊理解，不会建立永久聊天档案。</p></div></details>
           <fieldset class="config-details"><legend>可选功能</legend><div class="details-body"><label><input type="checkbox" name="features" value="memory"> 长期记忆</label> <label><input type="checkbox" name="features" value="files"> 文件工作区</label> <label><input type="checkbox" name="features" value="vision"> 视觉与群资料</label> <label><input type="checkbox" name="features" value="image"> 图片生成和编辑</label> <label><input type="checkbox" name="features" value="search"> 联网搜索</label> <label><input type="checkbox" name="features" value="comic"> 漫画翻译</label> <p class="note">全部不选即可使用基础聊天。图片、联网和漫画自动启用共享文件工作区；漫画同时需要视觉。取消选择会从本流水线移除对应功能，历史数据保留。</p></div></fieldset>
@@ -83,7 +93,7 @@
           <details class="config-details"><summary>图片和搜索参数</summary><div class="details-body"><div class="form-row"><div class="field"><label for="image-size">默认图片尺寸</label><select id="image-size" name="image_size"><option>1024x1024</option><option>1280x1280</option><option>768x1280</option><option>1280x768</option><option>720x1280</option><option>1280x720</option><option>1024x768</option><option>768x1024</option></select></div><div class="field"><label for="image-quality">默认图片画质</label><select id="image-quality" name="image_quality"><option>auto</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div></div><div class="form-row"><div class="field"><label for="image-timeout">图片请求超时（秒）</label><input id="image-timeout" name="image_timeout_seconds" type="number" min="30" max="300" value="300" required></div><div class="field"><label for="search-timeout">搜索请求超时（秒）</label><input id="search-timeout" name="search_timeout_seconds" type="number" min="30" max="90" value="65" required></div></div><p class="note">尺寸与画质需由所选图片服务支持；升级会保留已保存的参数。</p></div></details>
           <p id="feature-status" role="status"></p>
           <div class="model-hint"><svg class="icon"><use href="#i-shield"/></svg><p>聊天模型需支持工具调用；开启视觉时再配置识图能力。生图需 Images 接口，联网需 Responses 的 web_search。保存配置不会产生模型调用费用。</p></div>
-          <div class="form-actions"><button id="save" type="submit" disabled><svg class="icon"><use href="#i-check"/></svg><span id="save-label">保存所选功能</span></button><span class="save-note">密钥留空保留原配置</span></div>
+          <div class="form-actions save-bar"><button id="save" type="submit" disabled><svg class="icon"><use href="#i-check"/></svg><span id="save-label">保存 AI 与工具设置</span></button><button id="settings-reload" type="button" class="secondary" hidden>重新载入</button><span id="settings-dirty" class="save-note">密钥留空保留原配置</span></div>
           <p id="form-message" class="form-feedback" role="status" aria-live="polite"></p>
         </form>
         <details id="capabilities-open" class="config-details"><summary>测试已保存的 AI 能力</summary>
@@ -101,7 +111,7 @@
         </details>
       </section>
       <div class="right-column">
-        <section class="card connection-card" id="connection" aria-labelledby="qq-heading">
+        <section class="card connection-card" id="connection" data-page="connection" hidden aria-labelledby="qq-heading">
           <div class="card-heading"><div class="heading-icon blue"><svg class="icon"><use href="#i-chat"/></svg></div><div><h2 id="qq-heading">QQ 连接</h2><p>扫码登录，自动完成连接。</p></div></div>
           <div class="qr-frame" id="connection-card">
             <div class="connection-art" id="connection-art" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="connection-symbol"><svg class="icon"><use href="#i-chat"/></svg></span><span class="connection-check"><svg class="icon"><use href="#i-check"/></svg></span></div>
@@ -112,34 +122,62 @@
           <p class="note connection-note">请使用机器人账号的手机 QQ 扫码，并确认新设备登录。登录后自动连接，无需填写 WebSocket 或 Token。</p>
           <div id="ready" hidden><div class="ready-title"><span class="status-dot"></span><h3>已就绪，开始聊聊吧</h3></div><p>群聊中 <code>@机器人</code> 或以 <code>/ai</code> 开头；私聊直接发送。图片、文件和需求，都可以直接告诉它。</p></div>
         </section>
-        <section class="card advanced-card" id="advanced" aria-labelledby="advanced-heading"><div class="card-heading"><div class="heading-icon muted"><svg class="icon"><use href="#i-sliders"/></svg></div><div><h2 id="advanced-heading">高级管理</h2><p>更细致地调整你的机器人。</p></div></div><a class="management-link" href="http://127.0.0.1:5300/" target="_blank" rel="noreferrer"><div><strong>LangBot 管理页</strong><span>插件、流水线与更多配置</span></div><svg class="icon"><use href="#i-external"/></svg></a><details class="admin-details" id="admin-open"><summary>本地管理账号<svg class="chevron icon"><use href="#i-chevron"/></svg></summary><p class="note">仅在需要登录 LangBot 管理页时查看。</p><button id="admin" type="button" class="secondary small">查看管理账号</button><pre id="admin-info" aria-live="polite" hidden></pre></details></section>
+        <section class="card advanced-card" id="advanced" data-page="advanced" hidden aria-labelledby="advanced-heading"><div class="card-heading"><div class="heading-icon muted"><svg class="icon"><use href="#i-sliders"/></svg></div><div><h2 id="advanced-heading">高级管理</h2><p>管理常用界面之外的配置。</p></div></div><p class="note ownership-note">AI 服务页列出的模型、图片、搜索和近期群聊参数由群灵统一管理，请在对应页面修改。流水线的备用模型、推理选项、工具轮数和其他插件参数仍在 LangBot 管理；日常保存不会重置这些高级选项。</p><a class="management-link" href="http://127.0.0.1:5300/" target="_blank" rel="noreferrer"><div><strong>LangBot 管理页</strong><span>插件、流水线与更多配置</span></div><svg class="icon"><use href="#i-external"/></svg></a><details class="admin-details" id="admin-open"><summary>本地管理账号<svg class="chevron icon"><use href="#i-chevron"/></svg></summary><p class="note">仅在需要登录 LangBot 管理页时查看。</p><button id="admin" type="button" class="secondary small">查看管理账号</button><pre id="admin-info" aria-live="polite" hidden></pre></details></section>
       </div>
-      <section class="card proactive-card" id="proactive" aria-labelledby="proactive-heading">
-        <div class="update-heading"><div class="card-heading"><div class="heading-icon"><svg class="icon"><use href="#i-chat"/></svg></div><div><h2 id="proactive-heading">自由对话</h2><p>让它适时加入讨论，也懂得保持安静。</p></div></div><span id="proactive-state" class="phase" data-tone="neutral">正在读取</span></div>
+      <section class="card proactive-card" id="proactive" data-page="groups" hidden aria-labelledby="proactive-heading">
+        <div class="update-heading"><div class="card-heading"><div class="heading-icon"><svg class="icon"><use href="#i-chat"/></svg></div><div><h2 id="proactive-heading">群聊管理</h2><p>性格对 @、自由对话和工具回复统一生效。</p></div></div><span id="proactive-state" class="phase" data-tone="neutral">正在读取</span></div>
         <form id="proactive-form" autocomplete="off">
-          <div class="proactive-master"><div><label for="proactive-enabled">允许在指定群主动参与</label><p>默认所有群关闭。总开关只影响你已选择的群，新加入的群始终仅响应 @ 和 /ai。</p></div><label class="toggle-control"><input id="proactive-enabled" type="checkbox" role="switch" data-proactive-edit disabled><span aria-hidden="true"></span><span class="visually-hidden">自由对话总开关</span></label></div>
-          <p id="proactive-summary" class="note">正在读取已保存的群设置…</p>
-          <details class="proactive-default-style">
-            <summary>内置默认语气 · 查看与修改</summary>
-            <p class="note">用于没有单独填写性格的群，同时影响 @ 回复和自由对话。群内独立性格优先于这里；修改后点击下方“保存自由对话设置”生效。</p>
-            <div class="field"><label for="proactive-default-style">默认语气<span>最多 6000 字</span></label><textarea id="proactive-default-style" rows="10" maxlength="6000" aria-describedby="proactive-default-style-note" data-proactive-edit disabled></textarea></div>
-            <div class="form-actions"><button id="proactive-reset-style" type="button" class="secondary small" data-proactive-edit disabled>恢复内置默认语气</button><span id="proactive-default-style-note" class="note">正在读取默认语气…</span></div>
-          </details>
           <div class="proactive-workspace">
             <div class="proactive-groups"><div class="proactive-group-toolbar"><label for="proactive-search" class="visually-hidden">搜索群名或群号</label><input id="proactive-search" type="search" placeholder="搜索群名或群号" disabled><button id="proactive-refresh" type="button" class="icon-button" title="刷新群列表" aria-label="刷新群列表" disabled><svg class="icon"><use href="#i-refresh"/></svg></button></div><p id="proactive-groups-message" class="note" role="status" aria-live="polite">QQ 登录后可选择开放的群。</p><div id="proactive-group-list" class="proactive-group-list" aria-label="选择要设置的群"></div></div>
             <div class="proactive-editor">
-              <div id="proactive-empty" class="proactive-empty"><svg class="icon"><use href="#i-chat"/></svg><strong>先选一个群，从少量参与开始</strong><p>选择群后调整参与程度和性格。未开启的群不会调用模型判断是否插话。</p></div>
+              <nav class="group-tabs" aria-label="群聊设置分类"><button type="button" data-group-tab="persona" aria-pressed="true">性格与称呼</button><button type="button" data-group-tab="activity" aria-pressed="false">自由对话</button><button type="button" data-group-tab="memory" aria-pressed="false">记忆管理</button><button type="button" data-group-tab="defaults" aria-pressed="false">默认语气</button></nav>
+          <section class="proactive-default-style" data-group-panel="defaults" hidden>
+            <h3>默认语气</h3>
+            <p class="note">这里显示完整的默认对话设置，用于未单独填写性格的群。参与判断、@ 回复、自由对话和工具完成后的回复统一采用所选设置；填写群内性格后由群内设置接管。修改后点击下方“保存群聊设置”生效。</p>
+            <div class="field"><label for="proactive-default-style">默认语气<span>最多 6000 字</span></label><textarea id="proactive-default-style" rows="10" maxlength="6000" aria-describedby="proactive-default-style-note" data-proactive-edit disabled></textarea></div>
+            <div class="form-actions"><button id="proactive-reset-style" type="button" class="secondary small" data-proactive-edit disabled>恢复内置默认语气</button><span id="proactive-default-style-note" class="note">正在读取默认语气…</span></div>
+          </section>
+
+              <div id="proactive-empty" class="proactive-empty"><svg class="icon"><use href="#i-chat"/></svg><strong>选择一个群，管理它的交流设置</strong><p>可分别设置性格、主动参与和记忆。默认语气对所有未单独填写性格的群生效。</p></div>
               <fieldset id="proactive-group-settings" hidden disabled>
                 <legend id="proactive-group-name">群设置</legend><p id="proactive-group-id" class="note"></p>
-                <div class="field"><label for="proactive-mode">参与方式</label><select id="proactive-mode" data-proactive-edit><option value="off">仅 @ 回复</option><option value="quiet">安静参与</option><option value="natural">自然参与</option><option value="active">活跃参与</option></select><p id="proactive-mode-note" class="note">保留原来的 @ 和 /ai 回复方式。</p></div>
+                <section data-group-panel="persona">
                 <div class="field"><label for="proactive-display-name">机器人称呼<span>只用于这个群</span></label><input id="proactive-display-name" maxlength="40" placeholder="群灵" data-proactive-edit></div>
-                <div class="field"><label for="proactive-persona">性格与交流习惯<span>选填</span></label><textarea id="proactive-persona" rows="6" placeholder="例如：说话简短，有自己的看法，熟悉的话题偶尔接一句；不强行接梗。" aria-describedby="proactive-persona-note proactive-persona-count" data-proactive-edit></textarea><p id="proactive-persona-count" class="note" aria-live="polite">0 / 6000 字</p><p id="proactive-persona-note" class="note">同时用于本群的 @ 回复和自由对话。填写后优先采用这里的性格，留空使用默认语气；记忆仍保留人物和话题资料。超过字数会提示修改，粘贴内容不会被截断。</p></div>
+                <div class="field"><label for="proactive-persona">性格与交流习惯<span>选填</span></label><textarea id="proactive-persona" rows="6" placeholder="例如：说话简短，有自己的看法，熟悉的话题偶尔接一句；不强行接梗。" aria-describedby="proactive-persona-note proactive-persona-count" data-proactive-edit></textarea><p id="proactive-persona-count" class="note" aria-live="polite">0 / 6000 字</p><p id="proactive-persona-note" class="note">本群的参与判断、@ 回复、自由对话及工具回复统一读取这里的完整设置；留空使用默认语气。其他模块只提供执行协议与资料，记忆保留人物和话题信息。超过字数会提示修改，粘贴内容不会被截断。</p></div>
+                <details class="persona-preview"><summary>查看本群当前生效的交流设置 <span id="persona-source" class="phase">等待读取</span></summary><p id="persona-effective-note" class="note"></p><pre id="persona-effective"></pre></details>
+                </section>
+                <section data-group-panel="activity" hidden>
+          <div class="proactive-master"><div><label for="proactive-enabled">允许在指定群主动参与</label><p>默认所有群关闭。总开关只影响你已选择的群，新加入的群始终仅响应 @ 和 /ai。</p></div><label class="toggle-control"><input id="proactive-enabled" type="checkbox" role="switch" data-proactive-edit disabled><span aria-hidden="true"></span><span class="visually-hidden">自由对话总开关</span></label></div>
+          <p id="proactive-summary" class="note">正在读取已保存的群设置…</p>
+                <div class="field"><label for="proactive-mode">参与方式</label><select id="proactive-mode" data-proactive-edit><option value="off">仅 @ 回复</option><option value="quiet">安静参与</option><option value="natural">自然参与</option><option value="active">活跃参与</option></select><p id="proactive-mode-note" class="note">保留原来的 @ 和 /ai 回复方式。</p></div>
                 <div class="proactive-quiet-heading"><label for="proactive-quiet-enabled">安静时段<span>北京时间</span></label><input id="proactive-quiet-enabled" type="checkbox" data-proactive-edit></div>
                 <div id="proactive-quiet-fields" class="form-row" hidden><div class="field"><label for="proactive-quiet-start">开始</label><input id="proactive-quiet-start" type="time" value="23:00" data-proactive-edit></div><div class="field"><label for="proactive-quiet-end">结束</label><input id="proactive-quiet-end" type="time" value="08:00" data-proactive-edit></div></div>
                 <p class="note proactive-editor-note">只控制主动发言，@ 请求仍可正常回复。各参与方式均有限频和每日预算，没人接话时会停下来。</p>
-                <button id="proactive-reset-group" type="button" class="secondary small" disabled>恢复此群默认设置</button>
+                </section>
+                <div class="group-reset-action" id="group-reset-action"><button id="proactive-reset-group" type="button" class="secondary small" disabled>恢复此群默认设置</button><span class="note">还原称呼、性格与参与方式；保存后生效。</span></div>
+                <section class="memory-workspace" data-group-panel="memory" hidden>
+                  <div class="section-heading"><h3>群聊记忆</h3><button id="memory-export" type="button" class="secondary small">导出本群记忆</button></div>
+                  <p class="note">查看群与成员资料、长期事件记忆。编辑独立保存，后续记忆检索使用新内容；已有聊天上下文仍会保留。若要完全从零开始，请使用下方整群清空。</p>
+                  <div class="memory-filters"><label>搜索内容<input id="memory-query" type="search" maxlength="100" placeholder="关键词或成员 QQ 号"></label><label>类型<select id="memory-kind"><option value="all">全部记忆</option><option value="profile">群与成员资料</option><option value="episode">长期事件</option></select></label><button id="memory-refresh" type="button" class="secondary">查询 / 刷新</button></div>
+                  <p id="memory-note" class="note" role="status" aria-live="polite">点击查询读取本群记忆。</p>
+                  <div id="memory-list" class="memory-list"></div>
+                  <div class="form-actions"><button id="memory-prev" type="button" class="secondary small" hidden>上一页</button><button id="memory-next" type="button" class="secondary small" hidden>下一页</button></div>
+                  <section id="memory-editor" class="memory-editor" hidden aria-label="编辑记忆">
+                    <h3 id="memory-editor-title">编辑记忆</h3>
+                    <div id="memory-profile-fields"><div class="field"><label for="memory-name">称呼</label><input id="memory-name" maxlength="160"></div><div class="field"><label for="memory-traits">特征与印象<span>每行一条</span></label><textarea id="memory-traits" rows="4"></textarea></div><div class="field"><label for="memory-preferences">偏好<span>每行一条</span></label><textarea id="memory-preferences" rows="4"></textarea></div><div class="field"><label for="memory-notes">备注<span>最多 2000 字</span></label><textarea id="memory-notes" rows="4" maxlength="2000"></textarea></div></div>
+                    <div id="memory-episode-fields" class="field"><label for="memory-content">记忆内容<span>最多 8000 字</span></label><textarea id="memory-content" rows="7" maxlength="8000"></textarea><p class="note">保存时会更新检索索引，可能需要几秒钟。</p></div>
+                    <div class="form-actions"><button id="memory-save" type="button">保存这条记忆</button><button id="memory-cancel" type="button" class="secondary">关闭编辑</button><button id="memory-delete" type="button" class="secondary danger-button">删除这条记忆</button></div>
+                    <p id="memory-editor-message" class="form-feedback" role="status" aria-live="polite"></p>
+                  </section>
+                <div class="proactive-memory-reset">
+                  <h3>从零开始</h3>
+                  <p class="note" id="proactive-memory-note">清空本群的长期记忆、成员印象、聊天上下文和看图／查询记录，从新的对话开始。保留性格、默认语气和参与设置；不删除 QQ 消息、已生成文件或请求诊断。此操作不可撤销。</p>
+                  <button id="proactive-clear-memory" type="button" class="secondary small" aria-describedby="proactive-memory-note" disabled>清空本群全部记忆</button>
+                  <p id="proactive-memory-message" class="form-feedback" role="status" aria-live="polite"></p>
+                </div>
+                </section>
               </fieldset>
-              <section id="proactive-runtime" class="proactive-runtime" aria-labelledby="proactive-runtime-heading" hidden>
+              <section id="proactive-runtime" class="proactive-runtime" data-group-panel="activity" aria-labelledby="proactive-runtime-heading" hidden>
                 <div class="proactive-runtime-heading"><h3 id="proactive-runtime-heading">当前运行状态</h3><span id="proactive-runtime-state" class="phase" data-tone="neutral">等待状态</span></div>
                 <p id="proactive-runtime-note" class="note"></p>
                 <p id="proactive-runtime-detail" class="proactive-runtime-detail" role="status" aria-live="polite"></p>
@@ -149,22 +187,32 @@
               </section>
             </div>
           </div>
-          <div class="form-actions"><button id="proactive-save" type="submit" disabled><svg class="icon"><use href="#i-check"/></svg><span id="proactive-save-label">保存自由对话设置</span></button><button id="proactive-reload" type="button" class="secondary" hidden disabled>重新载入已保存设置</button><span id="proactive-dirty" class="save-note">设置独立保存，不影响 AI 接口配置</span></div>
+          <div class="form-actions save-bar" id="group-save-bar"><button id="proactive-save" type="submit" disabled><svg class="icon"><use href="#i-check"/></svg><span id="proactive-save-label">保存群聊设置</span></button><button id="proactive-reload" type="button" class="secondary" hidden disabled>重新载入已保存设置</button><span id="proactive-dirty" class="save-note">设置独立保存，不影响 AI 接口配置</span></div>
           <p id="proactive-message" class="form-feedback" role="status" aria-live="polite"></p>
         </form>
       </section>
-      <section class="card requests-card" id="requests" aria-labelledby="requests-heading">
-        <div class="card-heading"><div class="heading-icon"><svg class="icon"><use href="#i-grid"/></svg></div><div><h2 id="requests-heading">请求诊断</h2><p>查看 @、/ai 和转入查询的续问，定位排队、执行或发送问题。</p></div></div>
+      <section class="card requests-card" id="requests" data-page="requests" hidden aria-labelledby="requests-heading">
+        <div class="card-heading"><div class="heading-icon"><svg class="icon"><use href="#i-grid"/></svg></div><div><h2 id="requests-heading">任务中心</h2><p>查看消息处理、后台文件任务与当前自由对话。</p></div></div>
+        <nav class="group-tabs task-tabs" aria-label="任务类型"><button id="task-tab-requests" type="button" aria-pressed="true">消息请求</button><button id="task-tab-files" type="button" aria-pressed="false">后台文件任务</button><button id="task-tab-live" type="button" aria-pressed="false">自由对话</button></nav>
+        <div id="task-panel-requests">
         <details id="requests-open"><summary>查看最近请求</summary>
           <div class="requests-filters"><label>群号<input id="requests-group" inputmode="numeric" maxlength="20" placeholder="全部群"></label><label>状态<select id="requests-status"><option value="">全部状态</option><option value="active">处理中</option><option value="failed">处理失败</option><option value="unconfirmed">结果未确认</option><option value="interrupted">执行中断</option><option value="completed">回复已发送</option><option value="processed">流程已结束</option><option value="rejected">未能排队</option><option value="cancelled">已取消</option></select></label><button id="requests-refresh" type="button" class="secondary">刷新</button></div>
           <p class="note" id="requests-note" role="status" aria-live="polite">展开后加载记录；仅保存阶段和错误类别，保留最近 7 天、最多 2,000 条已结束请求。</p>
           <div id="requests-list" class="requests-list"></div>
           <button id="requests-older" type="button" class="secondary small" hidden>查看更早记录</button>
           <section id="request-detail" class="request-detail" aria-label="请求处理过程" hidden></section>
-          <p class="note">“回复已发送”表示 QQ 接口已确认；不代表群成员已读。重启中断、发送未确认和写入操作不会整单自动重放。普通自由闲聊的状态请看“自由对话”。</p>
+          <p class="note">“回复已发送”表示 QQ 接口已确认；不代表群成员已读。重启中断、发送未确认和写入操作不会整单自动重放。普通闲聊请切换到“自由对话”。</p>
         </details>
+        </div>
+        <div id="task-panel-files" hidden>
+          <div class="requests-filters"><label>群号<input id="tasks-group" inputmode="numeric" maxlength="20" placeholder="全部会话"></label><label>处理状态<select id="tasks-status"><option value="">全部状态</option><option value="pending">排队中</option><option value="running">处理中</option><option value="waiting">等待继续</option><option value="partial">部分完成</option><option value="completed">处理完成</option><option value="failed">处理失败</option><option value="cancelled">已取消</option></select></label><button id="tasks-refresh" type="button" class="secondary">刷新</button></div>
+          <div id="tasks-counts" class="task-counts"></div><p id="tasks-note" class="note" role="status" aria-live="polite"></p>
+          <div id="tasks-list" class="requests-list"></div><button id="tasks-older" type="button" class="secondary small" hidden>查看更早任务</button>
+          <p class="note">处理完成与 QQ 发送结果分别显示。最新列表每 10 秒刷新；查看较早记录时暂停自动刷新。此处只核对状态，不重复执行或发送。</p>
+        </div>
+        <div id="task-panel-live" hidden><div class="section-heading"><h3>正在参与的群</h3><button id="tasks-live-refresh" type="button" class="secondary small">刷新状态</button></div><p id="tasks-live-note" class="note"></p><div id="tasks-live-list" class="requests-list"></div><p class="note">展示当前群聊状态和最近一次处理，不是聊天记录。任务转入查询后，可在“消息请求”中查看处理过程。</p></div>
       </section>
-      <section class="card" id="knowledge" aria-labelledby="knowledge-heading">
+      <section class="card" id="knowledge" data-page="knowledge" hidden aria-labelledby="knowledge-heading">
         <div class="card-heading"><div><h2 id="knowledge-heading">公开资料知识库</h2><p>先查已保存的资料，需要时再联网；管理员可为群订阅公开网页。</p></div></div>
         <details id="knowledge-open"><summary>设置资料复用和定时采集</summary>
           <form id="knowledge-form">
@@ -178,7 +226,7 @@
           <ul id="knowledge-status"></ul>
         </details>
       </section>
-      <section class="card updates" id="maintenance" aria-labelledby="update-heading">
+      <section class="card updates" id="maintenance" data-page="maintenance" hidden aria-labelledby="update-heading">
         <div class="update-heading"><div class="card-heading"><div class="heading-icon"><svg class="icon"><use href="#i-refresh"/></svg></div><div><h2 id="update-heading">版本维护</h2><p id="update-source">正在读取部署版本…</p></div></div><span id="update-phase" class="phase" data-tone="neutral">连接中</span></div>
         <div class="update-body"><dl class="versions"><div><dt>当前版本</dt><dd><code id="current-revision">—</code></dd></div><div class="version-divider" aria-hidden="true"><dt class="visually-hidden">更新至</dt><dd><svg class="icon"><use href="#i-arrow"/></svg></dd></div><div><dt>最新版本</dt><dd><code id="latest-revision">—</code></dd></div></dl><div class="update-actions"><button id="check-update" type="button" class="secondary" disabled><svg class="icon"><use href="#i-refresh"/></svg><span>检查更新</span></button><button id="apply-update" type="button" disabled><svg class="icon"><use href="#i-download"/></svg><span>更新到此版本</span></button></div></div>
         <ol class="update-steps" id="update-progress" aria-label="更新流程" hidden><li data-update-step="prepare"><span>1</span>准备版本</li><li data-update-step="restart"><span>2</span>切换服务</li><li data-update-step="verify"><span>3</span>完成验证</li></ol>

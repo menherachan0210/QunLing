@@ -159,6 +159,19 @@ def photo(env, label="first"):
     return env.Image(base64=f"data:image/png;base64,{label}")
 
 
+def test_group_reset_does_not_reuse_previous_image(context_env, monkeypatch, tmp_path):
+    from qunling import group_reset
+    env = context_env
+    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path))
+    before = env.module._scope(env.plugin, query(launcher_id="123"))
+    neighbor = env.module._scope(env.plugin, query(launcher_id="456"))
+    key = group_reset.scope(env.binding, "bot-a", "123")
+    group_reset.begin(key)
+    group_reset.finish(key, "a" * 32)
+    assert env.module._scope(env.plugin, query(launcher_id="123")) != before
+    assert env.module._scope(env.plugin, query(launcher_id="456")) == neighbor
+
+
 def test_current_and_quoted_images_are_selected_without_model_urls(context_env):
     env = context_env
     current = variables(env, query(photo(env)))

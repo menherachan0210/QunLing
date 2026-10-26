@@ -510,6 +510,108 @@ def test_public_settings_uses_allowlist_for_future_private_fields():
     assert config["api_key"] not in json.dumps(public)
 
 
+@pytest.mark.parametrize("field,value", [
+    ("image_size", "unbounded"), ("image_quality", "ultra"), ("image_quality", []),
+    ("image_timeout_seconds", 29), ("image_timeout_seconds", 301),
+    ("image_timeout_seconds", True), ("search_timeout_seconds", "1e3"),
+    ("search_timeout_seconds", 91), ("search_timeout_seconds", 29),
+    ("search_provider", "other"), ("search_base_url", "https://user:secret@example.com"),
+])
+def test_tool_settings_reject_invalid_values(field, value):
+    with pytest.raises(SetupError):
+        settings(**{field: value})
+
+
+def test_independent_search_roundtrip_and_explicit_switch_back_to_shared():
+    api = FakeLangBot()
+    original = settings(search_provider="independent", search_base_url="https://search.example.com/v1/",
+                        search_api_key="synthetic-search-key", search_timeout_seconds="80",
+                        image_size="1280x720", image_quality="high", image_timeout_seconds="180")
+    first = run_configure(api, original)
+    revised = setup.settings_from_input({"api_key": "new-common-key", "search_api_key": ""}, original)
+    run_configure(api, revised, first)
+    search = api.configs["local/QQWebSearch"]
+    assert search["api_base_url"] == "https://search.example.com/v1"
+    assert search["api_key"] == original["search_api_key"]
+    assert search["request_timeout_seconds"] == 80
+    image = api.configs["langbot-team/AIImagePlugin"]
+    assert (image["image_size"], image["quality"], image["request_timeout_seconds"]) == ("1280x720", "high", 180)
+    public = setup.public_settings(revised)
+    assert public["search_api_key_saved"] is True
+    assert original["search_api_key"] not in json.dumps(public)
+    shared = setup.settings_from_input({"search_provider": "shared"}, revised)
+    run_configure(api, shared, first)
+    assert api.configs["local/QQWebSearch"]["api_key"] == "new-common-key"
+    assert shared["search_api_key"] == "" and shared["search_base_url"] == ""
+    restored = setup.settings_from_input({"search_base_url": original["search_base_url"],
+                                          "search_api_key": original["search_api_key"]}, shared)
+    run_configure(api, restored, first)
+    assert api.configs["local/QQWebSearch"]["api_key"] == original["search_api_key"]
+
+
+def test_legacy_plugin_settings_are_adopted_before_console_defaults():
+    api = FakeLangBot()
+    legacy = {key: value for key, value in settings().items() if key not in setup.TOOL_FIELDS}
+    api.configs["langbot-team/AIImagePlugin"].update(image_size="768x1280", quality="medium", request_timeout_seconds=120)
+    api.configs["local/QQWebSearch"].update(api_base_url="https://search.example.com/v1", api_key="legacy-search-key", model_name="legacy-search-model", request_timeout_seconds=88)
+    adopted = setup.settings_from_input(setup.adopt_tool_settings(api, legacy))
+    assert adopted["image_size"] == "768x1280"
+    assert adopted["image_quality"] == "medium"
+    assert adopted["image_timeout_seconds"] == 120
+    assert adopted["search_base_url"] == "https://search.example.com/v1"
+    assert "search_provider" not in adopted
+    assert adopted["search_api_key"] == "legacy-search-key"
+    assert adopted["search_model"] == "legacy-search-model"
+    assert adopted["search_timeout_seconds"] == 88
+    run_configure(api, legacy)
+    assert api.configs["langbot-team/AIImagePlugin"]["quality"] == "medium"
+    api.mask_secrets = True
+    with pytest.raises(SetupError, match="密钥无法读取"):
+        setup.adopt_tool_settings(api, legacy)
+
+
+def test_ordinary_configure_preserves_advanced_runner_and_unmanaged_plugin_options():
+    api = FakeLangBot()
+    first = run_configure(api)
+    runner = row(api, "/api/v1/pipelines", first["pipeline_uuid"])["config"]["ai"]["runner_config"][setup.RUNNER]
+    runner["model"].update(fallbacks=["other-model"], reasoning={"effort": "high"})
+    runner.update({"max-tool-iterations": 7, "timeout": 420, "box-enabled": True})
+    run_configure(api, settings(chat_model="new-chat", image_quality="high"), first)
+    runner = row(api, "/api/v1/pipelines", first["pipeline_uuid"])["config"]["ai"]["runner_config"][setup.RUNNER]
+    assert runner["model"]["fallbacks"] == ["other-model"]
+    assert runner["model"]["reasoning"] == {"effort": "high"}
+    assert (runner["max-tool-iterations"], runner["timeout"], runner["box-enabled"]) == (7, 420, True)
+    assert api.configs["langbot-team/AIImagePlugin"]["unrelated_option"] == "preserve-me"
+
+
+def test_manager_adopts_legacy_values_without_false_revision_conflict(tmp_path, monkeypatch):
+    from bootstrap.server import SetupManager
+    from bootstrap.state import prepare
+    monkeypatch.delenv("QQBOT_UPDATER_URL", raising=False)
+    monkeypatch.setattr("bootstrap.server.ensure_plugins", lambda *args, **kwargs: None)
+    prepare(tmp_path / "private", tmp_path / "napcat")
+    manager = SetupManager(State(tmp_path / "private"), "http://app:5300", "http://napcat:6099", tmp_path, "7zz")
+    manager.api = FakeLangBot()
+    manager.api.configs["langbot-team/AIImagePlugin"].update(quality="high", request_timeout_seconds=180)
+    legacy = {key: value for key, value in settings().items() if key not in setup.TOOL_FIELDS}
+    manager._apply(legacy)
+    saved = manager.state.read("ai.json")
+    assert saved == legacy  # Automatic recovery retains the prior file format.
+    assert manager.snapshot()["settings"]["image_quality"] == "high"
+    assert manager.snapshot()["settings"]["image_timeout_seconds"] == 180
+    revision = manager.snapshot()["settings_revision"]
+    assert revision == manager.settings_revision(saved)
+    manager.update(stage="ready", plugins_ready=True)
+    manager.submit({"settings_revision": revision, "image_quality": "low"})
+    manager._apply(manager.pending)
+    manager.pending = None
+    manager.update(stage="ready")
+    with pytest.raises(SetupError) as error:
+        manager.submit({"settings_revision": revision, "image_quality": "medium"})
+    assert error.value.status == 409
+    assert manager.state.read("ai.json")["image_quality"] == "low"
+
+
 def test_napcat_merge_preserves_unmanaged_connections_and_is_idempotent():
     class NapCat:
         def __init__(self):

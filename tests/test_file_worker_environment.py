@@ -125,14 +125,16 @@ def test_linux_child_can_find_the_host_configured_decoder(patched_sdk, tmp_path,
     monkeypatch.setenv("PATH", str(tools))
     launcher, spec = launch(patched_sdk, tmp_path, "linux")
     controller = launcher.create_controller(spec)
-    code = "import shutil; print(shutil.which('" + executable.name + "') or 'not-found')"
+    # The isolated child intentionally does not inherit PYTHONUTF8. Return an
+    # ASCII JSON string so non-ASCII checkout paths work across Windows locales.
+    code = "import json, shutil; print(json.dumps(shutil.which('" + executable.name + "') or 'not-found'))"
     result = subprocess.run(
         [controller.command, "-c", code], cwd=controller.working_dir, env=controller.env,
         capture_output=True, text=True, timeout=10,
         **({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}),
     )
     assert result.returncode == 0, result.stderr
-    assert Path(result.stdout.strip()) == executable
+    assert Path(json.loads(result.stdout)) == executable
 
 
 def test_real_isolated_worker_creates_xlsx_in_the_shared_durable_store(patched_sdk, tmp_path, monkeypatch):

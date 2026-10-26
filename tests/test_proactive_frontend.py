@@ -20,7 +20,7 @@ const allNodes = [];
 function makeElement(id = '') {
   const value = {
     id, disabled:false, hidden:false, textContent:'', value:'', checked:false,
-    elements:{}, dataset:{}, attributes:{}, children:[], className:'',
+    elements:{}, dataset:{}, attributes:{}, children:[], className:'', focus(){},
     classList:{add(){},remove(){},toggle(){}},
     addEventListener(name,fn){this[name]=fn;},
     setAttribute(name,val){this.attributes[name]=val;},
@@ -40,7 +40,18 @@ function element(id) {
 }
 const edits=['proactive-enabled','proactive-mode','proactive-display-name','proactive-persona','proactive-default-style','proactive-reset-style','proactive-quiet-enabled','proactive-quiet-start','proactive-quiet-end'];
 const options=['off','quiet','natural','active'].map(mode=>({...makeElement(),value:mode}));
-element('settings').elements.api_key={value:'',type:'password'};
+const aiFields={base_url:'base-url',api_key:'api-key',chat_model:'chat-model',vision_model:'vision-model',image_model:'image-model',search_model:'search-model',image_size:'image-size',image_quality:'image-quality',image_timeout_seconds:'image-timeout',search_provider:'search-provider',search_base_url:'search-base-url',search_api_key:'search-api-key',search_timeout_seconds:'search-timeout',group_context_hours:'context-hours',group_context_max_messages:'context-messages'};
+for(const role of ['vision','image','search','decision','reconcile']){
+  aiFields[role+'_base_url']=role+'-base-url';aiFields[role+'_api_key']=role+'-api-key';
+}
+aiFields.decision_model='decision-model';aiFields.reconcile_model='reconcile-model';
+for(const [key,id] of Object.entries(aiFields))element('settings').elements[key]=element(id);
+const featureFields=['memory','files','vision','image','search','comic'].map(name=>Object.assign(makeElement(),{value:name,type:'checkbox'}));
+element('settings').querySelectorAll=selector=>selector==='input[name="features"]'?featureFields:[];
+const pages=['overview','models','connection','proactive','requests','knowledge','maintenance','advanced'].map(id=>{const page=element(id);page.dataset.page=id==='proactive'?'groups':id;return page;});
+const tabs=['persona','activity','memory','defaults'].map(name=>{const tab=element('tab-'+name);tab.dataset.groupTab=name;return tab;});
+const panels=['persona','activity','memory','defaults'].map(name=>{const panel=element('panel-'+name);panel.dataset.groupPanel=name;return panel;});
+const windowEvents={};
 const stored=new Map([['qqbot-setup','test-token']]);
 let config={version:1,revision:'r0',enabled:false,groups:{}};
 let builtinStyle='自然交流，有主见，闲聊简短。';
@@ -49,9 +60,13 @@ let setup={plugins_ready:true,plugin_runtime_healthy:true,stage:'ready',configur
 let update={available:true,busy:false,phase:'idle'};
 let status={available:true};
 let groupsFailure=false,configFailure=false,conflict=false,unauthorized=false,holdPost=false,releasePost=null;
+let holdGroups=false,releaseGroups=null,groupsReads=0,aiPosts=[],aiPostFailure=false;
 let posts=[];
+let memoryPosts=[], resetConfirmation=null, memoryFailure=false;
 let requestsData={available:true,sampled_at:1700000000,requests:[],next_before:null};
 let requestFailure=false,holdRequest=false,releaseRequest=null,requestPaths=[];
+let consoleMemory={items:[],total:0,next_offset:null},consoleMemoryPosts=[],consoleMemoryFailure=false,holdMemory=false,releaseMemory=null;
+let tasksData={tasks:[],counts:{},sampled_at:1700000000},taskPaths=[],holdTasks=false,releaseTasks=null;
 const clone=value=>JSON.parse(JSON.stringify(value));
 const context=vm.createContext({
   document:{
@@ -59,17 +74,31 @@ const context=vm.createContext({
     querySelectorAll(selector){
       if(selector==='[data-proactive-edit], .proactive-group')return [...edits.map(element),...allNodes.filter(e=>e.className==='proactive-group')];
       if(selector==='#proactive-mode option')return options;
+      if(selector==='[data-page]')return pages;
+      if(selector==='[data-group-tab]')return tabs;
+      if(selector==='[data-group-panel]')return panels;
+      if(selector==='#settings input, #settings select')return [...Object.values(element('settings').elements),...featureFields];
       return [];
     }
   },
   location:{hash:'',pathname:'/',search:''},history:{replaceState(){}},
   sessionStorage:{getItem:k=>stored.get(k),setItem:(k,v)=>stored.set(k,v),removeItem:k=>stored.delete(k)},
-  window:{confirm:()=>true},URLSearchParams,AbortController,setTimeout,clearTimeout,setInterval(){},
+  window:{confirm:()=>true,prompt:()=>resetConfirmation,crypto:require('node:crypto').webcrypto,addEventListener:(name,fn)=>windowEvents[name]=fn},URLSearchParams,AbortController,setTimeout,clearTimeout,setInterval(){},
   FormData:class{*[Symbol.iterator](){}},
   fetch:async(path,opts)=>{
     if(unauthorized)return {ok:false,status:401,json:async()=>({error:'令牌无效'})};
     if(path==='/api/status')return {ok:true,json:async()=>clone(setup)};
     if(path==='/api/update')return {ok:true,json:async()=>clone(update)};
+    if(path==='/api/memory'){
+      const body=JSON.parse(opts.body);consoleMemoryPosts.push(body);
+      if(holdMemory)await new Promise(resolve=>releaseMemory=resolve);
+      if(consoleMemoryFailure)return {ok:false,status:409,json:async()=>({error:'这条记忆已变化'})};
+      return {ok:true,json:async()=>clone({...consoleMemory,group_id:body.group_id,saved:body.action==='save',deleted:body.action==='delete'})};
+    }
+    if(path.startsWith('/api/tasks?')){
+      taskPaths.push(path);if(holdTasks)await new Promise(resolve=>releaseTasks=resolve);
+      return {ok:true,json:async()=>clone(tasksData)};
+    }
     if(path.startsWith('/api/requests?')){
       requestPaths.push(path);
       if(holdRequest)await new Promise(resolve=>releaseRequest=resolve);
@@ -77,8 +106,23 @@ const context=vm.createContext({
       return {ok:true,json:async()=>clone(requestsData)};
     }
     if(path==='/api/proactive/groups'){
+      groupsReads++;
+      if(holdGroups)await new Promise(resolve=>releaseGroups=resolve);
       if(groupsFailure)throw Error('群列表加载失败');
       return {ok:true,json:async()=>({groups:clone(groups)})};
+    }
+    if(path==='/api/configure'){
+      aiPosts.push(JSON.parse(opts.body));
+      if(aiPostFailure)return {ok:false,status:409,json:async()=>({error:'设置已发生变化'})};
+      setup.stage='configuring';
+      return {ok:true,json:async()=>({status:'accepted'})};
+    }
+    if(path==='/api/proactive/memory/reset'){
+      const body=JSON.parse(opts.body);
+      memoryPosts.push(body);
+      if(holdPost)await new Promise(resolve=>releasePost=resolve);
+      if(memoryFailure)throw Error('连接中断');
+      return {ok:true,json:async()=>({cleared:true,group_id:body.group_id,cleared_at:1700000000})};
     }
     if(path==='/api/proactive'){
       if(opts.method==='POST'){
@@ -112,6 +156,166 @@ async function save(){await element('proactive-form').submit({preventDefault(){}
         [node, "-e", script, str(source)], capture_output=True, text=True, timeout=20,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_memory_reset_confirmation_and_group_isolation():
+    run_browser(r"""
+  select('123');
+  const before=JSON.stringify(config);
+  assert.equal(element('proactive-clear-memory').disabled,false);
+  await element('proactive-clear-memory').click();
+  assert.equal(memoryPosts.length,0);
+  resetConfirmation='456';
+  await element('proactive-clear-memory').click();
+  assert.equal(memoryPosts.length,0);
+  assert.match(element('proactive-memory-message').textContent,/群号不一致/);
+  resetConfirmation='123';
+  holdPost=true;
+  const sending=element('proactive-clear-memory').click();
+  await settle();
+  assert.equal(element('proactive-clear-memory').disabled,true);
+  assert.equal(element('proactive-refresh').disabled,true);
+  assert.equal(element('save').disabled,true);
+  releasePost(); await sending;
+  assert.deepEqual(memoryPosts.map(p=>[p.group_id,p.confirmation]),[['123','123']]);
+  assert.match(memoryPosts[0].request_id,/^[a-f0-9]{32}$/);
+  assert.equal(JSON.stringify(config),before);
+  assert.match(element('proactive-memory-message').textContent,/记忆已清空/);
+  select('456');
+  assert.equal(element('proactive-memory-message').textContent,'');
+""")
+
+
+def test_background_refresh_keeps_editing_enabled_and_preserves_new_input():
+    run_browser(r"""
+  select('123');
+  holdGroups=true;
+  const pending=refresh(); await settle();
+  assert.equal(element('proactive-persona').disabled,false);
+  assert.equal(element('proactive-group-settings').disabled,false);
+  input('proactive-persona','刷新期间继续输入');
+  releaseGroups(); await pending;
+  assert.equal(element('proactive-persona').value,'刷新期间继续输入');
+  assert.equal(element('proactive-save').disabled,false);
+  const before=groupsReads;
+  evaluate('proactiveLastPoll=0');
+  await evaluate('pollProactive(authEpoch)');
+  assert.equal(groupsReads,before);
+  assert.equal(element('proactive-persona').value,'刷新期间继续输入');
+""")
+
+
+def test_page_and_group_tabs_preserve_drafts_and_show_actual_persona_source():
+    run_browser(r"""
+  evaluate("selectNav('groups')");
+  assert.equal(element('models').hidden,true);
+  assert.equal(element('proactive').hidden,false);
+  select('123');
+  assert.equal(element('persona-source').textContent,'继承默认语气');
+  input('proactive-persona','本群性格');
+  assert.equal(element('persona-effective').textContent,builtinStyle);
+  element('tab-activity').click();
+  assert.equal(element('panel-persona').hidden,true);
+  assert.equal(element('panel-activity').hidden,false);
+  evaluate("selectNav('models'); selectNav('groups')");
+  element('tab-persona').click();
+  assert.equal(element('proactive-persona').value,'本群性格');
+  await save();
+  assert.equal(element('persona-source').textContent,'本群独立性格');
+  assert.equal(element('persona-effective').textContent,'本群性格');
+  element('tab-defaults').click();
+  assert.equal(element('panel-defaults').hidden,false);
+  assert.equal(element('proactive-group-settings').hidden,true);
+""")
+
+
+def test_tab_draft_recovery_detects_conflict_and_beforeunload_protects_changes():
+    run_browser(r"""
+  select('123'); input('proactive-persona','需要恢复的草稿');
+  const persisted=stored.get('qunling-console-draft:groups');
+  assert.equal(JSON.parse(persisted).config.groups['123'].persona,'需要恢复的草稿');
+  let prevented=false;
+  const event={preventDefault(){prevented=true;}};
+  windowEvents.beforeunload(event); assert.equal(prevented,true);
+  evaluate('proactiveDraft=null; proactiveDirty=false; groupDraftRestored=false');
+  config.revision='changed-elsewhere';
+  await refresh();
+  assert.equal(element('proactive-persona').value,'需要恢复的草稿');
+  assert.equal(element('proactive-persona').disabled,false);
+  assert.equal(element('proactive-save').disabled,true);
+  await element('proactive-reload').click();
+  assert.equal(stored.has('qunling-console-draft:groups'),false);
+""")
+
+
+def test_ai_settings_keep_secrets_out_of_drafts_and_wait_for_application_result():
+    run_browser(r"""
+  setup.settings_revision='ai-v1';
+  setup.settings={base_url:'https://ai.example/v1',chat_model:'chat',image_model:'image',search_provider:'shared',api_key_saved:true};
+  await evaluate('poll()');
+  element('image-quality').value='high';
+  element('api-key').value='new-private-key';
+  element('search-api-key').value='new-search-private-key';
+  element('settings').input();
+  const storedDraft=stored.get('qunling-console-draft:ai');
+  assert.ok(storedDraft.includes('high'));
+  assert.ok(!storedDraft.includes('private-key'));
+  await element('settings').submit({preventDefault(){},currentTarget:element('settings')});
+  assert.equal(aiPosts[0].image_quality,'high');
+  assert.equal(aiPosts[0].api_key,'new-private-key');
+  assert.equal(aiPosts[0].settings_revision,'ai-v1');
+  assert.equal(element('save').disabled,true);
+  assert.match(element('form-message').textContent,/正在应用/);
+  setup.stage='ready';setup.settings_revision='ai-v2';setup.settings.image_quality='high';
+  await evaluate('poll()');
+  assert.match(element('form-message').textContent,/已应用/);
+  assert.equal(element('api-key').value,'');
+  assert.equal(element('search-api-key').value,'');
+  assert.equal(stored.has('qunling-console-draft:ai'),false);
+""")
+
+
+def test_ai_failure_and_external_revision_preserve_unsaved_fields():
+    run_browser(r"""
+  setup.settings_revision='ai-v1'; setup.settings={base_url:'https://ai.example/v1'};
+  await evaluate('poll()');
+  element('image-quality').value='high';element('settings').input();
+  await element('settings').submit({preventDefault(){},currentTarget:element('settings')});
+  setup.stage='error';setup.message='应用失败';
+  await evaluate('poll()');
+  assert.equal(element('image-quality').value,'high');
+  assert.equal(element('form-message').textContent,'应用失败');
+  assert.equal(element('save').disabled,false);
+  setup.stage='ready';setup.settings_revision='other-page';
+  await evaluate('poll()');
+  assert.equal(element('save').disabled,true);
+  assert.equal(element('image-quality').value,'high');
+  assert.equal(element('settings-reload').hidden,false);
+""")
+
+
+def test_memory_reset_pending_survives_reload_and_keeps_retry_available():
+    run_browser(r"""
+  select('123');
+  status.memory_reset_pending=['123']; await refresh();
+  assert.equal(element('proactive-runtime-state').textContent,'记忆清除未完成');
+  assert.equal(element('proactive-clear-memory').disabled,false);
+  select('456');
+  assert.notEqual(element('proactive-runtime-state').textContent,'记忆清除未完成');
+""")
+
+
+def test_memory_reset_reuses_request_id_after_uncertain_response():
+    run_browser(r"""
+  select('123'); resetConfirmation='123'; memoryFailure=true;
+  await element('proactive-clear-memory').click();
+  assert.doesNotMatch(element('proactive-memory-message').textContent,/记忆已清空/);
+  memoryFailure=false;
+  await element('proactive-clear-memory').click();
+  assert.equal(memoryPosts[1].request_id,memoryPosts[0].request_id);
+  await element('proactive-clear-memory').click();
+  assert.notEqual(memoryPosts[2].request_id,memoryPosts[1].request_id);
+""")
 
 
 def test_new_groups_are_off_and_master_switch_never_enables_groups():
@@ -195,8 +399,8 @@ def test_default_style_conflict_and_auth_locks_preserve_unsaved_changes():
   config.revision='other-tab';
   await refresh();
   assert.equal(element('proactive-default-style').value,'未保存的默认语气');
-  assert.equal(element('proactive-default-style').disabled,true);
-  assert.equal(element('proactive-reset-style').disabled,true);
+  assert.equal(element('proactive-default-style').disabled,false);
+  assert.equal(element('proactive-reset-style').disabled,false);
   assert.equal(element('proactive-save').disabled,true);
   await element('proactive-reload').click();
   assert.equal(element('proactive-default-style').value,builtinStyle);

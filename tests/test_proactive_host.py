@@ -28,17 +28,28 @@ LANGBOT_ROOT = Path(next(iter(importlib.util.find_spec("langbot").submodule_sear
 
 @pytest.mark.asyncio
 async def test_decision_model_does_not_replace_reply_or_reconciliation_model(bridge):
+    from qunling.proactive.engine import ConversationContext, Decision, Message
+
     pipeline = bridge.bot.ap.pipeline_mgr.get_pipeline_by_uuid.return_value
     pipeline.pipeline_entity.config["ai"]["qunling_decision_model"] = "fast-decision"
-    await bridge._complete(host.JUDGE_PROMPT, {"group_id": "30000"})
+    context = ConversationContext("bot", "30000", "active", "自然交流，有主见。",
+        (Message("bot", "30000", "m1", "20000", "说说你的看法", time.time()),), (), "", None, None,
+        display_name="甲", reply_candidate_ids=("m1",))
+    provider = bridge.bot.ap.model_mgr.get_model_by_uuid.return_value.provider
+    provider.invoke_llm.return_value = ModelMessage(role="assistant", content='{"action":"silence"}')
+    await bridge.judge(context)
     await bridge._complete(host.GENERATE_PROMPT, {"group_id": "30000"})
-    await bridge._complete(host.RECONCILE_PROMPT, {"context": {"group_id": "30000"}})
+    provider.invoke_llm.return_value = ModelMessage(role="assistant", content='{"action":"keep"}')
+    await bridge.reconcile(context, Decision("reply", "m1"), "待发草稿", [])
     model_ids = [call.args[1] for call in bridge.bot.ap.model_mgr.get_model_by_uuid.await_args_list]
     assert model_ids == ["fast-decision", "chat-model", "chat-model"]
     assert all(item.kwargs["funcs"] == [] for item in bridge.bot.ap.model_mgr.get_model_by_uuid.return_value.provider.invoke_llm.await_args_list)
     pipeline.pipeline_entity.config["ai"]["qunling_reconcile_model"] = "review-model"
-    await bridge._complete(host.RECONCILE_PROMPT, {"context": {"group_id": "30000"}})
+    await bridge.reconcile(context, Decision("reply", "m1"), "待发草稿", [])
     assert bridge.bot.ap.model_mgr.get_model_by_uuid.await_args.args[1] == "review-model"
+    assert context.persona in provider.invoke_llm.await_args.kwargs['messages'][0].content
+    stages = bridge.performance.snapshot('30000')['stages']
+    assert {stage: data['count'] for stage, data in stages.items()} == {'judge': 1, 'generate': 1, 'reconcile': 2}
 
 
 @pytest.fixture
@@ -211,6 +222,34 @@ async def test_free_reply_sends_same_persona_as_direct_reply_at_system_priority(
 
 
 @pytest.mark.asyncio
+async def test_judge_uses_the_same_selected_style_without_a_competing_default(bridge):
+    from qunling.proactive.engine import ConversationContext, Message
+    from qunling.group_persona import group_persona_prompt
+
+    context = ConversationContext("bot", "30000", "active", "保持正式语气；需要讨论时充分展开。",
+        (Message("bot", "30000", "m1", "20000", "说说你的看法", time.time()),), (), "", None, None,
+        display_name="甲", default_style="搞怪调侃，用短句。", reply_candidate_ids=("m1",))
+    bridge._complete = AsyncMock(return_value='{"action":"reply","target_message_id":"m1"}')
+    await bridge.judge(context)
+    system, payload = bridge._complete.await_args.args
+    assert group_persona_prompt(context.display_name, context.persona, context.default_style) in system
+    assert context.default_style not in system
+    assert "persona" not in payload and "default_style" not in payload
+
+
+def test_prepare_prompt_refreshes_owned_setup_protocol_but_preserves_custom_instructions(bridge):
+    from bootstrap.configure import PROMPT
+
+    incoming = event(explicit=True)
+    query = query_for(bridge, incoming)
+    query.prompt.messages.append(ModelMessage(role="system", content="[QQBOT SETUP v1]\n旧安装器隐藏的说话方式"))
+    host.prepare_prompt(query)
+    combined = "\n".join(item.content for item in query.prompt.messages)
+    assert "旧安装器隐藏的说话方式" not in combined
+    assert PROMPT in combined and "保留的原始系统提示" in combined
+
+
+@pytest.mark.asyncio
 async def test_reply_evidence_deduplicates_only_present_bot_speech_and_keeps_media_ownership(bridge):
     from dataclasses import replace
     from qunling.proactive.engine import ConversationContext, Decision, Message
@@ -247,13 +286,15 @@ async def test_coverage_review_keeps_question_authors_quotes_and_each_confirmed_
     answer = Message("bot", "30000", "b1", "10000", "没有证据说配置失效，刚才只是重复认错。", time.time(),
                      is_bot=True, reply_to="q1", reply_recipient_id="alice")
     followup = Message("bot", "30000", "q2", "bob", "那到底哪里出问题了？", time.time(), reply_to="b1")
-    context = ConversationContext("bot", "30000", "active", "不参与去重判断的群性格",
+    context = ConversationContext("bot", "30000", "active", "按群友实际交流意图理解接话",
                                   (question, answer, followup), ("q2",), answer.text, "b1", answer.timestamp,
-                                  reply_candidate_ids=("q2",), default_style="不参与去重判断的默认语气")
+                                  reply_candidate_ids=("q2",), default_style="未选中的默认语气")
     delivered = [{"receipt_id": "b1", "target_message_id": "q1", "text": answer.text, "timestamp": answer.timestamp}]
     bridge._complete = AsyncMock(return_value='{"action":"keep"}')
     assert await bridge.reconcile(context, Decision("followup", "q2", ("q2",)), "待发草稿", delivered) == {"action": "keep"}
-    _, payload = bridge._complete.await_args.args
+    system, payload = bridge._complete.await_args.args
+    assert "按群友实际交流意图理解接话" in system
+    assert "未选中的默认语气" not in system
     assert set(payload["context"]) == {"group_id", "messages"}
     assert [item["sender_id"] for item in payload["context"]["messages"]] == ["alice", "bob"]
     assert payload["context"]["messages"][1]["reply_to"] == "b1"
@@ -792,8 +833,9 @@ async def test_generate_preserves_shared_focus_and_refuses_another_members_expli
     assert value["context"]["participant_id"] == "20002"
     assert value["context"]["focus_message_ids"] == ("chat",)
     assert value["target_author"]["sender_id"] == "20002"
-    assert "不将成员身份当成话题边界" in prompt
-    assert "同一称呼和交流习惯" in prompt
+    assert "participant_id 只是批次发起者" in prompt
+    from qunling.group_persona import group_persona_prompt
+    assert group_persona_prompt(context.display_name, context.persona, context.default_style) in prompt
     with pytest.raises(host.ProactiveUnavailable, match="目标已失效"):
         await bridge.generate(context, Decision("reply", "translation"))
     bridge._complete.assert_awaited_once()
@@ -817,7 +859,8 @@ async def test_explicit_prompt_marks_own_history_and_actual_quoted_evidence(brid
     assert set(status["focus_message_ids"]) == {"other-task", "own-question", "own-answer"}
     assert set(status["topic_message_ids"]) == {"own-question", "own-answer"}
     assert "另一人的翻译任务" in query.prompt.messages[2].content  # Background stays attributed, not silently reassigned.
-    assert "同一称呼和交流习惯" in query.prompt.messages[1].content
+    from qunling.group_persona import group_persona_prompt
+    assert group_persona_prompt("群灵", "") in query.prompt.messages[1].content
     message = next(item for item in bridge.engine.snapshot("30000", before_message_id="followup") if item.message_id == "own-answer")
     assert message.reply_to == "own-question"
     await bridge.engine.close()

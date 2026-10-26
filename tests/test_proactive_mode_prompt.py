@@ -121,7 +121,10 @@ async def test_judge_protocol_preserves_participation_mode_and_conversation(name
     bridge._complete.assert_awaited_once()
     system, payload = bridge._complete.await_args.args
     assert isinstance(system, str) and system
-    assert payload == {**asdict(context), "bot_account_id": "10000"}
+    assert payload == {**{key: value for key, value in asdict(context).items()
+                         if key not in {"persona", "default_style"}}, "bot_account_id": "10000"}
+    assert context.persona in system
+    assert "persona" not in payload and "default_style" not in payload
     decision = validate_decision(actual, context)
     assert decision is not None and decision.action in allowed_actions
     assert decision.target_message_id == expected["target_message_id"]
