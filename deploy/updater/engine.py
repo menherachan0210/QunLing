@@ -527,7 +527,8 @@ class UpdateEngine:
                 QQBOT_UPDATE_KEEP_RELEASES=str(self.keep_backups) if self.retention_valid else "disabled")
             new["services"]["updater"]["environment"].pop("QQBOT_UPDATE_KEEP_BACKUPS", None)
             old_env = old["services"]["app"].get("environment", {})
-            for key in ("QUNLING_DECISION_TIMEOUT_SECONDS", "QUNLING_REPLY_TIMEOUT_SECONDS", "QUNLING_MODEL_PRICES"):
+            for key in ("QUNLING_DECISION_TIMEOUT_SECONDS", "QUNLING_REPLY_TIMEOUT_SECONDS", "QUNLING_MODEL_PRICES",
+                        "QUNLING_JEV_REVIEW_ENABLED", "QUNLING_JEV_API_KEY_FILE"):
                 if key in old_env:
                     new["services"]["app"].setdefault("environment", {})[key] = old_env[key]
             write(new_path, new)

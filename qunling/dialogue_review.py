@@ -77,7 +77,20 @@ async def review_text(bridge, *, style, frame, draft, tools=(), native=(), limit
             serialized = json.dumps(payload, ensure_ascii=False)
         if len(serialized) + len(style) > MAX_INPUT:
             return draft
-        # Keep the existing total latency budget, but reserve time for one
+        # The gate only skips an unchanged draft's LLM review. All uncertainty
+        # and service failures retain the original reviewer and its time budget.
+        # Free-chat callers reserve one second outside that budget for overhead.
+        if timeout >= 3:
+            try:
+                from qunling.jev import review_pass
+                fast_pass = await review_pass(bridge, PROMPT + "\n\n" + style, payload)
+            except Exception:
+                # Even an unavailable dependency or telemetry failure must not
+                # bypass the normal reviewer. Request cancellation propagates.
+                fast_pass = False
+            if fast_pass:
+                return draft
+        # Keep the existing LLM review budget, but reserve time for one
         # transport-timeout retry. A single stalled request must not consume
         # the whole review window and silently bypass the content check.
         started = time.monotonic()

@@ -333,6 +333,19 @@ def test_success_builds_before_downtime_and_reuses_exact_project_volumes(transac
     assert active["services"]["updater"]["image"] == PROJECT + "-updater:" + NEW
 
 
+@pytest.mark.parametrize('enabled', ['0', '1'])
+def test_update_preserves_jev_choice_and_secret_file_location(transaction, enabled):
+    engine, docker = transaction
+    settings = {'QUNLING_JEV_REVIEW_ENABLED': enabled,
+                'QUNLING_JEV_API_KEY_FILE': '/opt/qq-ai-bot/langbot/data/qunling/secrets/typesafe_api_key'}
+    docker.current['services']['app']['environment'] = settings
+    docker.candidate['services']['app']['environment'] = {'QUNLING_JEV_REVIEW_ENABLED': '0'}
+    engine.execute(JOB)
+    assert state(engine)['phase'] == 'completed'
+    active = module.read(engine.active_path)['services']['app']['environment']
+    assert all(active[key] == value for key, value in settings.items())
+
+
 def test_failed_build_never_stops_or_backs_up_running_services(transaction):
     engine, docker = transaction
     before = deepcopy(docker.data)

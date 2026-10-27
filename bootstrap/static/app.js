@@ -416,7 +416,7 @@ function renderProactiveRuntime() {
   text("proactive-runtime-detail", detail);
   const timings = group?.performance?.stages;
   if (timings && typeof timings === "object") {
-    const labels = {judge:"判断", generate:"生成", reconcile:"去重", review:"表达复核"};
+    const labels = {judge:"判断", generate:"生成", reconcile:"去重", review:"表达复核", review_gate:"快速复核"};
     const parts = Object.entries(labels).flatMap(([key, label]) => {
       const item = timings[key];
       return item && Number.isSafeInteger(item.count) && item.count > 0 && Number.isFinite(item.p50_seconds)

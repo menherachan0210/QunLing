@@ -49,7 +49,7 @@ async def test_decision_model_does_not_replace_reply_or_reconciliation_model(bri
     assert bridge.bot.ap.model_mgr.get_model_by_uuid.await_args.args[1] == "review-model"
     assert context.persona in provider.invoke_llm.await_args.kwargs['messages'][0].content
     stages = bridge.performance.snapshot('30000')['stages']
-    assert {stage: data['count'] for stage, data in stages.items()} == {'judge': 1, 'generate': 1, 'reconcile': 2, 'review': 0}
+    assert {stage: data['count'] for stage, data in stages.items()} == {'judge': 1, 'generate': 1, 'reconcile': 2, 'review': 0, 'review_gate': 0}
 
 
 @pytest.fixture

@@ -30,6 +30,8 @@ ssh -t 用户名@服务器IP "cd ~/QunLing && sudo bash bot.sh url"
 
 自由对话判断／复核默认超时 25 秒，回复生成默认 60 秒，可通过 `QUNLING_DECISION_TIMEOUT_SECONDS`（5–60）和 `QUNLING_REPLY_TIMEOUT_SECONDS`（5–90）调整。结构化输出只做有界的本地 JSON 修复，不为修复格式额外调用模型。管理页显示近一小时、每群最多 200 条样本的延迟与实际返回的 token 用量，API 另提供按成员汇总；重启后重计，不代替供应商账单。用量缺失显示未知。可设置 `QUNLING_MODEL_PRICES` 为以模型 UUID 为键的 JSON，例如 `{"model-uuid":{"input_per_million":1,"output_per_million":2}}`；价格需采用同一币种，只有样本用量和价格全部可得时才展示估算费用。
 
+可选的 Jev 快速复核默认关闭。启用时设置 `QUNLING_JEV_REVIEW_ENABLED=1`，将 TypeSafe 密钥写入应用数据卷内的 `qunling/secrets/typesafe_api_key`，目录权限 `0700`、文件权限 `0600`；密钥不填入 Compose 环境变量或管理页模型配置。也可用 `QUNLING_JEV_API_KEY_FILE` 指定应用可读的受保护文件。固定使用 `jev-1.14.0`：总体保留概率至少 `0.85`，且意图、事实归属、人格、旧话题／自我点评四项问题概率均不高于 `0.25` 时才跳过大模型审稿。其他结果仍调用原内容复核模型，不改变生成、意图判断、撤回和权限检查。单次新增等待最多 `750ms`，服务异常后按机器人暂停调用 `30s`；原大模型审稿预算保留。管理页单独显示“快速复核”的耗时和 token 用量；费用映射键为 `typesafe/jev-1.14.0`。缺少密钥或设为 `0` 时直接使用原流程。版本更新保留该开关和密钥文件路径，模型版本或门槛调整前须重新做中文对话验证。
+
 ## 在网页更新容器部署
 
 在设置页打开“版本更新”，先检查版本，确认来源仓库与目标提交，再点击更新。默认来源是 `menherachan0210/QunLing` 的 `main` 分支，`QQBOT_UPDATE_CHANNEL=stable` 只选择公共测试与 Linux 镜像验收两个任务都成功的提交；GitHub 不可达或没有合格版本时保留当前服务。完整提交 SHA 固定为本次目标。仅开发测试可显式使用 `development` 渠道追踪未验收分支头。下载 ZIP 的环境也支持此流程，不要求宿主机安装 Git。
