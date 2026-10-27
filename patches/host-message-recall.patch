@@ -1,0 +1,120 @@
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/transport.py
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/transport.py
+@@ -11,11 +11,13 @@
+ 
+ 
+ class OneBotConnection:
+-    def __init__(self, send, receive, close, on_event, validate, *, self_id='', timeout=30):
++    def __init__(self, send, receive, close, on_event, validate, *, self_id='', timeout=30, on_received=None, before_action=None):
+         self.send = send
+         self.receive = receive
+         self.close_socket = close
+         self.on_event = on_event
++        self.on_received = on_received
++        self.before_action = before_action
+         self.validate = validate
+         self.self_id = self_id
+         self.timeout = timeout
+@@ -37,6 +39,8 @@
+             async with asyncio.timeout(self.timeout):
+                 async with self.send_lock:
+                     await self.validate()
++                    if self.before_action is not None:
++                        self.before_action(action, params)
+                     await self.send(json.dumps({'action': action, 'params': params, 'echo': echo}))
+                 result = await future
+             if (result.get('status'), result.get('retcode')) not in (('ok', 0), ('async', 1)):
+@@ -61,6 +65,8 @@
+                 if not account or (self.self_id and account != self.self_id):
+                     raise ValueError('OneBot account mismatch')
+                 self.self_id = account
++                if self.on_received is not None:
++                    self.on_received(data)
+                 # Never block responses behind an event that itself calls an API.
+                 self.events.put_nowait(data)
+             else:
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py
+@@ -79,6 +79,8 @@
+         expected = str(self.config.get('self_id', '') or '')
+         if expected and self_id and expected != self_id:
+             raise ValueError('OneBot account mismatch')
++        from qunling.qq_recall import observe_native, before_action
++
+         connection = OneBotConnection(
+             send,
+             receive,
+@@ -86,6 +88,8 @@
+             self._receive_event,
+             self._validate_connection,
+             self_id=expected or self_id,
++            on_received=lambda data: observe_native(self, data),
++            before_action=lambda action, params: before_action(self, action, params),
+         )
+         self.bot.connection = connection
+         self.bot_account_id = expected or self_id
+@@ -102,6 +106,8 @@
+                 self._lookup.clear()
+ 
+     async def _receive_event(self, payload):
++        from qunling.qq_recall import observe_native
++        observe_native(self, payload)
+         if payload.get('post_type') in {'notice', 'request'}:
+             from qunling.qq_operation_store import record_native
+             await asyncio.to_thread(record_native, self, payload)
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py
+@@ -46,6 +46,11 @@
+         message: platform_message.MessageChain,
+         quote_origin: bool = False,
+     ) -> platform_events.MessageResult:
++        from qunling.qq_recall import protect_event
++        with protect_event(self, message_source):
++            return await self._reply_message(message_source, message, quote_origin)
++
++    async def _reply_message(self, message_source, message, quote_origin=False):
+         assert isinstance(message_source.source_platform_object, aiocqhttp.Event)
+         aiocq_msg, _, _ = await AiocqhttpMessageConverter.yiri2target(message)
+         if quote_origin:
+--- a/src/langbot/pkg/pipeline/aggregator.py
++++ b/src/langbot/pkg/pipeline/aggregator.py
+@@ -316,6 +316,8 @@
+             else:
+                 self._buffer_counts_by_scope[scope_key] = scope_count - 1
+ 
++        from qunling.qq_recall import pending_messages
++        buffer.messages = pending_messages(buffer.messages)
+         if not buffer.messages:
+             return
+ 
+@@ -367,6 +369,8 @@
+             if message_key != base_key or message.execution_context != base_msg.execution_context:
+                 raise ExecutionContextMismatchError('Cannot merge pending messages from different execution scopes')
+ 
++        from qunling.qq_recall import SOURCE_IDS, event_id
++        source_ids = [event_id(message.message_event) for message in messages]
+         merged_chain = platform_message.MessageChain([])
+         for index, message in enumerate(messages):
+             if index > 0:
+@@ -385,7 +389,7 @@
+             adapter=base_msg.adapter,
+             pipeline_uuid=base_msg.pipeline_uuid,
+             routed_by_rule=any(message.routed_by_rule for message in messages),
+-            variables=base_msg.variables,
++            variables={**(base_msg.variables or {}), SOURCE_IDS: [mid for mid in source_ids if mid is not None]},
+         )
+ 
+     async def flush_all(self) -> None:
+--- a/src/langbot/pkg/agent/runner/orchestrator.py
++++ b/src/langbot/pkg/agent/runner/orchestrator.py
+@@ -371,7 +371,10 @@
+ 
+                         # Review before persistence and delivery so later turns see the sent reply.
+                         if dialogue_review is not None:
++                            from qunling.qq_recall import check_current
++                            check_current()
+                             result_dict = await dialogue_review.observe(result_dict)
++                            check_current()
+ 
+                         journal_started = time.monotonic()
+                         await self.journal.append_run_result(

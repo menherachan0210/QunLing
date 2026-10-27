@@ -9,7 +9,7 @@ test files are deliberately excluded from this runtime-only installer.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import unified_diff
 import hashlib
 import json
@@ -59,6 +59,7 @@ PATCHES = (
     ("host-dialogue-provenance.patch", "host", False),
     ("host-dialogue-focus.patch", "host", False),
     ("host-dialogue-review.patch", "host", False),
+    ("host-message-recall.patch", "host", False),
     ("sdk-image-tool-timeout.patch", "sdk", False),
     ("sdk-dedicated-background.patch", "sdk", False),
     ("sdk-windows-dependency-temp.patch", "sdk", True),
@@ -339,6 +340,43 @@ def build_plan(name: str, root: Path, source: str, component: str) -> PatchPlan:
     return PatchPlan(name, root, payload, state)
 
 
+def build_host_plans(root: Path, entries) -> list[PatchPlan]:
+    """Preflight the recall overlay with its prerequisite patches in a scratch tree.
+
+    The overlay uses code inserted by earlier patches. On repeat checks,
+    temporarily undo the overlay only in the scratch copy so prerequisite
+    verification sees its original context. No installed file changes here.
+    """
+    overlay = 'host-message-recall.patch'
+    if overlay not in {name for name, _ in entries}:
+        return [build_plan(name, root, source, 'host') for name, source in entries]
+    assert entries[-1][0] == overlay
+    parsed = {name: runtime_payload(source, 'host') for name, source in entries}
+    paths = {path for _, targets in parsed.values() for path in targets}
+    check_targets(root, paths)
+    overlay_payload = parsed[overlay][0]
+    installed = git_apply(root, overlay_payload, '--reverse', '--check').returncode == 0
+    with tempfile.TemporaryDirectory() as directory:
+        scratch = Path(directory)
+        for path in paths:
+            if (root / path).is_file():
+                target = scratch / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(root / path, target)
+        if installed and git_apply(scratch, overlay_payload, '--reverse').returncode != 0:
+            raise PatchError('Recall overlay could not be verified in the scratch tree.')
+        plans = []
+        for name, source in entries:
+            plan = build_plan(name, scratch, source, 'host')
+            if installed and name != overlay and plan.state != 'already-applied':
+                raise PatchError('Recall prerequisites changed; rebuild from the pinned source before upgrading.')
+            plans.append(replace(plan, root=root,
+                                 state='already-applied' if installed and name == overlay else plan.state))
+            if plan.state == 'ready' and git_apply(scratch, plan.payload).returncode != 0:
+                raise PatchError(f'{name}: prerequisite composition failed; installed files are unchanged.')
+        return plans
+
+
 def execute_plans(plans: list[PatchPlan], apply: bool) -> None:
     """Validate the whole set before any writes, then apply only ready patches."""
     for plan in plans:
@@ -413,7 +451,13 @@ def main(argv: list[str] | None = None) -> int:
                 f"SDK target: {info['purelib']} (langbot-plugin {info['sdk_version']})"
             )
         plans = []
+        if args.component in ('all', 'host'):
+            entries = [(name, (BASE_DIR / 'patches' / name).read_text(encoding='utf-8'))
+                       for name, component, _ in PATCHES if component == 'host']
+            plans.extend(build_host_plans(langbot, entries))
         for name, component, windows_only in PATCHES:
+            if component == 'host':
+                continue
             if args.component not in ("all", component):
                 continue
             if windows_only and info["platform"] != "win32":

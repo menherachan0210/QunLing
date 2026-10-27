@@ -27,7 +27,7 @@ REASONS = frozenset({'', 'queue_full', 'queue_timeout', 'execution_timeout', 'to
     'tool_queue_timeout', 'runtime_unavailable', 'upstream_timeout', 'rate_limited', 'authentication',
     'permission', 'network', 'tool_failed', 'pipeline_failed', 'no_confirmed_reply',
     'delivery_unconfirmed', 'upstream_unavailable', 'restart_before_execution', 'restart_interrupted',
-    'restart_unconfirmed', 'cancelled', 'shutdown', 'capacity', 'admission_failed'})
+    'restart_unconfirmed', 'cancelled', 'message_recalled', 'shutdown', 'capacity', 'admission_failed'})
 
 
 def classify(error, *, phase='running', _depth=0):

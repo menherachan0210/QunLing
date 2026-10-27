@@ -508,7 +508,7 @@ class Dispatch:
         if task.done.is_set():
             return
         task.terminal = reason
-        journal.record(task.query, 'ended', status='cancelled' if reason == 'cancelled' else 'failed', reason=reason)
+        journal.record(task.query, 'ended', status='cancelled' if reason in {'cancelled', 'message_recalled'} else 'failed', reason=reason)
         task.done.set()
         for child in tuple(task.tool_tasks):
             if child is not asyncio.current_task():
@@ -567,6 +567,11 @@ async def intercept_add(pool, arguments):
     ap = _managed_app(pool, arguments)
     if ap is None:
         return False, None
+    from qunling.qq_recall import event_recalled, query_recalled
+    if event_recalled(arguments['adapter'], arguments['message_event']):
+        from qunling.proactive.host import completed
+        completed(arguments['adapter'], arguments['message_event'])
+        return True, None
     from qunling.group_reset import allows, event_timestamp
     runtime = arguments["adapter"]._runtime
     if (getattr(arguments.get("launcher_type"), "value", None) == "group"
@@ -656,6 +661,11 @@ async def intercept_add(pool, arguments):
         service.preparing.pop(sequence, None)
         service.observation_changed.set()
         raise
+    if query_recalled(query):
+        service.preparing.pop(sequence, None)
+        service.observation_changed.set()
+        _complete(query)
+        return True, None
     if matched and continuation is None and not await delivery_allowed(query):
         matched = False
     if not matched:
@@ -686,6 +696,9 @@ async def intercept_add(pool, arguments):
         if continuation is not None:
             _attr(admitted, "_qq_continuation", continuation)
         service.register(admitted, task)
+        if query_recalled(admitted):
+            await service.stop(task, 'message_recalled', notify=False)
+            return True, None
         return True, admitted
     except Exception as exc:
         journal.attach(ap, query, task.owner, origin='continuation' if continuation else 'mention')
@@ -775,6 +788,9 @@ def stage_progress(query):
 
 async def delivery_allowed(query):
     """Recheck genuine mentions/continuation grants for replies and notices."""
+    from qunling.qq_recall import query_recalled
+    if query_recalled(query):
+        return False
     grant = getattr(query, '_qq_continuation', None)
     if grant is not None and not await _validate_grant(grant, query):
         return False
@@ -800,6 +816,11 @@ async def delivery_allowed(query):
 
 
 async def preflight(query, operation):
+    from qunling.qq_recall import query_recalled, MessageRecalled
+    if query_recalled(query):
+        if inspect.iscoroutine(operation):
+            operation.close()
+        raise MessageRecalled()
     grant = getattr(query, "_qq_continuation", None)
     if grant is not None and not await _validate_grant(grant, query):
         if inspect.iscoroutine(operation):
@@ -811,6 +832,20 @@ async def preflight(query, operation):
 
 
 async def run_pipeline(ap, query, pipeline):
+    from qunling.qq_recall import protect, query_keys, query_recalled
+    try:
+        with protect(query.adapter, query_keys(query), query=query):
+            return await _run_pipeline(ap, query, pipeline)
+    except asyncio.CancelledError:
+        if not query_recalled(query):
+            raise
+        task = getattr(query, '_qq_task', None)
+        if task is not None and not task.done.is_set():
+            await _service(ap).stop(task, 'message_recalled', notify=False)
+        journal.record(query, 'ended', status='cancelled', reason='message_recalled')
+
+
+async def _run_pipeline(ap, query, pipeline):
     task = getattr(query, "_qq_task", None)
     if task is None:
         return await pipeline.run(query)
@@ -854,8 +889,11 @@ async def run_pipeline(ap, query, pipeline):
         await service.stop(task, "execution_timeout")
     except asyncio.CancelledError:
         # A control cancellation already sent its single final notification.
-        if not task.terminal:
+        from qunling.qq_recall import query_recalled
+        if not task.terminal and not query_recalled(query):
             journal.record(query, 'ended', status='interrupted', reason='shutdown')
+            raise
+        if query_recalled(query):
             raise
     except Exception as exc:
         journal.failure(query, exc)
@@ -878,6 +916,10 @@ async def fail_cleanup(ap, query):
     if task is None or task.done.is_set():
         return
     service = _service(ap)
+    from qunling.qq_recall import query_recalled
+    if query_recalled(query):
+        await service.stop(task, 'message_recalled', notify=False)
+        return
     task.done.set()
     task.terminal = "failed"
     journal.record(query, 'ended', status='failed', reason='admission_failed')

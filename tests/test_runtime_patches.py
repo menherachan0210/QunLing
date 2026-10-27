@@ -56,6 +56,32 @@ def test_apply_is_explicit_and_second_run_is_idempotent(tmp_path, git_style):
     assert target.read_text() == "new\n"
 
 
+@pytest.mark.parametrize('prerequisite_installed', [False, True])
+def test_dependent_recall_overlay_preflights_without_writes_and_rechecks(tmp_path, prerequisite_installed):
+    target = write(tmp_path, 'src/langbot/example.py', 'middle\n' if prerequisite_installed else 'old\n')
+    entries = [('prerequisite.patch', diff('src/langbot/example.py', 'old', 'middle')),
+               ('host-message-recall.patch', diff('src/langbot/example.py', 'middle', 'final'))]
+    before = target.read_bytes()
+    plans = patcher.build_host_plans(tmp_path, entries)
+    assert target.read_bytes() == before
+    assert plans[-1].state == 'ready'
+    patcher.execute_plans(plans, apply=True)
+    assert target.read_text() == 'final\n'
+    repeated = patcher.build_host_plans(tmp_path, entries)
+    assert all(plan.state == 'already-applied' for plan in repeated)
+    patcher.execute_plans(repeated, apply=True)
+    assert target.read_text() == 'final\n'
+
+
+def test_invalid_dependent_overlay_never_partially_installs_prerequisite(tmp_path):
+    target = write(tmp_path, 'src/langbot/example.py')
+    entries = [('prerequisite.patch', diff('src/langbot/example.py', 'old', 'middle')),
+               ('host-message-recall.patch', diff('src/langbot/example.py', 'wrong', 'final'))]
+    with pytest.raises(patcher.PatchError):
+        patcher.build_host_plans(tmp_path, entries)
+    assert target.read_text() == 'old\n'
+
+
 def test_sdk_mapping_in_linux_style_nested_git_directory(tmp_path):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     sdk_root = tmp_path / "langbot/.venv/lib/python3.12/site-packages"
@@ -285,7 +311,8 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("host-chinese-embedding.patch", "host", False) in patcher.PATCHES
     assert ("host-dialogue-provenance.patch", "host", False) in patcher.PATCHES
     assert ("host-dialogue-review.patch", "host", False) in patcher.PATCHES
-    assert len(names) == 41
+    assert ("host-message-recall.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 42
     assert "host-model-usage.patch" in names
     assert {"host-web-knowledge.patch", "host-memory-recall.patch"} <= names
     assert "host-animation-vision.patch" in names
@@ -437,6 +464,8 @@ def test_linux_cli_skips_windows_patch_and_defaults_to_check_only(
         lambda name, root, source, component: observed.append((name, component))
         or name,
     )
+    monkeypatch.setattr(patcher, 'build_host_plans', lambda root, entries:
+                        [patcher.build_plan(name, root, source, 'host') for name, source in entries])
     calls = []
     monkeypatch.setattr(
         patcher, "execute_plans", lambda plans, apply: calls.append((plans, apply))
@@ -477,6 +506,8 @@ def test_all_patches_are_preflighted_before_any_write(monkeypatch, tmp_path):
         return patcher.PatchPlan(name, root, b"unused", "ready")
 
     monkeypatch.setattr(patcher, "build_plan", build)
+    monkeypatch.setattr(patcher, 'build_host_plans', lambda root, entries:
+                        [patcher.build_plan(name, root, source, 'host') for name, source in entries])
     monkeypatch.setattr(
         patcher, "execute_plans", lambda *a: pytest.fail("must not apply")
     )
@@ -707,7 +738,10 @@ def test_published_group_history_excludes_current_and_later_messages(
         assert result["stop_reason"] == "ambiguous_order"
 
 
-def test_published_group_history_repeat_cursor_stops_with_partial_result(group_history_bridge):
+def test_published_group_history_repeat_cursor_stops_with_partial_result(group_history_bridge, monkeypatch):
+    # Exercise cursor repetition independently of CPU pressure during the full
+    # image suite. This namespace is isolated from asyncio's actual clock.
+    monkeypatch.setattr(group_history_bridge.time, 'monotonic', lambda: 0.0)
     bot = AsyncMock()
     bot.call_action.return_value = {
         "messages": [

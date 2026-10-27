@@ -220,6 +220,9 @@ class HostBridge:
         sender_id = str(getattr(sender, "id", ""))
         if key is None or not self_id or not sender_id or sender_id == self_id:
             return
+        from qunling.qq_recall import event_recalled
+        if event_recalled(self.bot.adapter, event):
+            return
         from qunling.group_reset import allows
         if not allows(getattr(self.bot, "execution_context", None), str(self.bot.bot_entity.uuid),
                       key[0], getattr(event, "timestamp", 0)):
@@ -616,6 +619,12 @@ class HostBridge:
         return decision
 
     async def generate(self, context, decision):
+        from qunling.qq_recall import protect
+        ids = decision.covered_message_ids or (decision.target_message_id,)
+        with protect(self.bot.adapter, [('group', context.group_id, mid) for mid in ids]):
+            return await self._generate(context, decision)
+
+    async def _generate(self, context, decision):
         from .engine import Decision, reply_character_limit
         from qunling.group_memory import recall_group_memory
 
@@ -721,6 +730,14 @@ class HostBridge:
         }, stage='reconcile'))
 
     async def send(self, group_id: str, text: str, target_id=None):
+        from qunling.qq_recall import protect
+        keys = [('group', group_id, str(target_id))] if target_id is not None else []
+        keys.extend(('group', group_id, message.message_id)
+                    for message, _ in self._preference_subjects.get((group_id, str(target_id)), ()))
+        with protect(self.bot.adapter, keys):
+            return await self._send(group_id, text, target_id)
+
+    async def _send(self, group_id: str, text: str, target_id=None):
         from langbot_plugin.api.entities.builtin.platform.message import MessageChain, Plain, Quote
 
         expected_revision = self.engine.configuration_revision

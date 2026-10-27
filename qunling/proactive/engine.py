@@ -672,6 +672,20 @@ class ProactiveEngine:
         if not self._closed:
             self._schedule_pump()
 
+    def retract(self, group_id: str, message_id: str) -> None:
+        """Remove a withdrawn ingress from candidates and shared chat context."""
+        state = self._groups.get(group_id)
+        if state is None:
+            return
+        state.messages = deque(m for m in state.messages if m.message_id != message_id)
+        state.reply_index.pop(message_id, None)
+        for lane in state.lanes.values():
+            lane.candidates.discard(message_id)
+            lane.explicit.discard(message_id)
+            lane.after_bot_ids.discard(message_id)
+            lane.wakeup.set()
+        self._record(state, 'message_recalled')
+
     def mark_explicit(self, group_id: str, message_id: str, sender_id: str | None = None) -> None:
         self.refresh_configuration()
         if self._policy(self._snapshot, group_id) is None:
@@ -1123,6 +1137,10 @@ class ProactiveEngine:
             if current is None:
                 return
             state, lane, policy = current
+            present = {message.message_id for message in state.messages}
+            if any(mid not in present for mid in (decision.covered_message_ids or (decision.target_message_id,))):
+                self._record(state, 'stale')
+                return
             if not self._fresh(context, decision.target_message_id):
                 self._record(state, "batch_expired")
                 return

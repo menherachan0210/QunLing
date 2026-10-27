@@ -847,6 +847,8 @@ async def test_patched_onebot_send_and_reply_record_actual_success_only(bridge, 
                  "platform_message": message, "AiocqhttpMessageConverter": AiocqhttpMessageConverter}
     send = patched_method(patched_host, "src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py", "AiocqhttpAPIMixin", "send_message", namespace)
     reply = patched_method(patched_host, "src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py", "AiocqhttpAPIMixin", "reply_message", namespace)
+    raw_reply = patched_method(patched_host, "src/langbot/pkg/platform/adapters/aiocqhttp/api_impl.py", "AiocqhttpAPIMixin", "_reply_message", namespace)
+    bridge.bot.adapter._reply_message = raw_reply.__get__(bridge.bot.adapter)
     bridge.bot.adapter.bot.send_group_msg = AsyncMock(return_value={"message_id": 910})
     chain = MessageChain([At(target="20000"), Plain(text="我的具体观点")])
     result = await send(bridge.bot.adapter, "group", "30000", chain)

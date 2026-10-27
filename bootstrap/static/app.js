@@ -70,7 +70,7 @@ const proactiveEventNames = {
   explicit_finished: "明确提问处理结束", quiet_hours: "安静时段，保持安静",
   wait: "判断暂缓接话", silence: "判断无需接话", cooldown: "等待发言间隔，待处理消息已排队",
   budget_exhausted: "达到调用限额", judging: "正在判断是否接话", generating: "正在组织回复",
-  sent: "回复已发送", stale: "本次回复已过期，未发送", cancelled: "任务已取消",
+  sent: "回复已发送", stale: "本次回复已过期，未发送", message_recalled: "原消息已撤回，回复已取消", cancelled: "任务已取消",
   duplicate_reply: "同话题已回复，省略重复内容",
     handing_off: "续聊需要资料，正在转入查询",
     handed_off: "续聊已进入查询流程，等待实际答复",
@@ -1167,7 +1167,7 @@ window.addEventListener?.("hashchange", () => selectNav(location.hash.slice(1), 
 selectNav(location.hash.slice(1));
 const requestPhases = {received:"收到请求",queued:"排队",preparing:"准备上下文",runtime_wait:"等待功能组件",running:"处理消息",model:"生成回复",tool_wait:"等待工具",tool:"执行工具",retry_wait:"准备有限重试",resuming:"等待继续回复",sending:"发送回复",delivered:"发送已确认",ended:"处理结束"};
 const requestStatuses = {active:"处理中",completed:"回复已发送",processed:"流程已结束",failed:"处理失败",cancelled:"已取消",interrupted:"执行中断",unconfirmed:"结果未确认",rejected:"未能排队"};
-const requestReasons = {queue_full:"请求队列已满",queue_timeout:"排队超时",execution_timeout:"请求总时限已到",tool_timeout:"工具执行超时",tool_queue_timeout:"等待工具超时",runtime_unavailable:"功能组件暂不可用",upstream_unavailable:"上游服务暂不可用",upstream_timeout:"服务响应超时",rate_limited:"服务调用限流",authentication:"接口认证失败",permission:"权限或工作区绑定已失效",network:"连接异常",tool_failed:"工具执行失败",pipeline_failed:"消息处理异常",no_confirmed_reply:"流程结束，未记录文本回复的发送确认",delivery_unconfirmed:"回复发送未确认",restart_before_execution:"服务重启，尚未开始执行",restart_interrupted:"服务重启，执行被中断",restart_unconfirmed:"服务重启，操作结果未确认",cancelled:"用户取消",shutdown:"服务关闭，执行已中断",capacity:"长任务容量已满",admission_failed:"请求未能开始执行"};
+const requestReasons = {queue_full:"请求队列已满",queue_timeout:"排队超时",execution_timeout:"请求总时限已到",tool_timeout:"工具执行超时",tool_queue_timeout:"等待工具超时",runtime_unavailable:"功能组件暂不可用",upstream_unavailable:"上游服务暂不可用",upstream_timeout:"服务响应超时",rate_limited:"服务调用限流",authentication:"接口认证失败",permission:"权限或工作区绑定已失效",network:"连接异常",tool_failed:"工具执行失败",pipeline_failed:"消息处理异常",no_confirmed_reply:"流程结束，未记录文本回复的发送确认",delivery_unconfirmed:"回复发送未确认",restart_before_execution:"服务重启，尚未开始执行",restart_interrupted:"服务重启，执行被中断",restart_unconfirmed:"服务重启，操作结果未确认",cancelled:"用户取消",message_recalled:"原消息已撤回",shutdown:"服务关闭，执行已中断",capacity:"长任务容量已满",admission_failed:"请求未能开始执行"};
 let requestsSequence = 0, requestDetailSequence = 0, requestsCursor = null, requestsBusy = false;
 function clearRequests() {
   requestsSequence += 1;
