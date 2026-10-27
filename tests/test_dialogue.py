@@ -46,6 +46,25 @@ def test_interpretation_does_not_override_candidates_covered_messages_or_quiet_p
     assert validate_decision({"action": "reply", "target_message_id": "m1"}, context).understanding is None
 
 
+@pytest.mark.parametrize("mode", ["social", "answer", "assist", "action"])
+def test_response_mode_survives_frame_without_granting_participation(mode):
+    observed = [message()]
+    meaning = understanding(response_mode=mode)
+    frame = build_frame(bot_id="bot", group_id="group", target=observed[0], messages=observed,
+                        understanding=meaning)
+    assert frame["understanding"]["response_mode"] == mode
+    context = ConversationContext("bot", "group", "quiet", "", tuple(observed), (), "", None, None,
+                                  reply_candidate_ids=("m1",))
+    assert validate_decision({"action": "task_request", "target_message_id": "m1",
+                              "understanding": meaning}, context) is None
+
+
+@pytest.mark.parametrize("mode", ["", "execute_everything", ["social"], {"action": "allow"}, True])
+def test_response_mode_rejects_instructions_and_malformed_values(mode):
+    with pytest.raises(ValueError):
+        validate_understanding(understanding(response_mode=mode), [message()], bot_id="bot", group_id="group")
+
+
 def participation(**changes):
     return {"conversation": "甲在自嘲刚刚的操作，乙接着调侃", "role": "joining",
             "entry_point": "回应甲把失误说成天才操作的反差", "context_sufficient": True, **changes}

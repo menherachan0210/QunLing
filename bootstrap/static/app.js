@@ -72,6 +72,7 @@ const proactiveEventNames = {
   budget_exhausted: "达到调用限额", judging: "正在判断是否接话", generating: "正在组织回复",
   sent: "回复已发送", stale: "本次回复已过期，未发送", message_recalled: "原消息已撤回，回复已取消", cancelled: "任务已取消",
   duplicate_reply: "同话题已回复，省略重复内容",
+  conversation_updated: "收到补充信息，重新考虑接话",
     handing_off: "续聊需要资料，正在转入查询",
     handed_off: "续聊已进入查询流程，等待实际答复",
     handoff_failed: "续聊转入查询失败，未自动重试",

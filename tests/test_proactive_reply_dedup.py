@@ -55,6 +55,11 @@ def test_semantic_review_only_reuses_confirmed_coverage_and_preserves_distinct_a
     async def scenario():
         calls = []
         async def review(context, decision, draft, delivered):
+            if not delivered:
+                # The first answer also sees the second member's later ingress.
+                # It remains valid; this is not proof that anyone has replied.
+                assert context.new_messages
+                return {"action": "keep"}
             calls.append(delivered)
             assert [item["receipt_id"] for item in delivered] == ["outbound-1"]
             assert delivered[0]["target_message_id"] == "first"

@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 import contextvars
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from difflib import SequenceMatcher
 import hashlib
@@ -102,6 +102,12 @@ class ConversationContext:
     default_style: str = ""
     examples: tuple[tuple[str, ...], ...] = ()
     default_examples: tuple[tuple[str, ...], ...] = ()
+    new_messages: tuple[Message, ...] = ()
+
+
+@dataclass(frozen=True)
+class _Refresh:
+    message_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -1128,10 +1134,31 @@ class ProactiveEngine:
                 for key, reply in state.reply_index.items()
                 if key in observed and reply.target_id in known and reply.text.strip()][-MAX_REVIEW_RECEIPTS:]
 
+    @staticmethod
+    def _delivery_updates(state, context):
+        """Actual later ingress is evidence, never a new task or permission."""
+        known = {message.message_id for message in context.messages}
+        return tuple(message for message in state.messages
+                     if message.message_id not in known and not message.is_bot
+                     and message.bot_id == context.bot_id and message.group_id == context.group_id)
+
+    def _defer_changed_reply(self, group_id, state, decision):
+        """Keep unanswered targets eligible for a new, merged observation."""
+        for key in decision.covered_message_ids or (decision.target_message_id,):
+            message = self.resolve_target(group_id, key)
+            lane = state.lanes.get(message.sender_id) if message is not None else None
+            if lane is not None and not lane.explicit:
+                lane.candidates.add(key)
+                lane.wakeup.set()
+                self._queue_lane(group_id, lane)
+        self._record(state, "conversation_updated")
+
     async def _deliver(self, group_id, sender, generation, revision, context, decision, text,
                        previous_receipts):
         addressed = decision.target_message_id in context.addressed_candidate_ids
         reviewed_receipts = set()
+        reviewed_updates = set()
+        update_reviews = 0
         while True:
             current = self._current(group_id, sender, generation, revision)
             if current is None:
@@ -1153,9 +1180,19 @@ class ProactiveEngine:
             # boolean "already reviewed" would let the next race slip through.
             if self._reconcile is not None:
                 delivered = self._delivery_candidates(state, context)
-                if any(item["receipt_id"] not in reviewed_receipts for item in delivered):
+                updates = self._delivery_updates(state, context)
+                unseen_updates = {item.message_id for item in updates} - reviewed_updates
+                if unseen_updates or any(item["receipt_id"] not in reviewed_receipts for item in delivered):
+                    # A busy group cannot keep one frozen draft in an unbounded
+                    # review loop. Merge its unanswered target into a fresh batch.
+                    if unseen_updates and update_reviews >= 2:
+                        self._defer_changed_reply(group_id, state, decision)
+                        return
+                    update_reviews += bool(unseen_updates)
+                    reviewed_updates.update(unseen_updates)
                     reviewed_receipts.update(item["receipt_id"] for item in delivered)
-                    covered = await self._review_delivery(state, policy, context, decision, text, delivered)
+                    covered = await self._review_delivery(state, policy, replace(context, new_messages=updates),
+                                                          decision, text, delivered)
                     if covered is False:
                         # An explicit semantic "keep" can recognize a genuine
                         # new request even if its answer uses the same wording.
@@ -1167,6 +1204,19 @@ class ProactiveEngine:
                     if current is None or not self._fresh(context, decision.target_message_id):
                         return
                     state, lane, policy = current
+                    if isinstance(covered, _Refresh):
+                        present = {item.message_id for item in self._delivery_updates(state, context)}
+                        if set(covered.message_ids) <= present:
+                            self._defer_changed_reply(group_id, state, decision)
+                            return
+                        # A retracted update is no longer a reason to suppress
+                        # the original reply. Review surviving evidence again.
+                        reviewed_updates.clear()
+                    elif covered is None and unseen_updates:
+                        # An unavailable check cannot certify an old premise.
+                        # Replanning retains the question and new information.
+                        self._defer_changed_reply(group_id, state, decision)
+                        return
                     if (isinstance(covered, str) and covered in state.reply_index
                             and any(m.is_bot and m.message_id == covered for m in state.messages)
                             and self.resolve_target(group_id, decision.target_message_id) is not None):
@@ -1197,6 +1247,9 @@ class ProactiveEngine:
                 if (self._reconcile is not None and any(
                         item["receipt_id"] not in reviewed_receipts
                         for item in self._delivery_candidates(state, context))):
+                    continue
+                if self._reconcile is not None and any(
+                        item.message_id not in reviewed_updates for item in self._delivery_updates(state, context)):
                     continue
                 duplicate = self._new_duplicate_reply(
                     state, policy, decision.target_message_id, text, previous_receipts)
@@ -1268,7 +1321,7 @@ class ProactiveEngine:
             await self._wait_delay(lane, delay)
 
     async def _review_delivery(self, state, policy, context, decision, text, delivered):
-        """Return a covering receipt, False for keep, or None if unavailable."""
+        """Validate keep, real coverage or a refresh grounded in newer ingress."""
         if not self._budget(state, policy):
             return None
         state.judgments.append(self._clock())
@@ -1281,6 +1334,13 @@ class ProactiveEngine:
                     result = await self._reconcile(context, decision, text, delivered)
             if result == {"action": "keep"}:
                 return False
+            if isinstance(result, dict) and set(result) == {"action", "changed_message_ids"} and result["action"] == "refresh":
+                ids = result["changed_message_ids"]
+                observed = {item.message_id for item in context.new_messages}
+                if (isinstance(ids, list) and 0 < len(ids) <= MAX_MESSAGES
+                        and all(isinstance(item, str) for item in ids)
+                        and len(set(ids)) == len(ids) and set(ids) <= observed):
+                    return _Refresh(tuple(ids))
             expected = list(decision.covered_message_ids or (decision.target_message_id,))
             if (isinstance(result, dict) and set(result) == {"action", "receipt_id", "covered_message_ids"}
                     and result["action"] == "covered" and result["covered_message_ids"] == expected

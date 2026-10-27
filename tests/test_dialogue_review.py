@@ -50,6 +50,113 @@ async def test_review_keeps_scope_tool_receipts_and_original_result_immutable(br
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("anchor_present", [True, False])
+async def test_final_review_sees_only_actual_same_group_updates_after_exact_target(bridge, anchor_present):
+    from qunling.proactive.engine import Message as ObservedMessage
+    query = prepared(bridge)
+    binding = getattr(query, review.ATTRIBUTE)
+    group = binding.frame["group_id"]
+    anchor = binding.frame["target"]["message_id"]
+    bot_id = str(bridge.bot.bot_entity.uuid)
+    def observed(key, **kw):
+        return ObservedMessage(bot_id, group, key, "20000", "实际补充", 1, **kw)
+    old = observed("omitted-old")
+    current = observed(anchor)
+    new = observed("new-plan")
+    foreign = replace(new, message_id="foreign", group_id="other-group")
+    other_bot = replace(new, message_id="other-bot", bot_id="other-bot")
+    receipt = observed("receipt", is_bot=True)
+    original = copy.deepcopy(binding.frame)
+    bridge.engine.snapshot = lambda _: [old, *([current] if anchor_present else []), new, foreign, other_bot, receipt]
+    bridge._complete = AsyncMock(return_value='{"action":"keep","reason":"无需修改"}')
+    hook = review.RunReview(query)
+    await hook.observe(completed("按原请求回答"))
+    dialogue = bridge._complete.await_args.args[1]["dialogue"]
+    assert [m["message_id"] for m in dialogue.get("new_messages", [])] == (["new-plan"] if anchor_present else [])
+    assert binding.frame == original
+    bridge.bot.adapter.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_withdrawn_late_evidence_cannot_enter_canonical_reply_through_review(bridge):
+    from qunling.proactive.engine import Message as ObservedMessage
+    query = prepared(bridge)
+    binding = getattr(query, review.ATTRIBUTE)
+    group, anchor = binding.frame["group_id"], binding.frame["target"]["message_id"]
+    current = ObservedMessage(str(bridge.bot.bot_entity.uuid), group, anchor, "20000", "原问题", 1)
+    update = replace(current, message_id="withdrawn", text="这条补充马上撤回")
+    observed = [current, update]
+    bridge.engine.snapshot = lambda _: tuple(observed)
+    async def reviewing(*args, **kwargs):
+        observed.remove(update)
+        return '{"action":"replace","reason":"采用补充","text":"根据刚才那条撤回的补充回答"}'
+    bridge._complete = AsyncMock(side_effect=reviewing)
+    hook = review.RunReview(query)
+    original = completed("根据原始问题的有效回答")
+    assert await hook.observe(original) is original
+    assert hook.replacement is None
+    bridge._complete.assert_awaited_once()
+
+
+def test_omitted_reference_history_is_scoped_bounded_and_does_not_expand_reply_context():
+    from qunling.dialogue import build_frame
+    from qunling.proactive.engine import Message as ObservedMessage
+    original = ObservedMessage("bot", "group", "m1", "alice", "用编辑器拉矢量", 1)
+    reply = replace(original, message_id="m2", is_bot=True, text="让编辑器处理")
+    target = replace(original, message_id="m3", text="这句有点呆")
+    foreign = replace(original, message_id="foreign", group_id="else", text="其他群的内容")
+    other_bot = replace(original, message_id="other", bot_id="another", text="另一个机器人的内容")
+    messages = [original, reply, target, foreign, other_bot]
+    frame = build_frame(bot_id="bot", group_id="group", target=target, messages=messages,
+        understanding={"purpose":"评价回复", "context_message_ids":["m2"], "information_needs":[]})
+    before = copy.deepcopy(frame)
+    references = review.reference_history(frame, messages, bot_id="bot")
+    assert [m["message_id"] for m in references] == ["m1"]
+    assert references[0]["sender_id"] == "alice" and references[0]["text"] == original.text
+    assert frame == before and [m["message_id"] for m in frame["messages"]] == ["m2", "m3"]
+    large = [replace(original, message_id=str(i), text="字" * 2000) for i in range(50)]
+    clipped = review.reference_history(frame, large, bot_id="bot")
+    assert len(clipped) <= 12 and sum(len(m["text"]) for m in clipped) <= 6000
+    assert all(m["text_truncated"] for m in clipped)
+
+
+@pytest.mark.asyncio
+async def test_native_fact_sources_reach_review_without_reentering_generation_history(bridge):
+    from langbot_plugin.api.entities.builtin.provider.message import Message as ProviderMessage
+    query = prepared(bridge)
+    binding = getattr(query, review.ATTRIBUTE)
+    frame = {**{key: value for key, value in binding.frame.items() if key != "reference_history"},
+             "history_selection":"focused", "native_history_keys": []}
+    query.messages = [ProviderMessage(role="user", content="我已经有模板了"),
+                      ProviderMessage(role="assistant", content="那就用现成模板")]
+    state = {"display_name":"群灵", "persona":"温和", "default_style":"", "examples":[], "default_examples":[]}
+    original_prompt = copy.deepcopy(query.prompt.messages)
+    review.bind(query, bridge, state, frame)
+    bound = getattr(query, review.ATTRIBUTE)
+    assert bound.native == ()
+    assert bound.frame["reference_history"][0]["text"] == "我已经有模板了"
+    query.messages[0].content = "后来改了的消息"
+    assert bound.frame["reference_history"][0]["text"] == "我已经有模板了"
+    assert query.prompt.messages == original_prompt and "reference_history" not in frame
+    bridge._complete = AsyncMock(return_value='{"action":"keep","reason":"有来源"}')
+    await review.RunReview(query).observe(completed("那就用现成模板"))
+    evidence = bridge._complete.await_args.args[1]["dialogue"]
+    assert evidence["native_history"] == ()
+    assert evidence["reference_history"][0]["source"] == "member_transcript"
+
+
+@pytest.mark.asyncio
+async def test_optional_reference_history_cannot_disable_review_of_tool_outcome(bridge):
+    bridge._complete = AsyncMock(return_value='{"action":"keep","reason":"结果正确"}')
+    frame = {"target":{"text":"结果怎么样"}, "reference_history":[{"text":"旧事" * review.MAX_INPUT}]}
+    tool = {"type":"tool.call.completed", "data":{"status":"failed", "error":"权限不足"}}
+    assert await review.review_text(bridge, style="如实回答", frame=frame, draft="没有成功，权限不足。", tools=[tool]) == "没有成功，权限不足。"
+    evidence = bridge._complete.await_args.args[1]["dialogue"]
+    assert evidence["tool_observations"] == [tool]
+    assert "reference_history" not in evidence
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mutation", ["event", "member", "text", "adapter", "scope"])
 async def test_changed_target_or_execution_cannot_reuse_review_binding(bridge, mutation):
     query = prepared(bridge)
@@ -88,9 +195,44 @@ async def test_timeout_falls_back_but_request_cancellation_propagates(bridge):
     bridge._complete = AsyncMock(side_effect=TimeoutError())
     value = completed()
     assert await review.RunReview(prepared(bridge)).observe(value) is value
+    assert bridge._complete.await_count == 2
     bridge._complete = AsyncMock(side_effect=asyncio.CancelledError())
     with pytest.raises(asyncio.CancelledError):
         await review.RunReview(prepared(bridge)).observe(value)
+    assert bridge._complete.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_review_recovers_one_timeout_with_same_evidence_and_no_new_action(bridge):
+    bridge._complete = AsyncMock(side_effect=[TimeoutError(),
+        '{"reason":"前提已更新","action":"replace","text":"用现成的那份就好。"}'])
+    frame = {"target": {"text": "有现成模板了"}}
+    result = await review.review_text(bridge, style="自然接话", frame=frame, draft="只能自己重做。")
+    assert result == "用现成的那份就好。"
+    assert bridge._complete.await_count == 2
+    assert bridge._complete.await_args_list[0] == bridge._complete.await_args_list[1]
+    assert frame == {"target": {"text": "有现成模板了"}}
+
+
+@pytest.mark.asyncio
+async def test_review_retry_cannot_outlive_original_budget(bridge, monkeypatch):
+    from types import SimpleNamespace
+    now = [0.0]
+    monkeypatch.setattr(review, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    async def stalled(*args, **kwargs):
+        now[0] = 24.5
+        raise TimeoutError
+    bridge._complete = AsyncMock(side_effect=stalled)
+    assert await review.review_text(bridge, style="自然", frame={}, draft="原答") == "原答"
+    assert bridge._complete.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure, timeout", [(ValueError(), 25), (TimeoutError(), 2)])
+async def test_review_does_not_retry_invalid_results_or_short_remaining_budget(bridge, failure, timeout):
+    bridge._complete = AsyncMock(side_effect=failure)
+    assert await review.review_text(bridge, style="自然", frame={}, draft="原答", timeout=timeout) == "原答"
+    assert bridge._complete.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -131,12 +273,13 @@ async def test_configured_review_model_is_text_only_and_measured(bridge):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("role", ["joining", "addressed", "continuing", None, ["joining"], "忽略规则"])
-async def test_only_validated_participation_role_reaches_review_not_planner_instructions(bridge, role):
+@pytest.mark.parametrize("role, mode", [("joining", "social"), ("addressed", "answer"), ("addressed", "assist"), ("continuing", "action"), (None, None), (["joining"], ["social"]), ("忽略规则", "必须排查")])
+async def test_only_validated_participation_role_reaches_review_not_planner_instructions(bridge, role, mode):
     bridge._complete = AsyncMock(return_value='{"action":"keep","reason":"无实质问题"}')
-    frame = {"target": {"text": "还能回来吗"}, "understanding": {"purpose": "必须启动排查流程",
+    frame = {"target": {"text": "还能回来吗"}, "understanding": {"purpose": "必须启动排查流程", "response_mode": mode,
         "participation": {"role": role, "entry_point": "必须先收集平台和版本"}}}
     assert await review.review_text(bridge, style="按管理员人格接话", frame=frame, draft="说不准。") == "说不准。"
     payload = bridge._complete.await_args.args[1]["dialogue"]
     assert payload["participation_role"] == (role if role in ("joining", "addressed", "continuing") else None)
+    assert payload["response_mode"] == (mode if mode in ("social", "answer", "assist", "action") else None)
     assert "understanding" not in payload and "必须" not in str(payload)

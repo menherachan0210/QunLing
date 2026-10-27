@@ -43,3 +43,27 @@ async def test_invalid_interpretation_falls_back_without_replacing_request(bridg
     host.prepare_prompt(query)
     assert any(m.content.startswith(FRAME_MARKER) for m in query.prompt.messages)
     assert bridge._complete.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_first_utterance_is_interpreted_with_selected_persona_without_inventing_history(bridge):
+    query = query_for(bridge, event("我这乐坛新人还能复出吗", explicit=True))
+    state, _ = bridge.request_context(query.message_event)
+    state.update(persona="熟人之间接梗，不拿玩笑开工单", default_style="未选用的正式公文语气",
+                 examples=[["随口感叹", "随口接话"]], default_examples=[])
+    bridge.request_context = lambda _: (state, [])
+    query.messages = []
+    bridge._complete = AsyncMock(return_value=json.dumps({"purpose":"自嘲很久没练琴，邀请接话",
+        "context_message_ids":[], "information_needs":[]}))
+    await dialogue_focus.prepare(query)
+    system, payload = bridge._complete.await_args.args
+    assert state["persona"] in system and "随口接话" in system
+    assert state["default_style"] not in system
+    assert payload["messages"] == [] and payload["older_transcript"] == []
+    assert payload["target"]["text"] == "我这乐坛新人还能复出吗"
+    host.prepare_prompt(query)
+    frame = json.loads(next(m.content for m in query.prompt.messages if m.content.startswith(FRAME_MARKER)).split("\n", 1)[1])
+    assert frame["understanding"]["purpose"] == "自嘲很久没练琴，邀请接话"
+    assert frame["understanding"]["information_needs"] == []
+    bridge._complete.assert_awaited_once()
+    bridge.bot.adapter.send_message.assert_not_awaited()

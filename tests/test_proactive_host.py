@@ -370,6 +370,23 @@ async def test_coverage_review_keeps_question_authors_quotes_and_each_confirmed_
 
 
 @pytest.mark.asyncio
+async def test_delivery_review_keeps_late_ingress_separate_from_original_target_and_receipts(bridge):
+    from qunling.proactive.engine import ConversationContext, Decision, Message
+    target = Message("bot", "30000", "old", "alice", "需要手工处理", time.time())
+    update = Message("bot", "30000", "new", "alice", "找到现成方案了", time.time())
+    context = ConversationContext("bot", "30000", "natural", "自然接话", (target,), (), "", None, None,
+                                  reply_candidate_ids=("old",), new_messages=(update,))
+    bridge._complete = AsyncMock(return_value='{"action":"refresh","changed_message_ids":["new"]}')
+    assert await bridge.reconcile(context, Decision("reply", "old"), "仍需要手工处理", []) == {
+        "action": "refresh", "changed_message_ids": ["new"]}
+    payload = bridge._complete.await_args.args[1]
+    assert payload["decision"]["target_message_id"] == "old"
+    assert [m["message_id"] for m in payload["context"]["messages"]] == ["old"]
+    assert [m["message_id"] for m in payload["new_messages"]] == ["new"]
+    assert payload["delivered"] == []
+
+
+@pytest.mark.asyncio
 async def test_explicit_prompt_gets_frozen_same_group_context_and_actual_capabilities(bridge):
     first = event("我打算明天搬家", sender="20001", message_id="history")
     first.timestamp -= 1
