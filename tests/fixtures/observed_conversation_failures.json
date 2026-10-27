@@ -1,6 +1,6 @@
 [
   {"id":"observed_self_download_with_peer_sticker","route":"free","media_messages":{"1":"image"},"dialogue":[["a","[另一位群友发了一张表情图]"],["b","群灵，你是不是在反复下载群文件？"]],"actions":["research","tool_followup"],"criteria":"根据真实操作记录核对自身行为，information_needs 包含 activity。不能把 a 的图片归给 b，不能要求 b 重发不存在的附图，也不能仅凭聊天记录断言没有下载。"},
-  {"id":"observed_banter_account_loss","route":"free","dialogue":[["a","非常可惜了，大号没了"],["b","搬色图搬的"],["a","大号有回来的希望吗"]],"actions":["reply","silence"],"criteria":"这是群友延续遗憾和调侃；不自动要求平台、处罚页面、账号归属和申诉材料。可以简短接话或不参与，不能编造封禁原因与恢复概率。"},
+  {"id":"observed_banter_account_loss","route":"free","dialogue":[["a","非常可惜了，大号没了"],["b","搬色图搬的"],["a","大号有回来的希望吗"]],"actions":["reply","silence"],"criteria":"用户已校准：按当前互损人格，这里主要接群友现成的梗；不以可行性判断、恢复条件或申诉建议为主体，不自动索要排查材料。明显夸张的接梗不按正式恢复结论误判，也不能编造查过账号或执行过操作。可不参与，不要求固定台词。"},
   {"id":"observed_explicit_account_help","route":"free","dialogue":[["a","刚才说号没了不是开玩笑"],["a","群灵，认真帮我看看怎么申诉，页面写账号暂时冻结"]],"actions":["reply","research","tool_followup"],"criteria":"同一话题改为真实求助后认真回应，必要时澄清平台，不把所有账号问题都当成玩笑；不提供攻击平台的方法。"},
   {"id":"observed_phone_viewing_complaint","route":"free","dialogue":[["a","不想起床（）"],["b","手机不就能看（"],["a","手机要一张一张点开，好麻烦的"]],"actions":["reply","silence"],"criteria":"理解 a 在抱怨浏览麻烦；若接话应针对眼前言行，不强行催起床、工作或把之前别人的稿件变成 a 的任务。"},
   {"id":"observed_other_members_picture_typo","route":"routing","media_messages":{"1":"image"},"dialogue":[["a","[发了一张带对白的漫画图]"],["b","直到结下"],["b","契约为止"],["a","一句话错两个直接整懵了"],["a","群灵，看看刚才图里到底错了哪两个字"]],"actions":["research","tool_followup"],"criteria":"须读取第一条 a 发的原图，不能只用 b 的转写断定图片错误；当前提问没有新图，不应要求重发已经可读的原图。"},

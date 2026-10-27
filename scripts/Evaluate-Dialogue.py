@@ -37,6 +37,9 @@ def load_cases(path):
             raise ValueError("Invalid replay context source")
         if case.get("context_source") == "member_history" and case["route"] != "direct":
             raise ValueError("Member-only history requires a direct request")
+        if type(case.get("mention_bot", False)) is not bool or (
+                case.get("mention_bot") and case["route"] not in {"direct", "research"}):
+            raise ValueError("Explicit bot mentions require a direct or research replay")
         names.add(case["id"])
         for actor, text in [*case["dialogue"], *case.get("followups", [])]:
             if not isinstance(actor, str) or not isinstance(text, str) or not text:
@@ -109,7 +112,7 @@ async def replay(case, provider, label):
     from qunling.proactive import host
     from qunling.proactive.engine import ConversationContext, Decision, Message, validate_decision
     from langbot_plugin.api.entities.builtin.provider.message import Message as ModelMessage
-    from langbot_plugin.api.entities.builtin.platform.message import Plain
+    from langbot_plugin.api.entities.builtin.platform.message import At, Plain
     from langbot.pkg.api.http.context import ExecutionContext
     from qunling import group_memory
     from qunling.group_context import metadata
@@ -236,6 +239,7 @@ async def replay(case, provider, label):
                     research = case["route"] == "research" or (handoff and row["action"] != "task_request")
                     state = {"group_id": group_id, "questioner_id": target.sender_id, "participant_id": target.sender_id,
                         "current_message_id": target.message_id, "mode": mode, "free_chat_enabled": True,
+                        "actually_mentioned": case.get("mention_bot", False),
                         "display_name": display_name, "persona": persona, "default_style": settings.get("default_style", ""), "examples": samples,
                         "default_examples": settings.get("default_examples", []), "topic_message_ids": list(attributes["topic_message_ids"]),
                         "focus_message_ids": list(attributes["focus_message_ids"]), "covered_message_ids": covered,
@@ -245,7 +249,9 @@ async def replay(case, provider, label):
                     if case.get("context_source") != "member_history":
                         bridge.request_context = lambda _: (state, [asdict(m) for m in messages[:-1]])
                     incoming = NS(group=NS(id=group_id), sender=NS(id=target.sender_id, nickname=target.sender_name),
-                                  message_id=target.message_id, timestamp=target.timestamp, message_chain=[Plain(text=target.text)])
+                                  message_id=target.message_id, timestamp=target.timestamp,
+                                  message_chain=([At(target=int(bot.adapter.bot_account_id))] if case.get("mention_bot") else [])
+                                                + [Plain(text=target.text)])
                     configured = getattr(provider, "runner", {}).get("prompt", [{"role": "system", "content": PROMPT}])
                     query = NS(adapter=bot.adapter, message_event=incoming, _execution_context=execution,
                                prompt=NS(messages=[ModelMessage(**item) for item in configured]))

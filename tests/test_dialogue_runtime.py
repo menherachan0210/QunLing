@@ -105,7 +105,8 @@ async def test_runtime_compaction_persists_conversation_summary(runtime, monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("context_source", ["prepared_group", "member_history"])
-async def test_final_review_is_the_reply_and_the_followup_history(runtime, monkeypatch, context_source):
+@pytest.mark.parametrize("mention_bot", [False, True])
+async def test_final_review_is_the_reply_and_the_followup_history(runtime, monkeypatch, context_source, mention_bot):
     import litellm
     from langbot.pkg.provider.modelmgr.requesters import litellmchat
     from test_dialogue_replay import replay
@@ -121,12 +122,14 @@ async def test_final_review_is_the_reply_and_the_followup_history(runtime, monke
         return litellm.ModelResponse(model="gpt-4.1", choices=[{"message": {"role": "assistant", "content": answer}}])
 
     monkeypatch.setattr(litellmchat, "acompletion", completion)
-    case = {"id": "review-history", "route": "direct", "context_source": context_source, "dialogue": [["a", "换个话题"]],
+    case = {"id": "review-history", "route": "direct", "context_source": context_source, "mention_bot": mention_bot,
+        "dialogue": [["a", "换个话题"]],
         "followups": [["a", "接着说"]], "criteria": "历史必须保存实际发出的回复", "tools": []}
     result = await replay.replay(case, runtime, "offline")
     assert [turn.get("reply") for turn in result["turns"]] == ["接着聊新话题。"] * 2, result
     history = str(runtime.assembly_reports[1]["messages"])
     assert "接着聊新话题。" in history and "原始草稿：" not in history
+    assert '"actually_mentioned": ' + str(mention_bot).lower() in history
     persisted = [json.loads(row[0]) for row in runtime.history.execute("SELECT item FROM turns ORDER BY seq")]
     assert [item["content_json"]["content"] for item in persisted if item["role"] == "assistant"] == ["接着聊新话题。"] * 2
     # Host understanding and final review must see the same canonical history

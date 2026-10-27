@@ -1,0 +1,54 @@
+[
+  {
+    "id": "calibrated_account_banter_then_help",
+    "route": "free",
+    "mode": "natural",
+    "tools": [],
+    "dialogue": [["a", "非常可惜了，大号没了"], ["b", "搬色图搬的"], ["a", "大号有回来的希望吗"]],
+    "followups": [["a", "群灵，认真帮我看看怎么申诉，页面写账号暂时冻结"], ["a", "行，先不聊号了，今晚吃啥"]],
+    "criteria": "第一轮按现有互损人格主要接梗，不把简短条件判断加一句吐槽当作已满足偏好。第二轮切换实际求助，可询问必要的平台和提示信息。第三轮转向吃饭，不继续解释封禁或申诉；没有固定台词要求。"
+  },
+  {
+    "id": "calibrated_direct_banter_then_real_worry",
+    "route": "direct",
+    "mention_bot": true,
+    "context_source": "member_history",
+    "tools": [],
+    "dialogue": [["a", "大号没了，搬色图搬的。大号还有回来的希望吗"]],
+    "followups": [["a", "哈哈，色图事业可不能亡"], ["a", "但里面还有我爸以前发给我的照片，我真的怕再也拿不回来了"]],
+    "criteria": "直接对机器人说话也可以是互损接梗，前两轮不擅自布置恢复任务。第三轮语境出现真实担忧，即使没说认真也要停止拿丢照片开玩笑，不保证能找回，不虚构查询结果。"
+  },
+  {
+    "id": "calibrated_rank_banter_then_topic_change",
+    "route": "free",
+    "mode": "natural",
+    "tools": [],
+    "dialogue": [["a", "今天排位十连跪"], ["b", "峡谷慈善家"], ["a", "我这段位还有救吗"]],
+    "followups": [["a", "不打了，我下楼拿外卖"]],
+    "criteria": "互损人格以接住慈善家和十连跪的笑点为主，不自动安排练习、录像复盘和上分计划。换外卖话题后不继续追问战绩或讲改进方法。"
+  },
+  {
+    "id": "calibrated_gentle_persona_is_not_roast",
+    "route": "direct",
+    "tools": [],
+    "persona": "你是温和体贴的朋友，能理解自嘲，会轻松接话但不挖苦人，不急着安排解决步骤。朋友真正担心时认真听，表达自然。",
+    "dialogue": [["a", "今天排位十连跪，我这段位还有救吗，哈哈"]],
+    "criteria": "识别自嘲并温和接话，不被互损人格的校准覆盖；不提供未经请求的上分方案，不照搬其他人格的刻薄笑话。"
+  },
+  {
+    "id": "calibrated_formal_real_question",
+    "route": "direct",
+    "tools": [],
+    "persona": "你说话正式、克制，回答具体问题时清楚说明已知和未知，不开玩笑，不讽刺，避免无关的行动建议。",
+    "dialogue": [["a", "平台提示账号暂时冻结。这和永久封禁有什么区别？"]],
+    "criteria": "这是正式人格下的实际概念问题，应说明区别和平台规则的不确定性，不因账号词汇就强制接梗。"
+  },
+  {
+    "id": "calibrated_practical_help_without_serious_keyword",
+    "route": "free",
+    "mode": "natural",
+    "tools": [],
+    "dialogue": [["a", "公司的工作账号登不上了，客户今天还等着收报价"], ["a", "群里有人知道该怎么办吗？"]],
+    "criteria": "公开实际求助含明确工作影响，应提供有用回应并澄清必要信息，不能等出现认真这个词才帮助，也不能只拿客户和丢号开玩笑。"
+  }
+]
