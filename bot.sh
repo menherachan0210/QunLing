@@ -42,11 +42,11 @@ case "$action" in
       "${compose[@]}" up -d --build
       "${compose[@]}" run --rm --no-deps updater adopt
     fi
-    echo "Open this private setup link (use SSH forwarding on a server):"
-    "${compose[@]}" run --rm --no-deps wizard access
+    echo "Open this private management link:"
+    "${compose[@]}" exec -T wizard python -m bootstrap.server --url
     ;;
   down) guard_update; "${compose[@]}" down ;;
   status) "${compose[@]}" ps ;;
   logs) "${compose[@]}" logs --tail=100 app wizard napcat ;;
-  url) "${compose[@]}" run --rm --no-deps wizard access ;;
+  url) "${compose[@]}" exec -T wizard python -m bootstrap.server --url ;;
 esac

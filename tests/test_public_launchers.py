@@ -44,7 +44,7 @@ docker() {
     info) printf '%s\n' "$QQBOT_TEST_ENGINE" ;;
     inspect) [[ "$QQBOT_TEST_UPDATE_VOLUME" == 1 ]] ;;
     resume) return "$QQBOT_TEST_RESUME_CODE" ;;
-    run) printf '%s\n' 'http://127.0.0.1:5310/#token=offline-token' ;;
+    exec) printf '%s\n' 'http://127.0.0.1:5310/#token=offline-token' ;;
   esac
 }
 source "$QQBOT_TEST_SCRIPT" "$QQBOT_TEST_ACTION"
@@ -65,7 +65,7 @@ function global:docker {
     if ($operation -eq 'info') { Write-Output $env:QQBOT_TEST_ENGINE }
     if ($operation -eq 'inspect' -and $env:QQBOT_TEST_UPDATE_VOLUME -ne '1') { $global:LASTEXITCODE = 1; return }
     if ($operation -eq 'resume') { $global:LASTEXITCODE = [int]$env:QQBOT_TEST_RESUME_CODE; return }
-    if ($operation -eq 'run') { Write-Output 'http://127.0.0.1:5310/#token=offline-token' }
+    if ($operation -eq 'exec') { Write-Output 'http://127.0.0.1:5310/#token=offline-token' }
 }
 function global:Start-Process {
     $record = @{ browser = @($args) }
@@ -222,11 +222,11 @@ def operations(calls):
 def test_up_builds_before_requesting_link_and_quotes_compose_path(launch, kind):
     result, calls, browsers, compose = launch(kind)
     assert result.returncode == 0, result.stderr
-    assert operations(calls) == ["version", "info", "up", "adopt", "run"]
+    assert operations(calls) == ["version", "info", "up", "adopt", "exec"]
     commands = [args for args in calls if args[:2] == ["compose", "-f"]]
     assert commands[0][3:] == ["up", "-d", "--build"]
     assert commands[1][3:] == ["run", "--rm", "--no-deps", "updater", "adopt"]
-    assert commands[2][3:] == ["run", "--rm", "--no-deps", "wizard", "access"]
+    assert commands[2][3:] == ["exec", "-T", "wizard", "python", "-m", "bootstrap.server", "--url"]
     for args in commands:
         assert args[:2] == ["compose", "-f"]
         path = args[2]
@@ -261,7 +261,7 @@ def test_up_builds_before_requesting_link_and_quotes_compose_path(launch, kind):
         ("info", ["version", "info"]),
         ("up", ["version", "info", "up"]),
         ("adopt", ["version", "info", "up", "adopt"]),
-        ("run", ["version", "info", "up", "adopt", "run"]),
+        ("exec", ["version", "info", "up", "adopt", "exec"]),
     ],
 )
 def test_up_stops_on_failure_without_opening_browser(launch, kind, failed, expected):
@@ -284,7 +284,7 @@ def test_unsupported_engines_never_build(launch, kind, engine):
 def test_up_resumes_saved_snapshot_without_building_local_checkout(launch, kind):
     result, calls, _, _ = launch(kind, update_volume=True, project="isolated-bot")
     assert result.returncode == 0, result.stderr
-    assert operations(calls) == ["version", "info", "guard", "resume", "run"]
+    assert operations(calls) == ["version", "info", "guard", "resume", "exec"]
     inspections = [args for args in calls if args[0] == "volume"]
     assert inspections
     assert all(
@@ -312,7 +312,7 @@ def test_missing_snapshot_code_three_falls_back_to_first_build(launch, kind):
         "resume",
         "up",
         "adopt",
-        "run",
+        "exec",
     ]
 
 
@@ -354,7 +354,7 @@ def test_explicit_rebuild_builds_local_source_then_adopts_new_snapshot(
     expected = ["version", "info"]
     if update_volume:
         expected.append("guard")
-    assert operations(calls) == expected + ["up", "adopt", "run"]
+    assert operations(calls) == expected + ["up", "adopt", "exec"]
     assert next(args for args in calls if args[-1] == "adopt")[3:] == [
         "run",
         "--rm",
@@ -386,7 +386,7 @@ def test_rebuild_failure_does_not_adopt_failed_build_or_show_setup(
         ("down", ["down"]),
         ("status", ["ps"]),
         ("logs", ["logs", "--tail=100", "app", "wizard", "napcat"]),
-        ("url", ["run", "--rm", "--no-deps", "wizard", "access"]),
+        ("url", ["exec", "-T", "wizard", "python", "-m", "bootstrap.server", "--url"]),
     ],
 )
 def test_management_commands_preserve_volumes_and_do_not_build(
@@ -407,8 +407,8 @@ def test_management_commands_preserve_volumes_and_do_not_build(
 @pytest.mark.parametrize(
     "wrapper,expected,fail",
     [
-        ("Start-Bot.ps1", ["version", "info", "up", "adopt", "run"], "up"),
-        ("Open-Bot.ps1", ["version", "run"], "run"),
+        ("Start-Bot.ps1", ["version", "info", "up", "adopt", "exec"], "up"),
+        ("Open-Bot.ps1", ["version", "exec"], "exec"),
         ("Stop-Bot.ps1", ["version", "down"], "down"),
     ],
 )

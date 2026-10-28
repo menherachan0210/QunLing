@@ -1,0 +1,47 @@
+# Replace 203.0.113.8 with the server's public IP before loading this file.
+# Included inside nginx's http block. For an IP URL this must be the default
+# TCP TLS virtual host; existing domain virtual hosts keep their SNI routing.
+limit_req_zone $binary_remote_addr zone=qunling_login:1m rate=10r/m;
+
+server {
+    listen 80;
+    server_name 203.0.113.8;
+    access_log off;
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/lib/qunling-acme;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+    location / { return 308 https://203.0.113.8$request_uri; }
+}
+
+server {
+    listen 443 ssl default_server;
+    server_name 203.0.113.8;
+    ssl_certificate /etc/qunling-tls/live/qunling-console/fullchain.pem;
+    ssl_certificate_key /etc/qunling-tls/live/qunling-console/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:QunLingTLS:5m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+    client_max_body_size 384k;
+    access_log off;
+    if ($host != 203.0.113.8) { return 444; }
+    location / {
+        proxy_pass http://127.0.0.1:5310;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_read_timeout 70s;
+    }
+    location = /api/session {
+        limit_req zone=qunling_login burst=10 nodelay;
+        limit_req_status 429;
+        proxy_pass http://127.0.0.1:5310;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}

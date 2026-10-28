@@ -785,14 +785,18 @@ export function System({ active }: { active: boolean }) {
           </>
         ) : (
           <Section
-            title="一个入口管理群灵"
-            description="使用桌面的“群灵管理”入口，自动建立连接并打开此页。"
+            title="管理网址"
+            description="将这个地址加入浏览器书签，下次直接打开。"
           >
             <div className="access-note">
-              <h3>无需手工保持终端窗口</h3>
+              <h3>
+                <a href={s?.management_url || location.origin}>
+                  {s?.management_url || location.origin}
+                </a>
+              </h3>
               <p>
-                管理连接在本机后台运行，连接断开后自动恢复。群聊、模型、记忆和
-                QQ 登录都在这个入口完成。
+                服务运行在服务器上。首次登录后，同一浏览器保留登录 30 天。
+                群聊、模型、记忆和 QQ 登录都在网页中管理。
               </p>
             </div>
             <div className="detail-rows">

@@ -17,10 +17,10 @@ function Invoke-BotCompose {
     if ($LASTEXITCODE -ne 0) { throw 'Docker command failed. Review the output above.' }
 }
 function Show-BotSetup {
-    $taskOutput = @(& docker @taskCompose run --rm --no-deps wizard access)
+    $taskOutput = @(& docker @taskCompose exec -T wizard python -m bootstrap.server --url)
     if ($LASTEXITCODE -ne 0) { throw 'Setup link unavailable. Run Start-Bot.cmd first.' }
     $taskOutput | ForEach-Object { Write-Host $_ }
-    $taskLink = $taskOutput | Where-Object { $_ -match '^http://127\.0\.0\.1:5310/#token=[A-Za-z0-9_-]+$' } | Select-Object -Last 1
+    $taskLink = $taskOutput | Where-Object { $_ -match '^https?://[^\s/?#]+/#token=[A-Za-z0-9_-]+$' } | Select-Object -Last 1
     if ($OpenBrowser -and $taskLink) { Start-Process $taskLink }
 }
 function Test-BotUpdateVolume {

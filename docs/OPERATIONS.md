@@ -4,11 +4,13 @@
 
 ## 设置入口
 
-新版后台将群聊人格、试聊、成员记忆、模型分工、任务记录、知识来源、QQ 登录和常用高级参数放在同一个 5310 入口。已安装 Windows 桌面“群灵管理”的电脑可直接双击打开；连接在后台维护并自动重连，无需保留手工 SSH 窗口。浏览器登录保留 30 天，退出登录立即撤销当前会话。桌面入口的本机凭据受 Windows 用户保护，不随 Git 或发布包分发，详见[管理台说明](../frontend/README.md)。
+新版后台将群聊人格、试聊、成员记忆、模型分工、任务记录、知识来源、QQ 登录和常用高级参数放在同一个网页入口。服务器配置一次 HTTPS 网址后，直接用浏览器访问即可，无需桌面程序或保持 SSH 连接。浏览器登录保留 30 天，退出登录立即撤销当前会话。没有域名也可使用 IP 地址证书，配置与自动续期见[固定 HTTPS 入口](../deploy/https/README.md)。
 
 人格编辑支持草稿保留与当前草稿试聊。试聊不会发送到 QQ 或写入正式记忆；需要工具操作时只提示，不在试聊里执行。模型保存会等待服务器确认目标配置版本，不能把提交成功等同于应用完成。常用的工具轮数、请求超时和推理强度可在“系统设置 → 高级参数与组件”直接修改。
 
-未安装便捷入口时，下面的手工连接方式仍可使用。只有确实需要 LangBot 或 NapCat 原生管理页时，才需要额外转发对应端口。
+已配置固定网址时，在服务器终端执行 `sudo docker exec qq-ai-bot-wizard-1 python -m bootstrap.server --url` 可获取包含登录口令的专属链接；仅需首次获取一次，以后直接打开固定网址。地址保存于 `setup-state` 卷的 `public-access.json`，不会因更新重新变回 localhost。
+
+尚未配置 HTTPS 时，下面的手工连接方式仍可使用。只有确实需要 LangBot 或 NapCat 原生管理页时，才需要额外转发对应端口。
 
 在服务器项目目录执行 `bash bot.sh url`，没有 Docker 权限时用 `sudo bash bot.sh url`，即可重新显示带 `#token=` 的完整设置链接，无需重启机器人。Windows 本机容器部署在项目根目录执行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Public-Bot.ps1" -Action url -OpenBrowser`，或直接双击 `Open-Bot.cmd`。
 

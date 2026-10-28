@@ -29,6 +29,7 @@ from bootstrap.state import State
 from bootstrap.update_client import REVISION, UpdateClient, UpdateError
 from bootstrap.capabilities import Checks
 from bootstrap.sessions import Sessions, cookie as session_cookie
+from bootstrap.access import Access
 
 ROOT = Path(__file__).resolve().parents[1]
 QQ_STATUS_TTL = 30
@@ -427,6 +428,7 @@ class SetupHTTPServer(ThreadingHTTPServer):
         super().__init__(address, Handler)
         self.manager = manager
         self.sessions = Sessions(manager.state, manager.secrets["setup_token"])
+        self.access = Access.read(manager.state)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -440,6 +442,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             host = urlsplit("//" + self.headers.get("Host", "")).hostname
             allowed = {"localhost", "127.0.0.1", "::1"}
+            if self.server.access.hostname:
+                allowed.add(self.server.access.hostname)
             allowed.update(
                 filter(None, os.environ.get("QQBOT_ALLOWED_HOSTS", "").split(","))
             )
@@ -502,7 +506,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if not self._trusted_host():
-            return self._send(403, {"error": "请通过本机地址或 SSH 隧道访问设置页。"})
+            return self._send(403, {"error": "请使用已配置的管理网址访问。"})
         path = urlsplit(self.path).path
         web_root = ROOT / "bootstrap/web"
         if path == "/" and (web_root / "index.html").is_file():
@@ -540,7 +544,10 @@ class Handler(BaseHTTPRequestHandler):
                 401, {"error": "请使用启动命令显示的专属设置链接打开此页面。"}
             )
         if path == "/api/status":
-            return self._send(200, self.server.manager.snapshot())
+            value = self.server.manager.snapshot()
+            if self.server.access.origin:
+                value = {**value, "management_url": self.server.access.origin}
+            return self._send(200, value)
         if path in {"/api/runtime", "/api/system"}:
             try:
                 operation = runtime.settings if path == "/api/runtime" else runtime.health
@@ -599,9 +606,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._trusted_host() or (self.path != "/api/session" and not self._authorized()):
             return self._reject_post(403, {"error": "未授权。"})
         origin = self.headers.get("Origin")
-        if origin != "http://" + self.headers.get(
-            "Host"
-        ) and origin != "https://" + self.headers.get("Host"):
+        if not self.server.access.valid_origin(self.headers.get("Host", ""), origin):
             return self._reject_post(403, {"error": "来源校验失败，请从设置页操作。"})
         if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
             return self._reject_post(415, {"error": "需要 JSON 请求。"})
@@ -613,7 +618,8 @@ class Handler(BaseHTTPRequestHandler):
             self.connection.settimeout(10)
             body = json.loads(self.rfile.read(size))
             if self.path == "/api/session":
-                if not self.server.sessions.allow_attempt(self.client_address[0]):
+                peer = self.server.access.client(self.client_address[0], self.headers)
+                if not self.server.sessions.allow_attempt(peer):
                     return self._send(429, {"error": "尝试过于频繁，请一分钟后重试。"})
                 if not isinstance(body, dict) or set(body) != {"token"} or not isinstance(body["token"], str):
                     return self._send(400, {"error": "请输入管理口令。"})
@@ -623,7 +629,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"authenticated": True}, cookie=session_cookie(value, secure=origin.startswith("https://")))
             elif self.path == "/api/session/logout":
                 self.server.sessions.revoke(self.headers.get("Cookie"))
-                return self._send(200, {"authenticated": False}, cookie=session_cookie("", clear=True))
+                return self._send(200, {"authenticated": False}, cookie=session_cookie("", clear=True, secure=origin.startswith("https://")))
             elif self.path == "/api/preview":
                 return self._send(200, console.preview(self.server.manager, body))
             elif self.path == "/api/runtime":
@@ -663,7 +669,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--url", action="store_true", help="Print the private local setup link"
+        "--url", action="store_true", help="Print the private management link"
     )
     args = parser.parse_args()
     state = State(os.environ.get("QQBOT_STATE_DIR", str(ROOT / ".local/public-setup")))
@@ -671,7 +677,8 @@ def main():
         values = state.read("secrets.json", {})
         if not values.get("setup_token"):
             raise SystemExit("初始化尚未完成，请稍后重试。")
-        print("http://127.0.0.1:5310/#token=" + values["setup_token"])
+        origin = Access.read(state).origin or "http://127.0.0.1:5310"
+        print(origin + "/#token=" + values["setup_token"])
         return
     manager = SetupManager(
         state,
