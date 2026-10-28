@@ -11,6 +11,8 @@ import time
 
 from qunling.proactive.config import validate as validate_config
 
+TRIAL_CONTEXT = '当前是管理台中的一对一试聊：输入的成员发言都直接对机器人说，按 addressed 或 continuing 理解参与关系。人格、消息含义和资料需求照常判断；试聊不执行工具或保存设置。'
+
 
 def validate(value):
     if not isinstance(value, dict) or value.get('action') not in {'start', 'status', 'cancel'}:
@@ -93,7 +95,7 @@ async def run_trial(bot, values):
     preference = (reply_preferences.get(live.preference_key(group), actor) if values['use_memory'] else
                   {'mode': 'normal', 'rule': '', 'revision': '0', 'sender_id': actor})
     profiles = await recall_group_memory(bot, group, actor, target.text, mode='profiles') if values['use_memory'] else {}
-    raw = await complete(JUDGE_PROMPT + '\n\n' + reply_preferences.JUDGE_PROTOCOL + '\n\n' + style,
+    raw = await complete(JUDGE_PROMPT + '\n\n' + reply_preferences.JUDGE_PROTOCOL + '\n\n' + style + '\n\n' + TRIAL_CONTEXT,
         {**{k: v for k, v in asdict(ctx).items() if k not in {'persona','examples','default_style','default_examples'}},
          'bot_account_id': account, 'known_profiles': [profiles], 'member_reply_preferences': [preference]}, stage='judge')
     choice = decode_object(raw)
@@ -112,7 +114,7 @@ async def run_trial(bot, values):
     limit = reply_character_limit(ctx, decision)
     system = GENERATE_PROMPT + '\n\n' + group_persona_prompt(ctx.display_name, ctx.persona, ctx.default_style,
         examples=ctx.examples, default_examples=ctx.default_examples, include_examples=False)
-    system += '\n' + reply_preferences.PROTOCOL + '\n仅 reply_preference_saved 回执证明本轮约定已保存；没有回执不能声称已修改。'
+    system += '\n' + reply_preferences.PROTOCOL + '\n仅 reply_preference_saved 回执证明本轮约定已保存；没有回执不能声称已修改。\n' + TRIAL_CONTEXT
     raw = await complete(system, {'dialogue': frame,
         'examples': selected_examples(ctx.persona, ctx.examples, ctx.default_examples),
         'output': {'reply_character_limit': limit, 'tools_available': False, 'read_only_handoff_available': False}})

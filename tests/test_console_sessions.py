@@ -60,7 +60,8 @@ def test_built_assets_have_types_cache_policy_and_no_traversal(endpoint):
     for path in scripts:
         response=http.get(url+path)
         assert response.status_code==200 and 'immutable' in response.headers['Cache-Control']
-        assert ('javascript' if path.endswith('.js') else 'text/css') in response.headers['Content-Type']
+        expected='javascript' if path.endswith('.js') else ('image/svg+xml' if path.endswith('.svg') else 'text/css')
+        assert expected in response.headers['Content-Type']
     for path in ('/assets/%2e%2e/server.py','/assets/../server.py','/assets/..%5csessions.py'):
         assert http.get(url+path).status_code in (401,404)
     notices=http.get(url+'/licenses.txt')

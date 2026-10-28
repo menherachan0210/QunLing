@@ -280,7 +280,7 @@ function Preview({
         </Button>
       </div>
       <div className="trial-context">
-        <span>复用群聊理解、生成与内容复核</span>
+        <span>模拟直接对话 · 使用本群人格与模型</span>
         <small>仅在此预览 · 不发到 QQ · 不写入记忆</small>
       </div>
       <details className="trial-options">

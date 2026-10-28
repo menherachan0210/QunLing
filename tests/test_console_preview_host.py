@@ -28,6 +28,7 @@ async def test_trial_uses_real_role_routing_draft_persona_and_review_without_mem
     result=await console_preview.run_trial(bridge.bot,values)
     assert result['reply']=='那就歇会儿。'
     assert values['config']['groups']['30000']['persona'] in result['persona']
+    assert console_preview.TRIAL_CONTEXT in provider.invoke_llm.await_args_list[0].kwargs['messages'][0].content
     assert [c.args[1] for c in bridge.bot.ap.model_mgr.get_model_by_uuid.await_args_list]==['fast','chat-model','review']
     assert all(c.kwargs['funcs']==[] and c.kwargs['extra_args']['tools'] is None for c in provider.invoke_llm.await_args_list)
     recall.assert_not_awaited();bridge.bot.adapter.send_message.assert_not_awaited()
