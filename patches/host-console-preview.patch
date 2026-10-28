@@ -1,0 +1,23 @@
+--- a/src/langbot/pkg/api/http/controller/groups/platform/bots.py
++++ b/src/langbot/pkg/api/http/controller/groups/platform/bots.py
+@@ -343,3 +343,20 @@
+                 return self.http_status(403, 'forbidden', '无权查看该机器人的请求记录。')
+             except (OSError, sqlite3.Error):
+                 return self.http_status(503, 'diagnostics_unavailable', '请求诊断存储暂不可用。')
++
++        @self.route(
++            '/<bot_uuid>/console/preview', methods=['POST'],
++            auth_type=group.AuthType.USER_TOKEN_OR_API_KEY, permission=Permission.RESOURCE_MANAGE,
++        )
++        async def console_preview(bot_uuid: str, request_context: RequestContext):
++            from qunling.console_preview import manage
++            from qunling.group_reset_host import MemoryResetError
++            try:
++                result = await manage(self.ap, request_context, bot_uuid, await quart.request.get_json(silent=True))
++                return self.success(data=result)
++            except MemoryResetError as exc:
++                return quart.jsonify(code=exc.code, error_code=exc.code, msg=str(exc)), exc.status
++            except ValueError:
++                return self.http_status(400, 'invalid_preview', '试聊参数无效，请刷新后重试。')
++            except PermissionError:
++                return self.http_status(403, 'forbidden', '无权试聊该机器人。')

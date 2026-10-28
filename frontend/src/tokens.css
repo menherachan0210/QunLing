@@ -1,0 +1,14 @@
+:root {
+  --font: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --canvas: #fcfcf9;
+  --surface: #fff;
+  --sidebar-bg: #f4f5ef;
+  --text: #30392c;
+  --text-secondary: #626e59;
+  --muted: #717b69;
+  --border: #e5e8de;
+  --hover: #f2f5ed;
+  --accent: #3f6851;
+  --accent-soft: #edf2e8;
+  --error: #b35b48;
+}

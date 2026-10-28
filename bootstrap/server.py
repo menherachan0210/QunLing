@@ -15,7 +15,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 from bootstrap.api import LangBotAPI, NapCatAPI, SetupError
-from bootstrap import console, diagnostics, proactive, knowledge
+from bootstrap import console, diagnostics, proactive, knowledge, runtime
 from bootstrap.configure import (
     adopt_tool_settings,
     configure,
@@ -28,6 +28,7 @@ from bootstrap.configure import (
 from bootstrap.state import State
 from bootstrap.update_client import REVISION, UpdateClient, UpdateError
 from bootstrap.capabilities import Checks
+from bootstrap.sessions import Sessions, cookie as session_cookie
 
 ROOT = Path(__file__).resolve().parents[1]
 QQ_STATUS_TTL = 30
@@ -137,6 +138,7 @@ class SetupManager:
             self.status.update(
                 stage="configuring", message="正在统一配置模型、工具和记忆。"
             )
+            return self.settings_revision(config)
 
     def settings_revision(self, config):
         import hashlib
@@ -424,6 +426,7 @@ class SetupHTTPServer(ThreadingHTTPServer):
     def __init__(self, address, manager):
         super().__init__(address, Handler)
         self.manager = manager
+        self.sessions = Sessions(manager.state, manager.secrets["setup_token"])
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -447,7 +450,8 @@ class Handler(BaseHTTPRequestHandler):
     def _authorized(self):
         supplied = self.headers.get("Authorization", "")
         expected = "Bearer " + self.server.manager.secrets["setup_token"]
-        return secrets.compare_digest(supplied.encode(), expected.encode())
+        return (secrets.compare_digest(supplied.encode(), expected.encode())
+                or self.server.sessions.valid(self.headers.get("Cookie")))
 
     def _reject_post(self, status, value):
         # Closing a socket with an unread POST body can replace the HTTP error
@@ -475,7 +479,7 @@ class Handler(BaseHTTPRequestHandler):
             self.connection.settimeout(previous_timeout)
         return self._send(status, value)
 
-    def _send(self, status, value, content_type="application/json; charset=utf-8"):
+    def _send(self, status, value, content_type="application/json; charset=utf-8", *, cookie=None, immutable=False):
         raw = (
             value
             if isinstance(value, bytes)
@@ -484,12 +488,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(raw)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", "public, max-age=31536000, immutable" if immutable else "no-store")
+        if cookie is not None:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         )
         self.end_headers()
         self.wfile.write(raw)
@@ -498,8 +504,23 @@ class Handler(BaseHTTPRequestHandler):
         if not self._trusted_host():
             return self._send(403, {"error": "请通过本机地址或 SSH 隧道访问设置页。"})
         path = urlsplit(self.path).path
+        web_root = ROOT / "bootstrap/web"
+        if path == "/" and (web_root / "index.html").is_file():
+            return self._send(200, (web_root / "index.html").read_bytes(), "text/html; charset=utf-8")
+        if path == "/licenses.txt" and (web_root / "licenses.txt").is_file():
+            return self._send(200, (web_root / "licenses.txt").read_bytes(), "text/plain; charset=utf-8")
+        if path.startswith("/assets/"):
+            import mimetypes
+            candidate = web_root / path.lstrip("/")
+            if (candidate.resolve().is_relative_to((web_root / "assets").resolve())
+                    and not candidate.is_symlink() and candidate.is_file()):
+                return self._send(200, candidate.read_bytes(), mimetypes.guess_type(str(candidate))[0] or "application/octet-stream", immutable=True)
+            return self._send(404, {"error": "文件不存在。"})
+        if path == "/api/session":
+            return self._send(200, {"authenticated": self._authorized()})
         static = {
             "/": ("index.html", "text/html"),
+            "/legacy": ("index.html", "text/html"),
             "/app.js": ("app.js", "text/javascript"),
             "/knowledge.js": ("knowledge.js", "text/javascript"),
             "/capabilities.js": ("capabilities.js", "text/javascript"),
@@ -520,6 +541,14 @@ class Handler(BaseHTTPRequestHandler):
             )
         if path == "/api/status":
             return self._send(200, self.server.manager.snapshot())
+        if path in {"/api/runtime", "/api/system"}:
+            try:
+                operation = runtime.settings if path == "/api/runtime" else runtime.health
+                return self._send(200, operation(self.server.manager))
+            except SetupError as exc:
+                return self._send(getattr(exc, 'status', 503), {"error": str(exc)})
+            except Exception:
+                return self._send(503, {"error": "运行配置暂时无法读取，请稍后重试。"})
         if path == "/api/update":
             return self._send(200, self.server.manager.update_status())
         if path == "/api/capabilities":
@@ -567,7 +596,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "Not found"})
 
     def do_POST(self):
-        if not self._trusted_host() or not self._authorized():
+        if not self._trusted_host() or (self.path != "/api/session" and not self._authorized()):
             return self._reject_post(403, {"error": "未授权。"})
         origin = self.headers.get("Origin")
         if origin != "http://" + self.headers.get(
@@ -578,13 +607,30 @@ class Handler(BaseHTTPRequestHandler):
             return self._reject_post(415, {"error": "需要 JSON 请求。"})
         try:
             size = int(self.headers.get("Content-Length", ""))
-            maximum = 256 * 1024 if self.path in {"/api/proactive", "/api/memory"} else 16 * 1024
+            maximum = 384 * 1024 if self.path == "/api/preview" else (256 * 1024 if self.path in {"/api/proactive", "/api/memory"} else 16 * 1024)
             if not 0 < size <= maximum:
                 return self._reject_post(413, {"error": "请求过大。"})
             self.connection.settimeout(10)
             body = json.loads(self.rfile.read(size))
-            if self.path == "/api/configure":
-                self.server.manager.submit(body)
+            if self.path == "/api/session":
+                if not self.server.sessions.allow_attempt(self.client_address[0]):
+                    return self._send(429, {"error": "尝试过于频繁，请一分钟后重试。"})
+                if not isinstance(body, dict) or set(body) != {"token"} or not isinstance(body["token"], str):
+                    return self._send(400, {"error": "请输入管理口令。"})
+                if not secrets.compare_digest(body["token"].encode(), self.server.manager.secrets["setup_token"].encode()):
+                    return self._send(401, {"error": "管理口令不正确。"})
+                value = self.server.sessions.issue(self.headers.get("Cookie"))
+                return self._send(200, {"authenticated": True}, cookie=session_cookie(value, secure=origin.startswith("https://")))
+            elif self.path == "/api/session/logout":
+                self.server.sessions.revoke(self.headers.get("Cookie"))
+                return self._send(200, {"authenticated": False}, cookie=session_cookie("", clear=True))
+            elif self.path == "/api/preview":
+                return self._send(200, console.preview(self.server.manager, body))
+            elif self.path == "/api/runtime":
+                return self._send(200, runtime.save(self.server.manager, body))
+            elif self.path == "/api/configure":
+                revision = self.server.manager.submit(body)
+                return self._send(202, {"status": "accepted", **({"target_revision": revision} if revision else {})})
             elif self.path == "/api/proactive":
                 return self._send(200, self.server.manager.save_proactive(body))
             elif self.path == "/api/knowledge":

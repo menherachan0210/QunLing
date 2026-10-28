@@ -31,6 +31,17 @@ jobs:
         # ubuntu-24.04 provides Node; fail visibly instead of silently skipping
         # the actual console script's authorization and conflict regressions.
         run: node --version
+      - name: Build the management console and verify committed assets
+        run: |
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+          git diff --exit-code -- bootstrap/web
+          test -z "$(git ls-files --others --exclude-standard bootstrap/web)"
+      - name: Exercise management flows in Chromium
+        working-directory: frontend
+        run: |
+          npx playwright install --with-deps chromium
+          npm test
       - name: Check publishable files for private runtime state and credentials
         run: python scripts/Check-Release.py
       - name: Test public setup, files, tasks and fixed-source patches without the SDK

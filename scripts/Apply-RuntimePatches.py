@@ -53,6 +53,7 @@ PATCHES = (
     ("host-model-usage.patch", "host", False),
     ("host-group-memory-reset.patch", "host", False),
     ("host-admin-console.patch", "host", False),
+    ("host-console-preview.patch", "host", False),
     ("host-qq-actions.patch", "host", False),
     ("host-reply-preferences.patch", "host", False),
     ("host-chinese-embedding.patch", "host", False),
@@ -368,7 +369,8 @@ def build_host_plans(root: Path, entries) -> list[PatchPlan]:
         plans = []
         for name, source in entries:
             plan = build_plan(name, scratch, source, 'host')
-            if installed and name != overlay and plan.state != 'already-applied':
+            overlaps_overlay = bool(set(parsed[name][1]) & set(parsed[overlay][1]))
+            if installed and name != overlay and plan.state != 'already-applied' and overlaps_overlay:
                 raise PatchError('Recall prerequisites changed; rebuild from the pinned source before upgrading.')
             plans.append(replace(plan, root=root,
                                  state='already-applied' if installed and name == overlay else plan.state))

@@ -5,3 +5,6 @@
 tests/fixtures/localagent_0_2_1/** text eol=lf
 tests/fixtures/plugin_runtime/** text eol=lf
 tests/fixtures/sdk_tool_provenance/** text eol=lf
+
+# Preserve bundled dependency license comments emitted by Vite.
+bootstrap/web/assets/* -whitespace

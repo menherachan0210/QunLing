@@ -18,3 +18,13 @@ def memory(manager, values):
             raise SetupError('配置或版本更新正在进行，请稍后管理记忆。')
         path = _path(manager).removesuffix('/proactive') + '/console/memory'
     return manager.api.call('POST', path, values)
+
+
+def preview(manager, values):
+    from qunling.console_preview import validate
+    validate(values)
+    with manager.lock:
+        if manager.update_inflight or manager.update_status()['busy'] or manager.pending:
+            raise SetupError('配置正在变更，请稍后试聊。')
+        path = _path(manager).removesuffix('/proactive') + '/console/preview'
+    return manager.api.call('POST', path, values)

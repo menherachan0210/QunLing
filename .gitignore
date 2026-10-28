@@ -30,6 +30,8 @@ htmlcov/
 dist/
 build/
 node_modules/
+/frontend/public/licenses.txt
+/frontend/playwright-report/
 *.lbpkg
 *.log
 *.db

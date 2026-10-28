@@ -59,6 +59,8 @@ class LangBotAPI:
                 except (ValueError, AttributeError):
                     reason = None
                 messages = {
+                    "preview_busy": (409, "已有试聊进行中，请等待或取消。"),
+                    "invalid_preview": (400, "试聊参数无效，请刷新后重试。"),
                     "memory_conflict": (409, "这条记忆已变化，请关闭编辑并刷新后重试。"),
                     "memory_missing": (409, "这条记忆已不存在，请刷新列表。"),
                     "memory_shared": (400, "当前记忆跨群共享，无法作为本群记忆管理。"),

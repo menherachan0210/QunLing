@@ -73,6 +73,18 @@ def test_dependent_recall_overlay_preflights_without_writes_and_rechecks(tmp_pat
     assert target.read_text() == 'final\n'
 
 
+def test_independent_host_route_can_be_added_after_recall_overlay(tmp_path):
+    write(tmp_path, 'src/langbot/example.py', 'final\n')
+    write(tmp_path, 'src/langbot/routes.py', 'old\n')
+    entries = [('prerequisite.patch', diff('src/langbot/example.py', 'old', 'middle')),
+               ('new-route.patch', diff('src/langbot/routes.py', 'old', 'new')),
+               ('host-message-recall.patch', diff('src/langbot/example.py', 'middle', 'final'))]
+    plans = patcher.build_host_plans(tmp_path, entries)
+    assert [p.state for p in plans] == ['already-applied', 'ready', 'already-applied']
+    patcher.execute_plans(plans, True)
+    assert all(p.state == 'already-applied' for p in patcher.build_host_plans(tmp_path, entries))
+
+
 def test_invalid_dependent_overlay_never_partially_installs_prerequisite(tmp_path):
     target = write(tmp_path, 'src/langbot/example.py')
     entries = [('prerequisite.patch', diff('src/langbot/example.py', 'old', 'middle')),
@@ -312,7 +324,8 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("host-dialogue-provenance.patch", "host", False) in patcher.PATCHES
     assert ("host-dialogue-review.patch", "host", False) in patcher.PATCHES
     assert ("host-message-recall.patch", "host", False) in patcher.PATCHES
-    assert len(names) == 42
+    assert ("host-console-preview.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 43
     assert "host-model-usage.patch" in names
     assert {"host-web-knowledge.patch", "host-memory-recall.patch"} <= names
     assert "host-animation-vision.patch" in names

@@ -6,6 +6,8 @@
 
 ## 框架与插件
 
+新版管理台使用 React、TanStack Query、Radix Primitives（MIT）及 Lucide（ISC）等前端依赖。准确版本由 `frontend/package-lock.json` 固定；构建脚本收集运行依赖的完整许可至 `bootstrap/web/licenses.txt`，随静态资源一起发布。`react-remove-scroll-bar` 的 npm 包未附许可文件，原文补存在 `frontend/licenses/react-remove-scroll-bar.txt`，来源为其[上游 LICENSE](https://github.com/theKashey/react-remove-scroll-bar/blob/master/LICENSE)，SHA-256 为 `a79aae0c0f21990d9d963bb3c5a79cdcea9a46f8523ba55c58d7fe776b6ebc84`。
+
 | 组件／本地路径 | 来源与版本 | 许可及本项目的使用 |
 | --- | --- | --- |
 | LangBot；`patches/` 中的 Host 补丁 | [LangBot v4.11.0](https://github.com/langbot-app/LangBot/tree/v4.11.0) | [Apache-2.0](https://github.com/langbot-app/LangBot/blob/v4.11.0/LICENSE)。框架源码由部署流程获取；本仓库维护兼容补丁。 |
