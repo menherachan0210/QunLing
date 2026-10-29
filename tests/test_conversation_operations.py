@@ -88,9 +88,11 @@ def test_activity_scopes_no_mutation_legacy_and_real_download_distinction(tmp_pa
 
 def test_diagnostics_do_not_retain_raw_parameters_or_trust_invalid_numbers():
     result = details({"kind": "tool", "downloaded_bytes": float("inf"), "elapsed_ms": True,
-                      "purpose": "https://secret.example/x 密码=never-store", "payload": "secret"})
+                      "purpose": "https://secret.example/x 密码=never-store", "payload": "secret",
+                      "response_mode": "untrusted arbitrary text"})
     assert "downloaded_bytes" not in result and "elapsed_ms" not in result
     assert "never-store" not in json.dumps(result)
+    assert "response_mode" not in result
     assert tool_start("file_workspace", {"operation": "import", "password": "private"}, "request")["operation"] == "import"
     assert "private" not in json.dumps(tool_start("file_workspace", {"password": "private"}, "request"))
 
@@ -112,7 +114,7 @@ def test_participation_trace_reaches_the_same_scoped_management_journal(tmp_path
     context = NS(group_id="g", reply_candidate_ids=("m1",),
                  messages=(Message("bot", "g", "m1", "member", "private original text", 1),))
     record(bot, context, {"action": "research", "target_message_id": "m1", "understanding": {
-        "purpose": "核对自身操作", "context_message_ids": ["m1"], "information_needs": ["activity"],
+        "response_mode": "answer", "purpose": "核对自身操作", "context_message_ids": ["m1"], "information_needs": ["activity"],
         "participation": {"role": "addressed", "entry_point": "回答下载质疑", "context_sufficient": True}}}, .25)
     store = get_journal(bot.ap, "instance")
     listing = store.listing("workspace", "bot", group="g")["requests"]
@@ -121,6 +123,7 @@ def test_participation_trace_reaches_the_same_scoped_management_journal(tmp_path
     facts = row["events"][-1]["details"]
     assert facts["elapsed_ms"] == 250 and facts["target_message_id"] == "m1"
     assert facts["information_needs"] == ["activity"]
+    assert facts["response_mode"] == "answer"
     assert "private original text" not in json.dumps(row)
     assert store.listing("other-workspace", "bot")["requests"] == []
     assert read_activity("instance", "workspace", "bot", "g")["operations"] == []

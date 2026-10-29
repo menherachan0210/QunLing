@@ -26,7 +26,7 @@ def record(bot, context, decision, elapsed):
         participation = understanding.get("participation") or {}
         info = {"kind": "participation", "action": decision.get("action"),
             "target_message_id": target, "elapsed_ms": elapsed * 1000,
-            **{k: understanding.get(k) for k in ("purpose", "context_message_ids", "information_needs")},
+            **{k: understanding.get(k) for k in ("response_mode", "purpose", "context_message_ids", "information_needs")},
             **{k: participation.get(k) for k in ("role", "context_sufficient", "entry_point")}}
         store.record(key, "ended", status="processed", details=info)
     except Exception:

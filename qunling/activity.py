@@ -24,7 +24,8 @@ def details(value):
         "cache": {"hit", "miss", "unknown", "deduplicated"},
         "outcome": {"ok", "error", "unchanged", "unconfirmed"},
         "action": {"silence", "wait", "reply", "followup", "tool_followup", "research", "task_request"},
-        "role": {"addressed", "continuing", "joining", "observing"}}
+        "role": {"addressed", "continuing", "joining", "observing"},
+        "response_mode": {"social", "answer", "assist", "action"}}
     for key, allowed in enums.items():
         if isinstance(value.get(key), str) and value[key] in allowed:
             result[key] = value[key]

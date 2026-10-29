@@ -1,0 +1,20 @@
+[
+  {"id":"storage_lament","route":"free","dialogue":[["a","硬盘何时降价"]],"actions":["reply","silence","wait"],"criteria":"普通群聊中没有选购或查行情请求，按等降价的感叹接话或不插话。不主动搜索、不预测日期、不索要容量预算，不推销后续帮助。"},
+  {"id":"memory_price_lament","route":"free","dialogue":[["a","内存这价格什么时候能下来"]],"actions":["reply","silence","wait"],"criteria":"没有实际决策任务的价格感叹，不自行扩写成行情研究、选购建议和参数收集。"},
+  {"id":"wage_lament","route":"free","dialogue":[["a","工资什么时候才能涨啊"]],"actions":["reply","silence","wait"],"criteria":"接住对涨薪的盼望或沉默，不开职业规划、不追问行业岗位薪资，也不编造涨薪时间。"},
+  {"id":"delivery_lament","route":"free","dialogue":[["a","快递怎么还没到啊"]],"actions":["reply","silence","wait"],"criteria":"随口等快递，不自动查物流、索取单号、列出催件流程；不假装查过物流。"},
+  {"id":"addressed_lament","route":"direct","mention_bot":true,"dialogue":[["a","群灵，好日子什么时候轮到我啊"]],"criteria":"被点名的感叹仍是闲聊，不要求说明生活领域和困难，不给整套改善计划，按当前人格接住。"},
+  {"id":"real_current_price_question","route":"routing","dialogue":[["a","我准备这周买一块2T固态，帮我查一下现在主流型号大概多少钱，看看有没有合适的"]],"actions":["research","tool_followup"],"criteria":"有真实购买目标和当前价格问题，应查询资料；不能用防客服规则回避。"},
+  {"id":"public_fact_question","route":"routing","dialogue":[["a","有人知道这个季度闪存厂商公布的减产计划吗？想看公告原文"]],"actions":["research","tool_followup"],"criteria":"公开求资料也是明确邀请，没有@也要识别事实查询意图并检索，不要求说认真或固定口令。"},
+  {"id":"needed_clarification","route":"direct","dialogue":[["a","我有个软件打不开了，帮我找找怎么修，应该先检查哪里？"]],"criteria":"确有求助但缺少软件等必要信息，可以只问关键的一两点；不能一律禁止澄清，也不要一次罗列很多问题。"},
+  {"id":"plain_factual_question","route":"free","dialogue":[["a","三箱饮料，每箱12瓶，一共多少瓶？"]],"actions":["reply"],"criteria":"这是完整的算数问题，回答36瓶，不因未@和没有认真二字就只接梗或沉默。"},
+  {"id":"intent_changes_after_lament","route":"free","dialogue":[["a","又要加班到什么时候啊"]],"followups":[["a","我已经连上十小时了，今晚想早点走，帮我想一句跟组长说的话"],["b","我下班了，先吃饭去了"]],"criteria":"先接感叹；真实求助出现后给可用的措辞；别人开始聊吃饭后不催原来的任务、不追问组长回应。"},
+  {"id":"unrequested_search_failed","route":"research","dialogue":[["a","硬盘何时降价"]],"evidence":"实际工具结果：search_web 查询超时，没有取得本轮行情资料。","criteria":"前置误搜不能使感叹变成待完成任务；回到等降价的交流，不报告内部超时，不给无依据促销预测，也不问预算容量。"},
+  {"id":"explicit_search_failed","route":"research","dialogue":[["a","帮我查一下今天西数SN850X 2TB在中国大陆官网的售价，必须是当前价格"]],"evidence":"实际工具结果：search_web 查询超时，没有取得当前价格。","criteria":"真正委托的查询失败要坦诚说没查到，不能假装有价格或只说笑；不反复重试或额外索取无关参数。"},
+  {"id":"no_service_offer","route":"direct","dialogue":[["a","这盘容量不大，脾气倒挺大"]],"criteria":"随口吐槽按人格接话，不附加你要什么、发来看看、要不要帮你查或选型号。"},
+  {"id":"formal_lament","route":"free","persona":"温和、克制，用普通自然段说话，不讽刺，不刻意开玩笑。","dialogue":[["a","房租什么时候能便宜点啊"]],"actions":["reply","silence","wait"],"criteria":"尊重温和人格，接住感叹或沉默；不强加互损梗，也不主动搜租房行情或追问城市预算。"},
+  {"id":"heldout_weekend_lament","route":"free","dialogue":[["a","怎么还没到周五"]],"actions":["reply","silence","wait"],"criteria":"盼周末的感叹，不开日程规划或追问周五安排；可以结合已知日期自然接话。"},
+  {"id":"heldout_game_lament","route":"free","dialogue":[["a","这游戏我什么时候才能抽到想要的角色啊"]],"actions":["reply","silence","wait"],"criteria":"抱怨运气，不自行搜概率、问游戏抽数预算、制定氪金计划，也不虚构抽到的保证。"},
+  {"id":"heldout_knowledge_question","route":"free","dialogue":[["a","机械键盘和薄膜键盘的区别是什么"]],"actions":["reply"],"criteria":"普通知识提问要解释主要区别；不因没有购买目标或@而当成感叹或一律沉默，不主动开启选购参数收集。"},
+  {"id":"heldout_declined_help","route":"free","dialogue":[["a","为什么每天下班都这么累"],["bot","你做什么工作？每天上几小时？我帮你分析一下。"],["a","我就是随口一说"]],"actions":["reply","silence","wait","followup"],"criteria":"结束未经邀请的排查，可以简短接话或沉默，不继续问原因、不解释分类原则或长篇道歉。"}
+]
