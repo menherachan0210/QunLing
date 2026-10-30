@@ -60,6 +60,7 @@ PATCHES = (
     ("host-dialogue-provenance.patch", "host", False),
     ("host-dialogue-focus.patch", "host", False),
     ("host-dialogue-review.patch", "host", False),
+    ("host-deferred-incoming-images.patch", "host", False),
     ("host-message-recall.patch", "host", False),
     ("sdk-image-tool-timeout.patch", "sdk", False),
     ("sdk-dedicated-background.patch", "sdk", False),
@@ -69,6 +70,7 @@ PATCHES = (
     ("sdk-tool-provenance.patch", "sdk", False),
     ("sdk-qunling-worker-storage.patch", "sdk", False),
     ("sdk-transport-recovery.patch", "sdk", False),
+    ("sdk-quote-text.patch", "sdk", False),
 )
 
 

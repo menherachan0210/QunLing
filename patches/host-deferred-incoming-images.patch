@@ -1,0 +1,31 @@
+diff --git a/src/langbot/pkg/platform/adapters/aiocqhttp/message_converter.py b/src/langbot/pkg/platform/adapters/aiocqhttp/message_converter.py
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/message_converter.py
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/message_converter.py
+@@ -150,7 +150,13 @@
+             platform_message.Source(id=message_id, time=message_time),
+         ]
+ 
++        from qunling.incoming_media import deferred_image
++
+         for segment in target:
++            reference = deferred_image(segment)
++            if reference is not None:
++                components.append(reference)
++                continue
+             if segment.type == 'text':
+                 components.append(platform_message.Plain(text=segment.data.get('text', '')))
+             elif segment.type == 'at':
+diff --git a/src/langbot/pkg/pipeline/preproc/preproc.py b/src/langbot/pkg/pipeline/preproc/preproc.py
+--- a/src/langbot/pkg/pipeline/preproc/preproc.py
++++ b/src/langbot/pkg/pipeline/preproc/preproc.py
+@@ -349,7 +349,9 @@
+         plain_text = ''
+         quote_msg = query.pipeline_config['trigger'].get('misc', {}).get('combine-quote-message', False)
+ 
+-        for me in query.message_chain:
++        from qunling.incoming_media import model_message_chain
++        model_chain = await model_message_chain(query.message_chain, keep_image_inputs, quote_msg)
++        for me in model_chain:
+             if isinstance(me, platform_message.Plain):
+                 content_list.append(provider_message.ContentElement.from_text(me.text))
+                 plain_text += me.text

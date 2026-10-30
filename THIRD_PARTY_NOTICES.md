@@ -32,6 +32,7 @@ Apache 原文副本：[Apache-2.0.txt](licenses/Apache-2.0.txt)。六个本地�
 | `sdk-attachment-message-budget.patch` | `langbot_plugin/runtime/`：沿用 AGPLv3 |
 | `sdk-dedicated-background.patch` | `api/definition/plugin.py` 为 Apache-2.0 部分；`runtime/` 中的修改沿用 AGPLv3 |
 | `sdk-tool-provenance.patch` | `api/entities/builtin/runner/resources.py`：Apache-2.0 部分 |
+| `sdk-quote-text.patch` | `api/entities/builtin/platform/message.py`：Apache-2.0 部分；限制引用的文字展示，不展开附件数据 |
 
 这些是针对上游 0.7.11 的本地修改，不是官方发行版。发布修改后的 Runtime 或派生镜像时，应保留许可证、修改说明，并提供与运行版本相符的对应源码及构建／安装信息；对经网络交互使用修改版的用户，还需落实 AGPLv3 第 13 条的源码获取要求。仅放置一个许可链接不能替代对应源码的实际可得性。
 
