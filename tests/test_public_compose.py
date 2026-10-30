@@ -55,7 +55,7 @@ def make_zip(entries):
 def test_compose_has_only_loopback_admin_ports_and_no_runtime_exposure():
     document = yaml.safe_load((COMPOSE / "compose.yaml").read_text(encoding="utf-8"))
     services = document["services"]
-    assert set(services) == {"init", "app", "wizard", "napcat", "updater"}
+    assert set(services) == {"init", "app", "wizard", "napcat", "updater", "file-worker"}
     published = [
         port for service in services.values() for port in service.get("ports", [])
     ]
@@ -84,6 +84,12 @@ def test_compose_has_only_loopback_admin_ports_and_no_runtime_exposure():
     assert services["app"]["environment"]["BOX__ENABLED"] == "false"
     assert services["app"]["environment"]["LANGBOT_PLUGIN_RUNTIME_TRANSPORT"] == "stdio"
     assert services["app"]["volumes"] == ["langbot-data:/opt/qq-ai-bot/langbot/data"]
+    worker = services["file-worker"]
+    assert worker["network_mode"] == "none" and not worker.get("ports")
+    assert worker["volumes"] == services["app"]["volumes"]
+    assert worker["pids_limit"] == 128 and worker["cpu_shares"] < services["app"]["cpu_shares"]
+    assert "mem_limit" in worker and "memswap_limit" in worker
+    assert services["app"]["environment"]["QUNLING_EXTERNAL_FILE_WORKER"] == "1"
     assert services["wizard"]["environment"]["QQBOT_LANGBOT_URL"] == "http://app:5300"
     assert services["wizard"]["environment"]["QQBOT_NAPCAT_URL"] == "http://napcat:6099"
     assert services["wizard"]["depends_on"]["app"]["condition"] == "service_healthy"

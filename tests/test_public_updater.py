@@ -198,7 +198,9 @@ class DockerModel:
                     self.candidate if "source" in path.parts else self.current
                 )
                 env = kwargs.get("env", {})
-                for name in ("init", "app", "wizard"):
+                for name in ("init", "app", "wizard", "file-worker"):
+                    if name not in value["services"]:
+                        continue
                     value["services"][name]["image"] = env.get(
                         "QQBOT_APP_IMAGE", value["services"][name]["image"]
                     )
@@ -300,6 +302,54 @@ def transaction(tmp_path, monkeypatch):
 
 def state(engine):
     return module.read(engine.state_path)
+
+
+def add_file_worker(document):
+    document["services"]["app"].setdefault("environment", {})["QUNLING_EXTERNAL_FILE_WORKER"] = "1"
+    document["services"]["file-worker"] = {
+        "image": "initial-worker", "command": ["file-worker"], "network_mode": "none",
+        "volumes": [{"type": "volume", "source": "langbot-data", "target": "/opt/qq-ai-bot/langbot/data"}],
+    }
+
+
+def test_update_adds_isolated_worker_without_new_business_volumes(transaction):
+    engine, docker = transaction
+    add_file_worker(docker.candidate)
+    engine.execute(JOB)
+    assert state(engine)["phase"] == "completed"
+    active = module.read(engine.active_path)
+    worker = active["services"]["file-worker"]
+    assert worker["image"] == active["services"]["app"]["image"]
+    assert worker["network_mode"] == "none"
+    assert active["volumes"]["langbot-data"]["name"] == docker.real_volumes["langbot-data"]
+    assert not any(operation in {"backup", "restore"} for operation, _ in docker.events)
+
+
+@pytest.mark.parametrize("fault", ["network", "mount", "paired"])
+def test_update_rejects_unsafe_worker_migration_before_stopping(transaction, fault):
+    engine, docker = transaction
+    add_file_worker(docker.candidate)
+    worker = docker.candidate["services"]["file-worker"]
+    if fault == "network":
+        worker["network_mode"] = "host"
+    elif fault == "mount":
+        worker["volumes"][0]["source"] = "setup-state"
+    else:
+        docker.candidate["services"]["app"]["environment"].clear()
+    engine.execute(JOB)
+    assert state(engine)["phase"] == "failed"
+    assert not any(operation == "stop" for operation, _ in docker.events)
+
+
+def test_failed_migration_stops_new_worker_before_restoring_old_stack(transaction):
+    engine, docker = transaction
+    add_file_worker(docker.candidate)
+    docker.fail = "new_ready"
+    engine.execute(JOB)
+    assert state(engine)["phase"] == "rolled_back"
+    stops = [args for args, _ in docker.calls if args[:2] == ["docker", "compose"] and "stop" in args]
+    assert "file-worker" in stops[-1]
+    assert "file-worker" not in module.read(engine.active_path)["services"]
 
 
 def test_success_builds_before_downtime_and_reuses_exact_project_volumes(transaction):

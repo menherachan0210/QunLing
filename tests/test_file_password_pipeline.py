@@ -103,7 +103,11 @@ async def test_password_tool_extract_delivers_scoped_real_bytes(files, tmp_path,
         assert store.delivery(SCOPE, context["request_key"], result["result_refs"][0]) == "unconfirmed"
     assert base64.b64decode(sent[0].root[0].base64) == b"attachment password test"
     assert "fixture-pass" not in json.dumps(result)
-    assert not (tmp_path / "unneeded-jobs").exists()
+    # Password processing joins global admission, but never creates a durable
+    # task or persists the password. The ledger contains opaque resource leases.
+    ledger = tmp_path / "unneeded-jobs"
+    assert {path.name for path in ledger.iterdir()} == {"resource-admission.sqlite3"}
+    assert b"fixture-pass" not in (ledger / "resource-admission.sqlite3").read_bytes()
     other = Scope("fixture-workspace", "fixture-bot", "group:fixture", "other-user")
     with pytest.raises(AssetError):
         await tools.workspace(None, SimpleNamespace(reply=reply), context, other, store, {

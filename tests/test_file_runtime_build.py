@@ -75,6 +75,20 @@ def test_supervisor_stops_worker_when_host_exits(tmp_path, monkeypatch):
     assert all(child.poll() is not None for child in children)
 
 
+def test_external_worker_does_not_start_a_second_daemon(tmp_path, monkeypatch):
+    children, start = [], supervisor._start
+    def track(*args):
+        child = start(*args)
+        children.append(child)
+        return child
+    monkeypatch.setattr(supervisor, "_start", track)
+    code = supervisor.supervise(
+        [sys.executable, "-c", "raise SystemExit(0)"], None,
+        cwd=tmp_path, env=os.environ.copy(), install_signals=False, grace=1,
+    )
+    assert code == 0 and len(children) == 1 and children[0].poll() is not None
+
+
 def test_supervisor_restarts_worker_and_cleans_children_on_stop(tmp_path, monkeypatch):
     marker = tmp_path / "starts"
     daemon = (

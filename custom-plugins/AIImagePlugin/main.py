@@ -327,9 +327,8 @@ class AIImagePlugin(BasePlugin):
                     )
                 from qunling.vision_input import animation_data_url
                 try:
-                    normalized = await asyncio.gather(*(
-                        asyncio.to_thread(animation_data_url, value) for value in data_urls
-                    ))
+                    from qunling.resource_gate import finish_thread
+                    normalized = [await finish_thread(animation_data_url, value) for value in data_urls]
                 except (ValueError, OSError):
                     raise ImageGenerationError("参考动图无法安全读取关键帧，尚未提交编辑请求。") from None
                 data_urls = [value for value, _ in normalized]
@@ -342,7 +341,12 @@ class AIImagePlugin(BasePlugin):
                     "/images/edits", cast_to=ImagesResponse, body=body
                 )
 
-            response = await asyncio.wait_for(request(), timeout=timeout)
+            from qunling.resource_gate import ResourceBusy, resource_slot
+            try:
+                async with resource_slot("image"):
+                    response = await asyncio.wait_for(request(), timeout=timeout)
+            except ResourceBusy:
+                raise ImageGenerationError("图片任务排队超时，尚未提交生成请求；稍后再试。") from None
             return _image_result(response)
         except ImageGenerationError:
             raise

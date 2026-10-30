@@ -276,10 +276,11 @@ class JobService:
         except (KeyError, TypeError):
             raise TaskFailure(ErrorInfo(ErrorCode.INVALID_INPUT)) from None
 
-    def worker(self, *, concurrency: int = 2) -> TaskWorker:
+    def worker(self, *, concurrency: int = 2, admission=None) -> TaskWorker:
         return TaskWorker(
             self.tasks, self._handle,
             load_payload=lambda task: self._read(task.scope, task.id, "payload"),
             concurrency=concurrency, max_run_seconds=100, retry_delay=2,
             retry_safe_kinds=frozenset({"processing"}),
+            admission=admission,
         )

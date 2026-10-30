@@ -296,6 +296,34 @@ class AssetStore:
             raise AssetError("integrity_error", "文件完整性检查失败。")
         return data
 
+    def copy_to(self, scope: Scope, ref: str, destination: Path) -> dict:
+        """Stage a verified asset at a NEW trusted-worker path in bounded chunks.
+
+        Scope validation always precedes filesystem access. Neither a blob path
+        nor a caller-controlled path is passed across a plugin/model boundary.
+        """
+        row = self._row(scope, ref)
+        digest, size, created = hashlib.sha256(), 0, False
+        destination = Path(destination)
+        try:
+            with self._blob(row["digest"]).open("rb") as source, destination.open("xb") as target:
+                created = True
+                while chunk := source.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_ASSET_BYTES or size > row["size"]:
+                        raise AssetError("integrity_error", "文件完整性检查失败。")
+                    digest.update(chunk)
+                    target.write(chunk)
+            if size != row["size"] or digest.hexdigest() != row["digest"]:
+                raise AssetError("integrity_error", "文件完整性检查失败。")
+            return self._public(row)
+        except BaseException as exc:
+            if created:
+                destination.unlink(missing_ok=True)
+            if isinstance(exc, OSError):
+                raise AssetError("missing_content", "文件内容暂不可用，请重新提供文件。") from None
+            raise
+
     def grant(self, scope: Scope, request_key: str, ref: str):
         self._row(scope, ref)
         if not isinstance(request_key, str) or not 1 <= len(request_key) <= 256:

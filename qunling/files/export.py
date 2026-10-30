@@ -69,7 +69,7 @@ def _json(value, limits):
     return rendered
 
 
-def export_file(format: str, payload: dict, output_path, *, limits: FileLimits = DEFAULT_LIMITS):
+def export_file(format: str, payload: dict, output_path, *, limits: FileLimits = DEFAULT_LIMITS, staged_sources=None):
     """Create a *new* trusted-host destination; existing files are never replaced.
 
     Schemas:
@@ -202,14 +202,25 @@ def export_file(format: str, payload: dict, output_path, *, limits: FileLimits =
             # repetitive content, and avoids exporting compression bombs.
             with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_STORED) as archive:
                 for entry in files:
-                    strict_keys(entry, {"name", "text", "base64"}, {"name"})
-                    if ("text" in entry) == ("base64" in entry):
+                    strict_keys(entry, {"name", "text", "base64", "staged"} if staged_sources else {"name", "text", "base64"}, {"name"})
+                    if sum(key in entry for key in ("text", "base64", "staged")) != 1:
                         raise FileError("invalid_schema", "成员必须选择 text 或 base64 内容之一。")
                     name = safe_member(entry["name"])
                     if name.endswith("/") or identity(name) in names:
                         raise FileError("ambiguous_member", "输出成员名称重复或不是普通文件。")
                     names.add(identity(name))
-                    if "text" in entry:
+                    if "staged" in entry:
+                        source = (staged_sources or {}).get(entry["staged"])
+                        if source is None or source.is_symlink() or not source.is_file():
+                            raise FileError("invalid_schema", "打包素材不可用。")
+                        size = source.stat().st_size
+                        total += size
+                        if size > limits.max_member_bytes or total > limits.max_output_bytes:
+                            raise FileError("output_limit", "输出压缩包超过大小限制。")
+                        # zipfile streams the verified private file in chunks.
+                        archive.write(source, arcname=name)
+                        continue
+                    elif "text" in entry:
                         raw = _text(entry["text"], limits).encode("utf-8")
                     else:
                         encoded = entry["base64"]

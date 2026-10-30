@@ -83,13 +83,14 @@ def supervise(app_command, daemon_command, *, cwd, env, stop=None, install_signa
             previous[sig] = signal.signal(sig, lambda *_: stop.set())
     app = daemon = None
     try:
-        daemon = _start(daemon_command, cwd, env)
+        if daemon_command is not None:
+            daemon = _start(daemon_command, cwd, env)
         app = _start(app_command, cwd, env)
         failures = []
         while not stop.wait(0.1):
             if app.poll() is not None:
                 return app.returncode
-            if daemon.poll() is not None:
+            if daemon is not None and daemon.poll() is not None:
                 now = time.monotonic()
                 failures = [t for t in failures if now-t < 60]
                 failures.append(now)
@@ -137,8 +138,8 @@ def main():
         print(f"Verified Chinese memory indexes: {len(migrated)} collections.", flush=True)
     # Keep the Job object handle alive for all descendants on Windows.
     _ = handle
-    return supervise([sys.executable, "-u", "main.py"],
-                     [sys.executable, "-u", "-m", "qunling.daemon"],
+    daemon = None if env.get("QUNLING_EXTERNAL_FILE_WORKER") == "1" else [sys.executable, "-u", "-m", "qunling.daemon"]
+    return supervise([sys.executable, "-u", "main.py"], daemon,
                      cwd=app, env=env)
 
 

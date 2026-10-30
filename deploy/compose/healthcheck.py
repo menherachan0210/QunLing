@@ -4,11 +4,22 @@ from __future__ import annotations
 
 import json
 import sys
+import os
+from pathlib import Path
+import time
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, build_opener
 
 
 def check(role: str) -> bool:
+    if role == "file-worker":
+        try:
+            path = Path(os.environ.get("QUNLING_WORKER_HEARTBEAT", "/tmp/qunling-worker-heartbeat"))
+            pid = int(path.read_text(encoding="ascii"))
+            os.kill(pid, 0)
+            return 0 <= time.time() - path.stat().st_mtime < 30
+        except (OSError, ValueError):
+            return False
     port = {"app": 5300, "wizard": 5310}[role]
     opener = build_opener(ProxyHandler({}))
     try:

@@ -17,6 +17,7 @@ import time
 from urllib.request import Request, urlopen
 
 SERVICES = ("init", "app", "napcat", "wizard", "updater")
+OPTIONAL_SERVICES = {"file-worker"}
 DATA_VOLUMES = ("langbot-data", "setup-state", "napcat-qq", "napcat-config", "napcat-plugins")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 TERMINAL = {"idle", "available", "completed", "rolled_back", "failed"}
@@ -329,6 +330,9 @@ class UpdateEngine:
             # operator to fix the cause; do not repeatedly overwrite data.
             if phase not in TERMINAL | {"checking", "recovery_required"}:
                 self.recover_orphan()
+            elif phase in TERMINAL:
+                from deploy.updater.watchdog import poll
+                poll(self)
 
     def compose(self, path, *args, **kwargs):
         return self.run("docker", "compose", "--project-name", self.project, "-f", str(path), *args, **kwargs)
@@ -340,26 +344,38 @@ class UpdateEngine:
         if updater_image:
             env["QQBOT_UPDATER_IMAGE"] = updater_image
         value = json.loads(self.compose(source, "config", "--format", "json", env=env))
-        if set(value.get("services", {})) != set(SERVICES):
+        names = set(value.get("services", {}))
+        if not set(SERVICES) <= names or names - set(SERVICES) - OPTIONAL_SERVICES:
             raise UpdateError("新版部署结构需要手动迁移，当前版本不会自动替换。")
+        if ("file-worker" in names) != (value["services"]["app"].get("environment", {}).get("QUNLING_EXTERNAL_FILE_WORKER") == "1"):
+            raise UpdateError("文件处理服务与主服务的启动方式不一致。")
         for service in value["services"].values():
             service.pop("build", None)
             # Compose-generated host paths must never become bind mounts in the
             # app. Only the dedicated updater may access the Docker socket.
-        for name in SERVICES:
+        for name in value["services"]:
             for mount in value["services"][name].get("volumes", []):
                 if mount["type"] != "volume" and not (
                     name == "updater" and mount.get("source") == "/var/run/docker.sock"
                     and mount.get("target") == "/var/run/docker.sock"
                 ):
                     raise UpdateError("新版包含不支持的主机挂载，需要手动升级。")
+        if "file-worker" in names:
+            worker = value["services"]["file-worker"]
+            layout = {(m.get("type"), m.get("source"), m.get("target"), bool(m.get("read_only")))
+                      for m in worker.get("volumes", [])}
+            if (layout != {("volume", "langbot-data", "/opt/qq-ai-bot/langbot/data", False)}
+                    or worker.get("network_mode") != "none" or worker.get("ports")
+                    or worker.get("command") != ["file-worker"]
+                    or value["services"]["app"].get("environment", {}).get("QUNLING_EXTERNAL_FILE_WORKER") != "1"):
+                raise UpdateError("文件处理服务必须使用隔离网络与现有任务数据卷。")
         return value
 
     def capture_current(self, job_dir, source=None):
         source = source or (self.active_path if self.active_path.exists() else Path("/opt/qqbot/deploy/compose/compose.yaml"))
         value = self.resolve(source)
         volumes = {}
-        for service in SERVICES:
+        for service in value["services"]:
             info = self.inspect_service(service)
             value["services"][service]["image"] = info["Image"]
             # Capture exact mounted volume names instead of reconstructing paths
@@ -413,11 +429,13 @@ class UpdateEngine:
                  timeout=1800, log=self.root / "jobs" / job_id / "private.log")
 
     def stop(self, path):
-        self.compose(path, "stop", "--timeout", "60", "wizard", "app", "napcat", timeout=240)
+        names = read(path).get("services", {})
+        self.compose(path, "stop", "--timeout", "60",
+                     *(s for s in ("wizard", "file-worker", "app", "napcat") if s in names), timeout=240)
 
     def start_compose(self, path, log):
         self.compose(path, "up", "-d", "--no-build", "--wait", "--wait-timeout", "600",
-                     *SERVICES, timeout=900, log=log)
+                     *read(path)["services"], timeout=900, log=log)
 
     def wait_ready(self, timeout=900):
         deadline = time.monotonic() + timeout
@@ -506,7 +524,7 @@ class UpdateEngine:
             new = self.resolve(source / "deploy/compose/compose.yaml", app_image, updater_image)
             if set(new["volumes"]) != set(old["volumes"]):
                 raise UpdateError("新版更改了数据卷结构，需要手动迁移。")
-            for service in SERVICES:
+            for service in set(new["services"]) & set(old["services"]):
                 def volume_layout(config):
                     return {(m["source"], m["target"], bool(m.get("read_only")))
                             for m in config["services"][service].get("volumes", [])

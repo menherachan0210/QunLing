@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if len(argv) != 1 or argv[0] not in {"init", "app", "wizard", "access"}:
-        raise SystemExit("Usage: entrypoint.py init|app|wizard|access")
+    if len(argv) != 1 or argv[0] not in {"init", "app", "wizard", "access", "file-worker"}:
+        raise SystemExit("Usage: entrypoint.py init|app|wizard|access|file-worker")
     os.umask(0o077)
     os.chdir(ROOT)
     sys.path.insert(0, str(ROOT))
@@ -34,6 +34,11 @@ def main(argv=None):
             sys.executable,
             [sys.executable, "-u", "-m", "bootstrap.server", "--url"],
         )
+    if role == "file-worker":
+        os.environ.setdefault("QUNLING_DATA_DIR", str(ROOT / "langbot/data/qunling"))
+        os.environ["PYTHONPATH"] = str(ROOT)
+        os.environ["PATH"] = str(ROOT / ".local/tools/7zip/linux-x64") + os.pathsep + os.environ.get("PATH", os.defpath)
+        os.execv(sys.executable, [sys.executable, "-u", "-m", "qunling.daemon", "--concurrency", "2"])
     if role == "app":
         os.chdir(ROOT / "langbot")
         # Both Host and its automatically managed stdio Runtime use this cwd.

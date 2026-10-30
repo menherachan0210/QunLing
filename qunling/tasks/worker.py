@@ -41,6 +41,7 @@ class TaskWorker:
         worker_id: str | None = None, concurrency: int = 2, lease_seconds: int = 60,
         max_run_seconds: float = 300, retry_delay: float = 2,
         retry_safe_kinds: frozenset[str] = frozenset(),
+        admission=None,
     ):
         if type(concurrency) is not int or not 1 <= concurrency <= 8:
             raise ValueError("Invalid worker concurrency")
@@ -53,7 +54,9 @@ class TaskWorker:
         self.concurrency, self.lease_seconds = concurrency, lease_seconds
         self.max_run_seconds, self.retry_delay = max_run_seconds, retry_delay
         self.retry_safe_kinds = frozenset(retry_safe_kinds)
+        self.admission = admission
         self._active: set[asyncio.Task] = set()
+        self._permits = {}
         self._pump_lock = asyncio.Lock()
 
     async def _heartbeat(self, lease: Lease) -> None:
@@ -128,15 +131,49 @@ class TaskWorker:
             # second attempt starts inside this worker while cleanup is active.
             await asyncio.gather(execution, heartbeat, return_exceptions=True)
 
+    async def _run_admitted(self, task, lease, permit):
+        if permit is None:
+            await self._run(task, lease)
+        else:
+            async with permit:
+                await self._run(task, lease)
+
+    async def _admit(self, task):
+        pending = asyncio.create_task(asyncio.to_thread(self.admission, task))
+        try:
+            return await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            permit = await pending
+            if permit is not None:
+                await asyncio.to_thread(permit.gate.release, permit.token)
+            raise
+
     async def run_once(self) -> int:
         """Recover persisted scopes and schedule at most the available slots."""
         async with self._pump_lock:
+            for job in tuple(self._permits):
+                if job.done():
+                    permit = self._permits.pop(job)
+                    await asyncio.to_thread(permit.gate.release, permit.token)
             self._active = {job for job in self._active if not job.done()}
             count = 0
             candidates = []
             for scope in await asyncio.to_thread(self.store.scopes):
                 await asyncio.to_thread(self.store.recover_expired, scope)
                 candidates.extend(await asyncio.to_thread(self.store.schedulable, scope, limit=1000))
+            ready = []
+            for task in candidates:
+                if task.deadline_at is not None and task.deadline_at <= self.store.clock():
+                    # claim records deadline exhaustion without executing or
+                    # consuming an attempt. Do this before a full slot/queue
+                    # can stop the scan and leave unrelated expired jobs stuck.
+                    await asyncio.to_thread(self.store.claim, task.scope, task.id, self.worker_id,
+                                            lease_seconds=self.lease_seconds)
+                else:
+                    ready.append(task)
+            candidates = ready
+            if not candidates and self.admission is not None:
+                await asyncio.to_thread(self.admission.close)
             # Persisted creation order across all members, not scope-hash order.
             # A continuously active member cannot overtake an older waiting job.
             for task in sorted(candidates, key=lambda item: (item.created_at, item.id)):
@@ -146,13 +183,26 @@ class TaskWorker:
                     continue
                 if task.attempts and task.kind not in self.retry_safe_kinds:
                     continue
-                lease = await asyncio.to_thread(
-                    self.store.claim, task.scope, task.id, self.worker_id, lease_seconds=self.lease_seconds,
-                )
-                if lease is not None:
-                    job = asyncio.create_task(self._run(task, lease))
-                    self._active.add(job)
-                    count += 1
+                permit = None
+                if self.admission is not None:
+                    permit = await self._admit(task)
+                    if permit is None:
+                        return count  # Still queued: no attempt or run budget consumed.
+                started = False
+                try:
+                    lease = await asyncio.to_thread(
+                        self.store.claim, task.scope, task.id, self.worker_id, lease_seconds=self.lease_seconds,
+                    )
+                    if lease is not None:
+                        job = asyncio.create_task(self._run_admitted(task, lease, permit))
+                        self._active.add(job)
+                        if permit is not None:
+                            self._permits[job] = permit
+                        started = True
+                        count += 1
+                finally:
+                    if permit is not None and not started:
+                        await asyncio.to_thread(permit.gate.release, permit.token)
             return count
 
     async def wait_idle(self) -> None:
@@ -165,6 +215,11 @@ class TaskWorker:
         for job in self._active:
             job.cancel()
         await self.wait_idle()
+        for permit in self._permits.values():
+            await asyncio.to_thread(permit.gate.release, permit.token)
+        self._permits.clear()
+        if self.admission is not None:
+            await asyncio.to_thread(self.admission.close)
 
     async def serve(self, stop: asyncio.Event, *, poll_seconds: float = 1) -> None:
         if not 0.05 <= poll_seconds <= 60:

@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -72,10 +70,15 @@ def validate_operation(operation, args):
 
 
 async def run_operation(store: AssetStore, scope: Scope, operation: str, args: dict) -> dict:
-    if operation == "create" and isinstance(args, dict) and args.get("format") == "gif":
-        async with _GIF_SLOT:
+    from qunling.resource_gate import ResourceBusy, resource_slot
+    try:
+        async with resource_slot("file"):
+            if operation == "create" and isinstance(args, dict) and args.get("format") == "gif":
+                async with _GIF_SLOT:
+                    return await _run_operation(store, scope, operation, args)
             return await _run_operation(store, scope, operation, args)
-    return await _run_operation(store, scope, operation, args)
+    except ResourceBusy:
+        raise AssetError("resource_busy", "文件任务排队超时，尚未开始处理；稍后再试。") from None
 
 
 async def _run_operation(store: AssetStore, scope: Scope, operation: str, args: dict) -> dict:
@@ -92,8 +95,7 @@ async def _run_operation(store: AssetStore, scope: Scope, operation: str, args: 
             item = await _disk(store.get, scope, args["asset_ref"])
             # Prefix prevents collision with fixed protocol filenames.
             name = "source" + Path(safe_name(item["name"])).suffix[:32]
-            content = await _disk(store.read, scope, args["asset_ref"])
-            await _disk((root / name).write_bytes, content)
+            item = await _disk(store.copy_to, scope, args["asset_ref"], root / name)
             request["input_name"] = name
             if (operation in {"inspect", "read", "search"} and password is None
                     and isinstance(args.get("selector", {}), dict)
@@ -101,7 +103,7 @@ async def _run_operation(store: AssetStore, scope: Scope, operation: str, args: 
                 from qunling.cache import JsonCache
                 from qunling.files.cache import VERSION
                 cache = JsonCache(store.root / "parsed-documents.sqlite3")
-                cache_key = VERSION + ":" + hashlib.sha256(content).hexdigest() + Path(name).suffix
+                cache_key = VERSION + ":" + item["sha256"] + Path(name).suffix
                 candidate = await _disk(cache.get, scope.key, cache_key)
                 if candidate is not None:
                     await _disk((root / "parsed-input.json").write_text,
@@ -112,28 +114,32 @@ async def _run_operation(store: AssetStore, scope: Scope, operation: str, args: 
             args["payload"] = validate_recipe(args["payload"])
             staged, total = {}, 0
             for index, ref in enumerate(source_refs(args["payload"])):
-                content = await _disk(store.read, scope, ref)
-                total += len(content)
+                name = f"image-{index}.input"
+                item = await _disk(store.copy_to, scope, ref, root / name)
+                total += item["size"]
                 if total > 32 * 1024 * 1024:
                     raise AssetError("input_limit", "动画素材总量不能超过 32 MiB。")
-                name = f"image-{index}.input"
-                await _disk((root / name).write_bytes, content)
                 staged[ref] = name
             request["animation_inputs"] = staged
         elif args["format"] == "zip":
-            # Public schema accepts asset refs; the worker receives only bytes.
+            # Pass private staging names, not an additional Base64/JSON copy.
             payload = args["payload"]
             if isinstance(payload, dict) and isinstance(payload.get("files"), list):
-                entries, total = [], 0
-                for entry in payload["files"]:
+                if any(isinstance(entry, dict) and "staged" in entry for entry in payload["files"]):
+                    raise AssetError("invalid_parameters", "打包素材需要使用 asset_ref、text 或 base64。")
+                entries, total, staged = [], 0, {}
+                for index, entry in enumerate(payload["files"]):
                     if isinstance(entry, dict) and set(entry) == {"name", "asset_ref"}:
-                        content = await _disk(store.read, scope, entry["asset_ref"])
-                        total += len(content)
+                        name = f"zip-{index}.input"
+                        item = await _disk(store.copy_to, scope, entry["asset_ref"], root / name)
+                        total += item["size"]
                         if total > 20 * 1024 * 1024:
                             raise AssetError("output_limit", "打包文件总量不能超过 20 MiB。")
-                        entry = {"name": entry["name"], "base64": base64.b64encode(content).decode()}
+                        staged[str(index)] = name
+                        entry = {"name": entry["name"], "staged": str(index)}
                     entries.append(entry)
                 args["payload"] = {**payload, "files": entries}
+                request["zip_inputs"] = staged
         await _disk((root / "request.json").write_text, json.dumps(request, ensure_ascii=False), encoding="utf-8")
         env = {k: v for k, v in os.environ.items() if k.upper() in {
             "PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",

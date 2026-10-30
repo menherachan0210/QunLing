@@ -36,6 +36,7 @@ services:
       BOX__ENABLED: "false"
       LANGBOT_PLUGIN_RUNTIME_TRANSPORT: stdio
       QUNLING_DATA_DIR: /opt/qq-ai-bot/langbot/data/qunling
+      QUNLING_EXTERNAL_FILE_WORKER: "1"
       QUNLING_DECISION_TIMEOUT_SECONDS: ${QUNLING_DECISION_TIMEOUT_SECONDS:-25}
       QUNLING_REPLY_TIMEOUT_SECONDS: ${QUNLING_REPLY_TIMEOUT_SECONDS:-60}
       QUNLING_MODEL_PRICES: ${QUNLING_MODEL_PRICES:-}
@@ -52,6 +53,37 @@ services:
       start_period: 120s
       retries: 12
     stop_grace_period: 60s
+    mem_limit: ${QQBOT_APP_MEMORY:-1408m}
+    memswap_limit: ${QQBOT_APP_MEMORY_SWAP:-1792m}
+    mem_reservation: 512m
+    cpu_shares: 1024
+
+  file-worker:
+    <<: *app-image
+    command: ["file-worker"]
+    init: true
+    restart: unless-stopped
+    network_mode: none
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    environment:
+      TZ: Asia/Shanghai
+      QUNLING_DATA_DIR: /opt/qq-ai-bot/langbot/data/qunling
+    volumes:
+      - langbot-data:/opt/qq-ai-bot/langbot/data
+    mem_limit: ${QQBOT_WORKER_MEMORY:-512m}
+    memswap_limit: ${QQBOT_WORKER_MEMORY_SWAP:-768m}
+    cpus: ${QQBOT_WORKER_CPUS:-0.75}
+    cpu_shares: 128
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python", "/opt/qq-ai-bot/deploy/compose/healthcheck.py", "file-worker"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 4
+    stop_grace_period: 30s
 
   napcat:
     image: mlikiowa/napcat-docker:v4.18.37@sha256:132448a544ed5cfa948dff8ae19e80bf4e17896e8ab2ba1c6cbcd86f8ad3e56e
@@ -80,6 +112,9 @@ services:
     command: ["wizard"]
     init: true
     restart: unless-stopped
+    mem_limit: 192m
+    memswap_limit: 256m
+    cpu_shares: 512
     depends_on:
       init:
         condition: service_completed_successfully
@@ -118,6 +153,9 @@ services:
         QQBOT_REVISION: ${QQBOT_REVISION:-unknown}
     restart: unless-stopped
     init: true
+    mem_limit: 192m
+    memswap_limit: 256m
+    cpu_shares: 256
     depends_on:
       init:
         condition: service_completed_successfully

@@ -4,18 +4,26 @@ from __future__ import annotations
 import argparse
 import asyncio
 import signal
+import os
+from pathlib import Path
+import time
+import tempfile
 
 from qunling.assets import data_root
 from qunling.jobs import JobService
+from qunling.resource_gate import FileAdmission, ResourceGate
 
 
 async def serve(*, once=False, concurrency=2):
     service = JobService(data_root())
     await asyncio.to_thread(service.prune)
-    worker = service.worker(concurrency=concurrency)
+    worker = service.worker(concurrency=concurrency, admission=FileAdmission(ResourceGate(data_root())))
     if once:
-        await worker.run_once()
-        await worker.wait_idle()
+        try:
+            await worker.run_once()
+            await worker.wait_idle()
+        finally:
+            await worker.close()
         return
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -27,11 +35,18 @@ async def serve(*, once=False, concurrency=2):
             previous[signum] = signal.getsignal(signum)
             signal.signal(signum, lambda *_: loop.call_soon_threadsafe(stop.set))
     async def maintenance():
+        next_prune = time.monotonic() + 3600
         while not stop.is_set():
+            # A blocked operation cannot fake liveness; this is on the worker's
+            # event loop. The container healthcheck also rejects old instances.
+            path = Path(os.environ.get("QUNLING_WORKER_HEARTBEAT", str(Path(tempfile.gettempdir()) / "qunling-worker-heartbeat")))
+            await asyncio.to_thread(path.write_text, str(os.getpid()), encoding="ascii")
             try:
-                await asyncio.wait_for(stop.wait(), timeout=3600)
+                await asyncio.wait_for(stop.wait(), timeout=5)
             except TimeoutError:
-                await asyncio.to_thread(service.prune)
+                if time.monotonic() >= next_prune:
+                    await asyncio.to_thread(service.prune)
+                    next_prune = time.monotonic() + 3600
     cleanup = asyncio.create_task(maintenance())
     execution = asyncio.create_task(worker.serve(stop))
     try:

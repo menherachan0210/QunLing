@@ -109,7 +109,8 @@ def dispatch(operation, args, request, root, password):
                       for ref, name in request.get("animation_inputs", {}).items()}
             result = render(args["payload"], inputs, root / "output")
         else:
-            result = export_file(args["format"], args["payload"], root / "output")
+            sources = {key: root / safe_name(name) for key, name in request.get("zip_inputs", {}).items()}
+            result = export_file(args["format"], args["payload"], root / "output", staged_sources=sources)
     else:
         source = root / safe_name(request["input_name"])
         if operation == "inspect":
