@@ -89,6 +89,21 @@ def test_external_worker_does_not_start_a_second_daemon(tmp_path, monkeypatch):
     assert code == 0 and len(children) == 1 and children[0].poll() is not None
 
 
+def test_failed_worker_startup_cannot_reuse_previous_heartbeat(tmp_path, monkeypatch):
+    import asyncio
+    from qunling import daemon
+    heartbeat = tmp_path / "old-heartbeat"
+    heartbeat.write_text(str(os.getpid()))
+    monkeypatch.setenv("QUNLING_WORKER_HEARTBEAT", str(heartbeat))
+    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path))
+    def unavailable(*args):
+        raise OSError("synthetic unavailable storage")
+    monkeypatch.setattr(daemon, "JobService", unavailable)
+    with pytest.raises(OSError):
+        asyncio.run(daemon.serve())
+    assert not heartbeat.exists()
+
+
 def test_supervisor_restarts_worker_and_cleans_children_on_stop(tmp_path, monkeypatch):
     marker = tmp_path / "starts"
     daemon = (

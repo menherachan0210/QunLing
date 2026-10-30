@@ -36,6 +36,33 @@ healthcheck = load("healthcheck")
 smoke = load("smoke")
 
 
+def test_file_worker_readiness_rejects_missing_stale_and_dead_heartbeat(tmp_path, monkeypatch):
+    import time
+    heartbeat = tmp_path / "heartbeat"
+    monkeypatch.setenv("QUNLING_WORKER_HEARTBEAT", str(heartbeat))
+    def alive(pid, signal):
+        if pid != os.getpid():
+            raise ProcessLookupError
+    monkeypatch.setattr(healthcheck, "os", SimpleNamespace(name="posix", environ=os.environ, kill=alive))
+    assert not healthcheck.check("file-worker")
+    heartbeat.write_text(str(os.getpid()), encoding="ascii")
+    assert healthcheck.check("file-worker")
+    old = time.time() - 31
+    os.utime(heartbeat, (old, old))
+    assert not healthcheck.check("file-worker")
+    heartbeat.write_text("not-a-pid", encoding="ascii")
+    assert not healthcheck.check("file-worker")
+    heartbeat.write_text("2147483647", encoding="ascii")
+    assert not healthcheck.check("file-worker")
+
+
+def test_file_worker_probe_never_uses_posix_kill_on_windows(monkeypatch):
+    kill = Mock()
+    monkeypatch.setattr(healthcheck, "os", SimpleNamespace(name="nt", kill=kill))
+    assert not healthcheck.check("file-worker")
+    kill.assert_not_called()
+
+
 def make_zip(entries):
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:

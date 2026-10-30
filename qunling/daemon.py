@@ -15,6 +15,12 @@ from qunling.resource_gate import FileAdmission, ResourceGate
 
 
 async def serve(*, once=False, concurrency=2):
+    heartbeat_path = Path(os.environ.get("QUNLING_WORKER_HEARTBEAT", str(Path(tempfile.gettempdir()) / "qunling-worker-heartbeat")))
+    if not once:
+        # Docker retains /tmp across a process restart and can reuse the same
+        # PID. Never let the previous process's fresh timestamp report ready
+        # before this instance has opened and recovered its task store.
+        heartbeat_path.unlink(missing_ok=True)
     service = JobService(data_root())
     await asyncio.to_thread(service.prune)
     worker = service.worker(concurrency=concurrency, admission=FileAdmission(ResourceGate(data_root())))
@@ -39,8 +45,7 @@ async def serve(*, once=False, concurrency=2):
         while not stop.is_set():
             # A blocked operation cannot fake liveness; this is on the worker's
             # event loop. The container healthcheck also rejects old instances.
-            path = Path(os.environ.get("QUNLING_WORKER_HEARTBEAT", str(Path(tempfile.gettempdir()) / "qunling-worker-heartbeat")))
-            await asyncio.to_thread(path.write_text, str(os.getpid()), encoding="ascii")
+            await asyncio.to_thread(heartbeat_path.write_text, str(os.getpid()), encoding="ascii")
             try:
                 await asyncio.wait_for(stop.wait(), timeout=5)
             except TimeoutError:
@@ -56,6 +61,7 @@ async def serve(*, once=False, concurrency=2):
     finally:
         stop.set()
         await asyncio.gather(execution, cleanup, return_exceptions=True)
+        heartbeat_path.unlink(missing_ok=True)
         for signum, handler in previous.items():
             signal.signal(signum, handler)
 

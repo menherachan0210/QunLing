@@ -13,9 +13,15 @@ from urllib.request import ProxyHandler, build_opener
 
 def check(role: str) -> bool:
     if role == "file-worker":
+        # This probe runs in Linux Compose. On Windows os.kill(pid, 0) is
+        # not a POSIX liveness probe and must never be used.
+        if os.name == "nt":
+            return False
         try:
             path = Path(os.environ.get("QUNLING_WORKER_HEARTBEAT", "/tmp/qunling-worker-heartbeat"))
             pid = int(path.read_text(encoding="ascii"))
+            if pid <= 0:
+                return False
             os.kill(pid, 0)
             return 0 <= time.time() - path.stat().st_mtime < 30
         except (OSError, ValueError):
