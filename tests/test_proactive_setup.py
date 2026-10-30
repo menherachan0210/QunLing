@@ -17,7 +17,8 @@ def manager():
              "qq_logged_in": True, "qq_connected": True}
     return SimpleNamespace(lock=threading.RLock(), update_inflight=False, pending=None,
         update_status=lambda: {"busy": False}, snapshot=lambda: state,
-        state=SimpleNamespace(read=lambda **_: {"bot_uuid": "trusted-bot"}),
+        state=SimpleNamespace(read=lambda name="setup.json", default=None:
+                              {"bot_uuid": "trusted-bot"} if name == "setup.json" else default),
         api=SimpleNamespace(call=Mock(return_value={"config": defaults(), "status": {"available": True}})))
 
 
