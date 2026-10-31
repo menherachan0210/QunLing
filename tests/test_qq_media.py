@@ -14,6 +14,8 @@ import httpx
 from PIL import Image
 import pytest
 
+pytestmark = pytest.mark.usefixtures('available_file_resources')
+
 ROOT = Path(__file__).resolve().parents[1]
 if (ROOT / "langbot/src").is_dir():
     sys.path.insert(0, str(ROOT / "langbot/src"))
