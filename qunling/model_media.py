@@ -7,6 +7,13 @@ from qunling.incoming_media import MAX_MODEL_IMAGE_CHARS, MAX_MODEL_IMAGES
 from qunling.resource_gate import resource_slot
 
 OMITTED_IMAGE = "[较早的图片未包含在本次视觉输入中；不能声称已重新查看。]"
+MIB = 1024 * 1024
+
+
+def buffer_mib(size):
+    """Reserve HTTP/serialization copies, not a pixel canvas or remote inference."""
+    estimate = 16 * MIB + size * 6
+    return next((budget for budget in (32, 64) if estimate <= budget * MIB), 128)
 
 
 def _url(part):
@@ -52,5 +59,6 @@ async def model_request_slot(messages):
     if size < 256 * 1024:
         yield
         return
-    async with resource_slot("model_media", wait_seconds=5):
+    kind = {32: "model_media_small", 64: "model_media_medium", 128: "model_media"}[buffer_mib(size)]
+    async with resource_slot(kind, wait_seconds=5):
         yield

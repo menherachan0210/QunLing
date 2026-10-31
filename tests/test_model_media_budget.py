@@ -74,8 +74,45 @@ async def test_closing_real_requester_stream_releases_provider_and_media_lease(t
     iterator = request.invoke_llm_stream(None, None, [])
     assert (await anext(iterator)).content == 'hi'
     with sqlite3.connect(tmp_path / 'resource-admission.sqlite3') as db:
-        assert db.execute('select sum(weight) from permits where active=1').fetchone()[0] == 128
+        assert db.execute('select sum(weight) from permits where active=1').fetchone()[0] == 32
     await iterator.aclose()
     assert stream.closed
     with sqlite3.connect(tmp_path / 'resource-admission.sqlite3') as db:
         assert db.execute('select count(*) from permits').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('size,expected', [(351172, 32), (4 * 1024**2, 64), (12 * 1024**2, 128)])
+def test_transfer_budget_scales_with_compressed_payload_not_pixel_count(size, expected):
+    assert model_media.buffer_mib(size) == expected
+
+
+@pytest.mark.sdk
+@pytest.mark.asyncio
+async def test_warm_busy_host_sends_static_screenshot_without_animation_work(tmp_path, monkeypatch):
+    import base64
+    import io
+    from PIL import Image, PngImagePlugin
+    from qunling import vision_input
+    info = PngImagePlugin.PngInfo()
+    info.add_text('fixture', 'x' * 270_000)
+    output = io.BytesIO()
+    with Image.new('RGB', (2802, 1801), 'black') as screenshot:
+        screenshot.save(output, format='PNG', pnginfo=info)
+    value = 'data:image/png;base64,' + base64.b64encode(output.getvalue()).decode()
+    monkeypatch.setenv('QUNLING_DATA_DIR', str(tmp_path))
+    original = resource_gate.ResourceGate
+    sample = lambda: resource_gate.Pressure(1930, 493, some=6.72, full=5.04, local_available_mib=178)
+    monkeypatch.setattr(resource_gate, 'ResourceGate', lambda root: original(root, sample=sample))
+    blocked = original(tmp_path, sample=sample)
+    file_ticket = blocked.ticket('file')
+    assert blocked.try_acquire(file_ticket) is None
+    decoder = AsyncMock(side_effect=AssertionError('A static screenshot must not start the animation decoder'))
+    monkeypatch.setattr(vision_input, '_isolated_animation', decoder)
+    content = await vision_input.model_image_content(value)
+    assert content.type == 'image_base64' and content.image_base64 == value
+    decoder.assert_not_called()
+    messages = model_media.bounded_images([{'role': 'user', 'content': [photo(value.partition(',')[2])]}])
+    async with model_media.model_request_slot(messages):
+        with sqlite3.connect(blocked.path) as db:
+            assert db.execute('SELECT sum(weight) FROM permits WHERE active=1').fetchone()[0] == 32
+    blocked.release(file_ticket)

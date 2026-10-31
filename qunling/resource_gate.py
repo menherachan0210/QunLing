@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager, contextmanager, closing
 from contextvars import ContextVar
 from dataclasses import dataclass
 import os
+import json
 from pathlib import Path
 import secrets
 import sqlite3
@@ -18,7 +19,9 @@ import time
 
 MIB = 1024 * 1024
 WEIGHTS = {"file": 384, "image": 192, "vision_small": 128,
-           "vision_medium": 256, "vision": 384, "model_media": 128}
+           "vision_medium": 256, "vision": 384, "model_media_small": 32,
+           "model_media_medium": 64, "model_media": 128}
+TRANSFER_KINDS = ("model_media_small", "model_media_medium")
 _held = ContextVar("qunling_resource_lease", default=None)
 
 
@@ -96,10 +99,16 @@ class ResourceGate:
         if self.path.is_symlink():
             raise ValueError("Invalid resource ledger")
         self.sample, self.clock, self.ttl, self.max_waiters = sample, clock, ttl, max_waiters
+        self.last_denial = {}
         with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute("""CREATE TABLE IF NOT EXISTS permits (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT UNIQUE NOT NULL,
-                weight INTEGER NOT NULL, active INTEGER NOT NULL, expires REAL NOT NULL)""")
+                weight INTEGER NOT NULL, active INTEGER NOT NULL, expires REAL NOT NULL,
+                kind TEXT NOT NULL DEFAULT '')""")
+            if 'kind' not in {row[1] for row in db.execute('PRAGMA table_info(permits)')}:
+                db.execute("ALTER TABLE permits ADD COLUMN kind TEXT NOT NULL DEFAULT ''")
+            db.execute("CREATE TABLE IF NOT EXISTS denials (at REAL NOT NULL, kind TEXT NOT NULL, evidence TEXT NOT NULL)")
         os.chmod(self.path, 0o600)
 
     @contextmanager
@@ -117,8 +126,8 @@ class ResourceGate:
             if db.execute("SELECT count(*) FROM permits WHERE active=0").fetchone()[0] >= self.max_waiters:
                 raise ResourceBusy("Heavy-work queue is full")
             token = token or secrets.token_hex(16)
-            db.execute("INSERT INTO permits(token,weight,active,expires) VALUES(?,?,0,?)",
-                       (token, weight, self.clock() + self.ttl))
+            db.execute("INSERT INTO permits(token,weight,active,expires,kind) VALUES(?,?,0,?,?)",
+                       (token, weight, self.clock() + self.ttl, kind))
         return token
 
     def try_acquire(self, token):
@@ -126,19 +135,48 @@ class ResourceGate:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM permits WHERE expires<=?", (now,))
-            row = db.execute("SELECT seq,weight,active FROM permits WHERE token=?", (token,)).fetchone()
+            row = db.execute("SELECT seq,weight,active,kind FROM permits WHERE token=?", (token,)).fetchone()
             if row is None or row[2]:
                 raise ResourceBusy("Resource ticket expired")
             db.execute("UPDATE permits SET expires=? WHERE token=?", (now + self.ttl, token))
-            first = db.execute("SELECT seq FROM permits WHERE active=0 ORDER BY seq LIMIT 1").fetchone()[0]
+            transfer = row[3] in TRANSFER_KINDS
+            # A waiting parser must not block a small upload of an already
+            # resident image. FIFO remains intact within each work class.
+            lane = "IN" if transfer else "NOT IN"
+            first = db.execute(f"SELECT seq FROM permits WHERE active=0 AND kind {lane} (?,?) ORDER BY seq LIMIT 1",
+                               TRANSFER_KINDS).fetchone()[0]
             used = db.execute("SELECT coalesce(sum(weight),0) FROM permits WHERE active=1").fetchone()[0]
             budget = max(512, min(2048, sample.total_mib // 4))
-            if (row[0] != first or used + row[1] > budget or sample.some >= 25 or sample.full >= 5
-                    or (sample.local_available_mib is not None and sample.local_available_mib < 32 + used + row[1])
-                    or (sample.available_mib is not None and sample.available_mib < 256 + used + row[1])):
+            reasons = []
+            if row[0] != first:
+                reasons.append('queue_order')
+            if used + row[1] > budget:
+                reasons.append('pool_budget')
+            # PSI throttles local heavy work. Small HTTP buffers do not decode
+            # pixels or run inference locally; their memory guards still apply.
+            if not transfer and (sample.some >= 25 or sample.full >= 5):
+                reasons.append('memory_pressure')
+            if sample.local_available_mib is not None and sample.local_available_mib < 32 + used + row[1]:
+                reasons.append('container_memory')
+            if sample.available_mib is not None and sample.available_mib < 256 + used + row[1]:
+                reasons.append('host_memory')
+            if reasons:
+                self.last_denial = dict(reasons=reasons, weight_mib=row[1], reserved_mib=used,
+                    host_available_mib=sample.available_mib, local_available_mib=sample.local_available_mib,
+                    some=sample.some, full=sample.full)
                 return None
             db.execute("UPDATE permits SET active=1 WHERE token=?", (token,))
         return Permit(self, token, row[1])
+
+    def record_denial(self, kind):
+        """Bounded numeric diagnostics; no image, URL, prompt or user identity."""
+        try:
+            with self._db() as db:
+                db.execute('INSERT INTO denials VALUES(?,?,?)', (self.clock(), kind, json.dumps(self.last_denial)))
+                db.execute('DELETE FROM denials WHERE at<?', (self.clock() - 86400,))
+                db.execute('DELETE FROM denials WHERE rowid NOT IN (SELECT rowid FROM denials ORDER BY rowid DESC LIMIT 128)')
+        except (sqlite3.Error, OSError):
+            pass
 
     def renew(self, token):
         now = self.clock()
@@ -227,6 +265,7 @@ async def resource_slot(kind, *, wait_seconds=45, root=None):
                     yield
                 return
             if time.monotonic() >= deadline:
+                await finish_thread(gate.record_denial, kind)
                 raise ResourceBusy("Heavy-work admission timed out")
             await asyncio.sleep(min(.5, max(0, deadline - time.monotonic())))
     finally:

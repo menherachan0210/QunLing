@@ -202,3 +202,53 @@ def test_small_vision_fits_normal_bot_headroom_without_overbooking(tmp_path):
 def test_small_vision_still_respects_memory_and_pressure_limits(tmp_path, sample):
     gate = ResourceGate(tmp_path, sample=lambda: sample)
     assert gate.try_acquire(gate.ticket("vision_small")) is None
+
+
+def test_old_ledger_migrates_without_losing_active_reservations(tmp_path):
+    path = tmp_path / 'resource-admission.sqlite3'
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE permits (seq INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT UNIQUE, weight INTEGER, active INTEGER, expires REAL)')
+        db.execute('INSERT INTO permits(token,weight,active,expires) VALUES(?,?,?,?)', ('existing', 384, 1, 200))
+    gate = ResourceGate(tmp_path, sample=lambda: Pressure(1930, 1500), clock=lambda: 100)
+    assert gate.try_acquire(gate.ticket('model_media_small')) is not None
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT weight,active,kind FROM permits WHERE token='existing'").fetchone() == (384, 1, '')
+        assert db.execute('SELECT sum(weight) FROM permits WHERE active=1').fetchone()[0] == 416
+
+
+def test_light_transfers_do_not_wait_behind_unadmittable_file_work(tmp_path):
+    gate = ResourceGate(tmp_path, sample=lambda: Pressure(1930, 493, full=5.04, local_available_mib=178))
+    file_ticket = gate.ticket('file')
+    assert gate.try_acquire(file_ticket) is None
+    first, second = gate.ticket('model_media_small'), gate.ticket('model_media_small')
+    assert gate.try_acquire(second) is None  # FIFO within transfers remains.
+    assert gate.try_acquire(first) is not None
+    assert gate.try_acquire(second) is not None
+    assert gate.try_acquire(file_ticket) is None
+
+
+@pytest.mark.parametrize('kind,sample', [
+    ('model_media_small', Pressure(1930, 287, local_available_mib=1000)),
+    ('model_media_small', Pressure(1930, 1500, local_available_mib=63)),
+    ('model_media_medium', Pressure(1930, 319, local_available_mib=1000)),
+    ('model_media_medium', Pressure(1930, 1500, local_available_mib=95)),
+    ('model_media', Pressure(1930, 1500, full=5, local_available_mib=1000)),
+])
+def test_transfers_keep_memory_guards_and_large_payloads_keep_pressure_guard(tmp_path, kind, sample):
+    gate = ResourceGate(tmp_path, sample=lambda: sample)
+    assert gate.try_acquire(gate.ticket(kind)) is None
+
+
+def test_failure_evidence_is_numeric_bounded_and_excludes_ticket_identity(tmp_path):
+    gate = ResourceGate(tmp_path, sample=lambda: Pressure(1930, 100, local_available_mib=40))
+    token = gate.ticket('model_media_small')
+    assert gate.try_acquire(token) is None
+    for _ in range(135):
+        gate.record_denial('model_media_small')
+    with sqlite3.connect(gate.path) as db:
+        rows = db.execute('SELECT kind,evidence FROM denials').fetchall()
+    assert len(rows) == 128 and token not in str(rows)
+    import json
+    evidence = json.loads(rows[-1][1])
+    assert evidence['reasons'] == ['container_memory', 'host_memory']
+    assert evidence['local_available_mib'] == 40 and evidence['weight_mib'] == 32

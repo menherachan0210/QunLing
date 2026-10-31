@@ -150,6 +150,11 @@ async def model_image_base64(value: str) -> str:
         return value
     if len(value) > 4 * ((MAX_BYTES + 2) // 3) + 128:
         raise ValueError("Image exceeds input budget")
+    from qunling.image_header import static_image
+    if static_image(value):
+        # The provider consumes compressed static images directly. Do not
+        # reserve animation buffers or launch a pixel decoder for a screenshot.
+        return value
     memory_mib = decoder_memory_mib(value)
     kind = {128: "vision_small", 256: "vision_medium", 384: "vision"}[memory_mib]
     async with resource_slot(kind, wait_seconds=3):
