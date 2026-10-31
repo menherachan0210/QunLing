@@ -10,6 +10,36 @@ from bootstrap.api import ProactiveAPIError, SetupError
 from bootstrap.configure import RUNNER, PLUGINS, plugin_identity
 
 LEVELS = {'provider_default', 'disabled', 'enabled', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'}
+REASONING_ARGS = {'reasoning_effort', 'reasoning', 'thinking', 'enable_thinking', 'thinking_budget'}
+
+
+def _reasoning_models(manager, models):
+    registry = {row['uuid']: row for row in manager.api.call('GET', '/api/v1/provider/models/llm')['models']}
+    result = []
+    for identifier in dict.fromkeys(models.values()):
+        model = registry.get(identifier)
+        if model is None:
+            raise SetupError('模型配置已变化，请重新载入后编辑。')
+        capabilities = model.get('reasoning_capabilities') or {}
+        args = model.get('extra_args') or {}
+        extra_body = args.get('extra_body') if isinstance(args, dict) else None
+        conflict = (isinstance(args, dict) and REASONING_ARGS.intersection(args)
+                    or isinstance(extra_body, dict) and REASONING_ARGS.intersection(extra_body))
+        notice = ''
+        if 'reasoning' not in (model.get('abilities') or []):
+            notice = '此模型未启用推理能力，暂时只能跟随服务商。'
+        elif conflict:
+            notice = '模型已有自定义推理参数，清除后才能在这里选择等级。'
+        elif capabilities.get('supported') is not True:
+            notice = '此模型尚未提供可选的推理等级。'
+        levels = ['provider_default']
+        advertised = capabilities.get('levels')
+        if not notice and isinstance(advertised, list):
+            levels += [level for level in advertised if isinstance(level, str) and level in LEVELS]
+        result.append({'name': str(model.get('name') or '未命名模型')[:200],
+                       'roles': [role for role, value in models.items() if value == identifier],
+                       'levels': list(dict.fromkeys(levels)), 'notice': notice})
+    return result
 
 
 def _pipeline(manager):
@@ -24,8 +54,8 @@ def _pipeline(manager):
         raise SetupError('当前流水线使用其他运行器，暂不支持在这里修改。')
     runner = ai.get('runner_config', {}).get(RUNNER, {})
     primary = runner.get('model', {}).get('primary')
-    models = {role: (ai.get('qunling_' + role + '_model') or primary) for role in ('decision', 'reconcile')}
-    models['chat'] = primary
+    models = {'chat': primary, **{role: (ai.get('qunling_' + role + '_model') or primary)
+                               for role in ('decision', 'reconcile')}}
     if any(not isinstance(v, str) or not v for v in models.values()):
         raise SetupError('流水线尚未设置聊天模型。')
     revision = hashlib.sha256(json.dumps(pipeline['config'], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -33,7 +63,7 @@ def _pipeline(manager):
     result = {'revision': revision, 'tool_iterations': runner.get('max-tool-iterations', 24),
               'request_timeout': runner.get('timeout', 600),
               'reasoning': {role: levels.get(model, 'provider_default') for role, model in models.items()}}
-    # Only role relationships are public. No raw pipeline, prompts or credentials.
+    # Only names, role relationships and controls are public, never raw configuration.
     return path, pipeline, models, result
 
 
@@ -41,7 +71,8 @@ def settings(manager):
     with manager.lock:
         _, _, models, config = _pipeline(manager)
         return {'config': config, 'shared_roles': [[role for role, value in models.items() if value == model]
-                    for model in dict.fromkeys(models.values())]}
+                    for model in dict.fromkeys(models.values())],
+                'reasoning_models': _reasoning_models(manager, models)}
 
 
 def save(manager, values):
@@ -64,12 +95,19 @@ def save(manager, values):
             if model in selected and selected[model] != level:
                 raise SetupError('共用同一模型的角色需要选择相同的推理强度。')
             selected[model] = level
+        if values['reasoning'] != previous['reasoning']:
+            for model in _reasoning_models(manager, models):
+                role = model['roles'][0]
+                level = values['reasoning'][role]
+                if level != previous['reasoning'][role] and level not in model['levels']:
+                    raise SetupError('此模型不支持所选的推理等级，请重新载入后选择。')
         config = deepcopy(pipeline['config'])
         runner = config['ai']['runner_config'][RUNNER]
         runner['max-tool-iterations'] = values['tool_iterations']
         runner['timeout'] = values['request_timeout']
         levels = runner['model'].setdefault('reasoning', {})
-        levels.update(selected)
+        levels.update({model: level for model, level in selected.items()
+                       if level != levels.get(model, 'provider_default')})
         manager.api.call('PUT', path, {'config': config})
         confirmed = settings(manager)
         if any(confirmed['config'][key] != values[key] for key in ('tool_iterations', 'request_timeout', 'reasoning')):

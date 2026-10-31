@@ -11,25 +11,9 @@ import {
   useAction,
   useDraft,
 } from "../ui";
-const roles: Record<string, string> = {
-  chat: "聊天",
-  decision: "参与判断",
-  reconcile: "内容复核",
-};
-const levels: Record<string, string> = {
-  provider_default: "跟随服务商",
-  disabled: "关闭推理",
-  enabled: "启用推理",
-  minimal: "最低",
-  low: "低",
-  medium: "中",
-  high: "高",
-  xhigh: "更高",
-  max: "最高",
-};
 export function Advanced({ active }: { active: boolean }) {
   const remote = useData("/api/runtime", 15000, active),
-    draft = useDraft("runtime", remote.data?.config),
+    draft = useDraft("runtime-tools", remote.data?.config),
     action = useAction();
   const v = draft.value;
   return (
@@ -81,51 +65,10 @@ export function Advanced({ active }: { active: boolean }) {
                 </Field>
               </div>
             </Section>
-            <Section
-              title="推理强度"
-              description="可选强度取决于服务商和模型。更高强度通常会增加等待时间。"
-            >
-              <div className="form-grid">
-                {Object.entries(roles).map(([role, label]) => (
-                  <Field key={role} label={label}>
-                    <select
-                      value={v.reasoning[role]}
-                      onChange={(e) => {
-                        const shared = remote.data.shared_roles.find(
-                          (row: string[]) => row.includes(role),
-                        ) || [role];
-                        draft.setValue({
-                          ...v,
-                          reasoning: {
-                            ...v.reasoning,
-                            ...Object.fromEntries(
-                              shared.map((key: string) => [
-                                key,
-                                e.target.value,
-                              ]),
-                            ),
-                          },
-                        });
-                      }}
-                    >
-                      {Object.entries(levels).map(([id, name]) => (
-                        <option key={id} value={id}>
-                          {name}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                ))}
-              </div>
-              {remote.data?.shared_roles
-                ?.filter((row: string[]) => row.length > 1)
-                .map((row: string[]) => (
-                  <p className="muted" key={row.join()}>
-                    {row.map((key) => roles[key]).join("、")}
-                    共用同一模型，推理强度同步修改。
-                  </p>
-                ))}
-            </Section>
+            <p className="muted">推理等级请在“模型与能力 → 推理等级”中设置。</p>
+            <a className="button secondary" href="#models">
+              前往模型设置
+            </a>
           </fieldset>
           <SaveBar
             dirty={draft.dirty}

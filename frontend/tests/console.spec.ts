@@ -139,3 +139,81 @@ test("mobile layout, keyboard navigation and unsaved conflict remain usable", as
     "保留这段未保存内容",
   );
 });
+
+test("reasoning settings save shared roles, supported choices and reload without touching tool limits", async ({
+  page,
+}) => {
+  await page.getByRole("link", { name: "模型与能力" }).click();
+  await page.getByRole("button", { name: "推理等级", exact: true }).click();
+  const chat = page.getByLabel("聊天推理等级", { exact: true });
+  const shared = page.getByLabel("参与判断、内容复核推理等级", { exact: true });
+  const before = (await (await page.request.get("/api/runtime")).json()).config;
+  await expect(chat).toHaveValue("low");
+  await expect(chat.locator('option[value="disabled"]')).toHaveCount(0);
+  await expect(shared.locator('option[value="max"]')).toHaveCount(0);
+  await chat.selectOption("high");
+  await shared.selectOption("high");
+  const request = page.waitForRequest(
+    (r) => r.url().endsWith("/api/runtime") && r.method() === "POST",
+  );
+  await page.getByRole("button", { name: "应用设置", exact: true }).click();
+  const payload = (await request).postDataJSON();
+  expect(payload.reasoning).toEqual({
+    chat: "high",
+    decision: "high",
+    reconcile: "high",
+  });
+  expect(payload.tool_iterations).toBe(before.tool_iterations);
+  expect(payload.request_timeout).toBe(before.request_timeout);
+  await expect(page.getByRole("status")).toContainText(
+    "推理等级已生效，将用于新消息",
+  );
+  await page.reload();
+  await page.getByRole("button", { name: "推理等级", exact: true }).click();
+  await expect(chat).toHaveValue("high");
+  await expect(shared).toHaveValue("high");
+  await page.screenshot({
+    path: "../.local/console-browser-results/reasoning-desktop.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "../.local/console-browser-results/reasoning-mobile.png",
+    fullPage: true,
+  });
+});
+
+test("reasoning draft survives navigation and conflicting saves keep the draft", async ({
+  page,
+}) => {
+  await page.getByRole("link", { name: "模型与能力" }).click();
+  await page.getByRole("button", { name: "推理等级", exact: true }).click();
+  const chat = page.getByLabel("聊天推理等级", { exact: true });
+  await chat.selectOption("medium");
+  await page.getByRole("button", { name: "模型分工", exact: true }).click();
+  await page.getByRole("button", { name: "推理等级", exact: true }).click();
+  await expect(chat).toHaveValue("medium");
+  await page.route("**/api/runtime", async (route) => {
+    if (route.request().method() === "POST")
+      await route.fulfill({
+        status: 409,
+        json: { error: "高级参数已在其他页面变化，请重新载入后编辑。" },
+      });
+    else await route.continue();
+  });
+  await page.getByRole("button", { name: "应用设置", exact: true }).click();
+  await expect(
+    page.getByText("高级参数已在其他页面变化，请重新载入后编辑。", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(chat).toHaveValue("medium");
+  await expect(
+    page.getByText("推理等级已生效，将用于新消息", { exact: true }),
+  ).toHaveCount(0);
+});

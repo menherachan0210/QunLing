@@ -33,7 +33,11 @@ class Manager:
                 'quiet_hours':{'enabled':True,'start':'23:00','end':'08:00','timezone':'Asia/Shanghai'},'examples':[]}}}
         self.knowledge={'config':defaults(),'status':{'counters':{'hit':12,'miss':3,'collected':4},'sources':{}}}
         self.runtime={'config':{'revision':'a'*64,'tool_iterations':24,'request_timeout':600,
-                               'reasoning':{k:'provider_default' for k in ('chat','decision','reconcile')}},'shared_roles':[['chat'],['decision','reconcile']]}
+                               'reasoning':{k:'low' for k in ('chat','decision','reconcile')}},
+                      'shared_roles':[['chat'],['decision','reconcile']],
+                      'reasoning_models':[
+                          {'name':'chat-example','roles':['chat'],'levels':['provider_default','low','medium','high','xhigh','max'],'notice':''},
+                          {'name':'decision-example','roles':['decision','reconcile'],'levels':['provider_default','low','high'],'notice':''}]}
         self.capability_checks=type('Checks',(),{'snapshot':lambda _: {'job':None}})()
         self.jobs={}
         self.memories=[{'kind':'profile','sender_id':'10001','title':'阿夏 · 成员资料','value':{'name':'阿夏','traits':['喜欢简洁的回答'],'preferences':['少用表情'],'notes':''},'revision':'b'*64,'updated_at':time.time()}]
@@ -91,7 +95,7 @@ def preview(manager, values):
 
 def runtime_save(manager, values):
     if values['revision']!=manager.runtime['config']['revision']: raise ProactiveAPIError('高级参数已变化',409)
-    manager.runtime['config']={**values,'revision':'b'*64}
+    manager.runtime['config']={**values,'revision':f'{int(values["revision"],16)+1:064x}'}
     return manager.runtime
 
 def knowledge_save(manager, values):
