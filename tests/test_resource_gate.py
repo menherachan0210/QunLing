@@ -46,6 +46,23 @@ def test_unlimited_cgroup_has_no_false_zero_capacity(tmp_path):
     assert pressure(tmp_path / "absent", tmp_path).local_available_mib is None
 
 
+def test_clean_inactive_cache_does_not_permanently_block_file_worker(tmp_path):
+    (tmp_path / "meminfo").write_text("MemTotal: 2097152 kB\nMemAvailable: 1700000 kB\n")
+    group = tmp_path / "cgroup"
+    group.mkdir()
+    (group / "memory.max").write_text(str(512 * 1024**2))
+    (group / "memory.current").write_text(str(400 * 1024**2))
+    (group / "memory.stat").write_text(
+        f"inactive_file {352 * 1024**2}\nfile_dirty {8 * 1024**2}\nfile_writeback {8 * 1024**2}\n")
+    sample = pressure(tmp_path, group)
+    assert sample.local_available_mib == 448
+    gate = ResourceGate(tmp_path / "gate", sample=lambda: sample)
+    assert gate.try_acquire(gate.ticket("file")) is not None
+    # Anonymous allocations and dirty/writeback pages are never discounted.
+    (group / "memory.stat").write_text(f"inactive_file {352 * 1024**2}\nfile_dirty {352 * 1024**2}\n")
+    assert pressure(tmp_path, group).local_available_mib == 112
+
+
 def test_fifo_capacity_and_pressure_across_independent_instances(tmp_path):
     sample = Pressure(2048, 1500)
     gate = ResourceGate(tmp_path, sample=lambda: sample)

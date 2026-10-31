@@ -72,6 +72,16 @@ def pressure(proc=Path("/proc"), cgroup=Path("/sys/fs/cgroup")) -> Pressure:
         # Docker's MemAvailable describes the host, not this container's limit.
         maximum = int((cgroup / "memory.max").read_text())
         current = int((cgroup / "memory.current").read_text())
+        try:
+            stats = dict((key, int(value)) for key, value in
+                         (line.split() for line in (cgroup / "memory.stat").read_text().splitlines()))
+            # Clean inactive file cache is reclaimable. Counting it as live
+            # decoder memory can leave an idle file worker blocked forever.
+            reclaimable = max(0, stats.get("inactive_file", 0)
+                              - stats.get("file_dirty", 0) - stats.get("file_writeback", 0))
+            current -= min(current, reclaimable)
+        except (OSError, ValueError):
+            pass
         local_available = max(0, maximum - current) // MIB
     except (OSError, ValueError):
         pass
