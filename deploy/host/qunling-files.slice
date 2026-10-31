@@ -1,0 +1,14 @@
+[Unit]
+Description=QunLing file worker pressure containment
+
+[Slice]
+MemoryAccounting=yes
+MemoryHigh=448M
+MemoryMax=512M
+MemorySwapMax=256M
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=30%
+ManagedOOMMemoryPressureDurationSec=20s
+
+[Install]
+WantedBy=multi-user.target

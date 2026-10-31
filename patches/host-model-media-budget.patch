@@ -1,0 +1,356 @@
+diff --git a/src/langbot/pkg/provider/modelmgr/requesters/litellmchat.py b/src/langbot/pkg/provider/modelmgr/requesters/litellmchat.py
+--- a/src/langbot/pkg/provider/modelmgr/requesters/litellmchat.py
++++ b/src/langbot/pkg/provider/modelmgr/requesters/litellmchat.py
+@@ -1121,6 +1121,8 @@
+                 # and imports proxy-only dependencies such as FastAPI.
+                 args['_skip_mcp_handler'] = True
+ 
++        from qunling.model_media import bounded_images
++        args['messages'] = bounded_images(args['messages'])
+         return args
+ 
+     async def count_tokens(
+@@ -1162,38 +1164,40 @@
+         """Invoke LLM and return message with usage info."""
+         args = await self._build_completion_args(model, messages, funcs, extra_args, stream=False)
+ 
+-        try:
+-            response = await acompletion(**args)
+-
+-            message_data = response.choices[0].message.model_dump()
+-            if 'role' not in message_data or message_data['role'] is None:
+-                message_data['role'] = 'assistant'
+-
+-            content = message_data.get('content', '')
+-            reasoning_content = message_data.get('reasoning_content', None)
+-            thinking_blocks = message_data.get('thinking_blocks')
+-            if reasoning_content or thinking_blocks:
+-                provider_fields = dict(message_data.get('provider_specific_fields') or {})
+-                if reasoning_content:
+-                    provider_fields['reasoning_content'] = reasoning_content
+-                if thinking_blocks:
+-                    provider_fields['thinking_blocks'] = thinking_blocks
+-                message_data['provider_specific_fields'] = provider_fields
+-            display_reasoning = reasoning_content or self._thinking_blocks_text(thinking_blocks) or None
+-            message_data['content'] = self._process_thinking_content(content, display_reasoning, remove_think)
+-
+-            if 'reasoning_content' in message_data:
+-                del message_data['reasoning_content']
+-            if 'thinking_blocks' in message_data:
+-                del message_data['thinking_blocks']
+-
+-            message = provider_message.Message(**message_data)
+-            usage_info = self._extract_usage(response)
+-
+-            return message, usage_info
+-
+-        except Exception as e:
+-            self._handle_litellm_error(e)
++        from qunling.model_media import model_request_slot
++        async with model_request_slot(args['messages']):
++            try:
++                response = await acompletion(**args)
++
++                message_data = response.choices[0].message.model_dump()
++                if 'role' not in message_data or message_data['role'] is None:
++                    message_data['role'] = 'assistant'
++
++                content = message_data.get('content', '')
++                reasoning_content = message_data.get('reasoning_content', None)
++                thinking_blocks = message_data.get('thinking_blocks')
++                if reasoning_content or thinking_blocks:
++                    provider_fields = dict(message_data.get('provider_specific_fields') or {})
++                    if reasoning_content:
++                        provider_fields['reasoning_content'] = reasoning_content
++                    if thinking_blocks:
++                        provider_fields['thinking_blocks'] = thinking_blocks
++                    message_data['provider_specific_fields'] = provider_fields
++                display_reasoning = reasoning_content or self._thinking_blocks_text(thinking_blocks) or None
++                message_data['content'] = self._process_thinking_content(content, display_reasoning, remove_think)
++
++                if 'reasoning_content' in message_data:
++                    del message_data['reasoning_content']
++                if 'thinking_blocks' in message_data:
++                    del message_data['thinking_blocks']
++
++                message = provider_message.Message(**message_data)
++                usage_info = self._extract_usage(response)
++
++                return message, usage_info
++
++            except Exception as e:
++                self._handle_litellm_error(e)
+ 
+     async def invoke_llm_stream(
+         self,
+@@ -1216,141 +1220,143 @@
+         thinking_blocks_state: list[dict[str, typing.Any]] = []
+         response = None
+ 
+-        try:
+-            response = await acompletion(**args)
+-            async for chunk in response:
+-                # Capture usage whenever a chunk carries it.
+-                #
+-                # Important: many OpenAI-compatible gateways (e.g. new-api) and
+-                # providers send the final usage payload in a chunk that STILL
+-                # contains a (empty-delta) choice, not an empty `choices` list.
+-                # The previous implementation only captured usage when `choices`
+-                # was empty, so streamed calls always recorded 0 tokens.
+-                # We therefore capture usage independently of `choices`, and then
+-                # fall through to also process any content this chunk may carry.
+-                if getattr(chunk, 'usage', None):
+-                    usage_info = self._normalize_usage(chunk.usage)
+-                    if query is not None:
+-                        if query.variables is None:
+-                            query.variables = {}
+-                        query.variables[requester.STREAM_USAGE_QUERY_VARIABLE] = usage_info
+-
+-                if not hasattr(chunk, 'choices') or not chunk.choices:
+-                    continue
+-
+-                choice = chunk.choices[0]
+-                delta = choice.delta.model_dump() if hasattr(choice, 'delta') else {}
+-                finish_reason = getattr(choice, 'finish_reason', None)
+-
+-                if 'role' in delta and delta['role']:
+-                    role = delta['role']
+-
+-                delta_content = delta.get('content') or ''
+-                reasoning_content = delta.get('reasoning_content') or ''
+-                provider_fields = dict(delta.get('provider_specific_fields') or {})
+-                if finish_reason:
+-                    # Preserve an explicit provider stop even when the final delta is empty.
+-                    provider_fields['finish_reason'] = finish_reason
+-                raw_thinking_blocks = delta.get('thinking_blocks')
+-                if raw_thinking_blocks:
+-                    thinking_blocks_state = self._merge_thinking_blocks(thinking_blocks_state, raw_thinking_blocks)
+-                    provider_fields['thinking_blocks'] = thinking_blocks_state
+-                thinking_blocks_text = self._thinking_blocks_text(raw_thinking_blocks)
+-                display_reasoning_content = reasoning_content or thinking_blocks_text
+-
+-                # Handle reasoning_content based on remove_think flag
+-                if reasoning_content:
+-                    provider_fields['reasoning_content'] = reasoning_content
+-                    if remove_think:
+-                        delta_content = delta_content or None
+-                    else:
+-                        # Stream explicit markers so downstream adapters and
+-                        # the debug page see the same format as non-streaming
+-                        # responses.
+-                        if not reasoning_started:
+-                            delta_content = '<think>\n'
+-                            reasoning_started = True
++        from qunling.model_media import model_request_slot
++        async with model_request_slot(args['messages']):
++            try:
++                response = await acompletion(**args)
++                async for chunk in response:
++                    # Capture usage whenever a chunk carries it.
++                    #
++                    # Important: many OpenAI-compatible gateways (e.g. new-api) and
++                    # providers send the final usage payload in a chunk that STILL
++                    # contains a (empty-delta) choice, not an empty `choices` list.
++                    # The previous implementation only captured usage when `choices`
++                    # was empty, so streamed calls always recorded 0 tokens.
++                    # We therefore capture usage independently of `choices`, and then
++                    # fall through to also process any content this chunk may carry.
++                    if getattr(chunk, 'usage', None):
++                        usage_info = self._normalize_usage(chunk.usage)
++                        if query is not None:
++                            if query.variables is None:
++                                query.variables = {}
++                            query.variables[requester.STREAM_USAGE_QUERY_VARIABLE] = usage_info
++
++                    if not hasattr(chunk, 'choices') or not chunk.choices:
++                        continue
++
++                    choice = chunk.choices[0]
++                    delta = choice.delta.model_dump() if hasattr(choice, 'delta') else {}
++                    finish_reason = getattr(choice, 'finish_reason', None)
++
++                    if 'role' in delta and delta['role']:
++                        role = delta['role']
++
++                    delta_content = delta.get('content') or ''
++                    reasoning_content = delta.get('reasoning_content') or ''
++                    provider_fields = dict(delta.get('provider_specific_fields') or {})
++                    if finish_reason:
++                        # Preserve an explicit provider stop even when the final delta is empty.
++                        provider_fields['finish_reason'] = finish_reason
++                    raw_thinking_blocks = delta.get('thinking_blocks')
++                    if raw_thinking_blocks:
++                        thinking_blocks_state = self._merge_thinking_blocks(thinking_blocks_state, raw_thinking_blocks)
++                        provider_fields['thinking_blocks'] = thinking_blocks_state
++                    thinking_blocks_text = self._thinking_blocks_text(raw_thinking_blocks)
++                    display_reasoning_content = reasoning_content or thinking_blocks_text
++
++                    # Handle reasoning_content based on remove_think flag
++                    if reasoning_content:
++                        provider_fields['reasoning_content'] = reasoning_content
++                        if remove_think:
++                            delta_content = delta_content or None
+                         else:
+-                            delta_content = ''
+-                        delta_content += display_reasoning_content
+-                        if delta.get('content'):
+-                            delta_content += f'\n</think>\n{delta.get("content")}'
+-                            reasoning_closed = True
+-
+-                elif display_reasoning_content:
+-                    if remove_think:
+-                        delta_content = delta_content or None
+-                    else:
+-                        if not reasoning_started:
+-                            delta_content = '<think>\n'
+-                            reasoning_started = True
++                            # Stream explicit markers so downstream adapters and
++                            # the debug page see the same format as non-streaming
++                            # responses.
++                            if not reasoning_started:
++                                delta_content = '<think>\n'
++                                reasoning_started = True
++                            else:
++                                delta_content = ''
++                            delta_content += display_reasoning_content
++                            if delta.get('content'):
++                                delta_content += f'\n</think>\n{delta.get("content")}'
++                                reasoning_closed = True
++
++                    elif display_reasoning_content:
++                        if remove_think:
++                            delta_content = delta_content or None
+                         else:
+-                            delta_content = ''
+-                        delta_content += display_reasoning_content
+-                        if delta.get('content'):
+-                            delta_content += f'\n</think>\n{delta.get("content")}'
+-                            reasoning_closed = True
+-
+-                elif delta_content and not remove_think and reasoning_started and not reasoning_closed:
+-                    delta_content = f'\n</think>\n{delta_content}'
+-                    reasoning_closed = True
+-
+-                if finish_reason and not remove_think and reasoning_started and not reasoning_closed:
+-                    delta_content = f'{delta_content}\n</think>\n'
+-                    reasoning_closed = True
+-
+-                if think_state is not None and delta_content:
+-                    delta_content = think_state.feed(delta_content)
+-
+-                tool_calls = self._normalize_stream_tool_calls(delta.get('tool_calls'), tool_call_state)
+-
+-                if not delta_content and not tool_calls and not provider_fields and not finish_reason:
++                            if not reasoning_started:
++                                delta_content = '<think>\n'
++                                reasoning_started = True
++                            else:
++                                delta_content = ''
++                            delta_content += display_reasoning_content
++                            if delta.get('content'):
++                                delta_content += f'\n</think>\n{delta.get("content")}'
++                                reasoning_closed = True
++
++                    elif delta_content and not remove_think and reasoning_started and not reasoning_closed:
++                        delta_content = f'\n</think>\n{delta_content}'
++                        reasoning_closed = True
++
++                    if finish_reason and not remove_think and reasoning_started and not reasoning_closed:
++                        delta_content = f'{delta_content}\n</think>\n'
++                        reasoning_closed = True
++
++                    if think_state is not None and delta_content:
++                        delta_content = think_state.feed(delta_content)
++
++                    tool_calls = self._normalize_stream_tool_calls(delta.get('tool_calls'), tool_call_state)
++
++                    if not delta_content and not tool_calls and not provider_fields and not finish_reason:
++                        chunk_idx += 1
++                        continue
++
++                    chunk_data: dict[str, typing.Any] = {
++                        'role': role,
++                        'content': delta_content if delta_content else None,
++                        'tool_calls': tool_calls,
++                        'is_final': bool(finish_reason),
++                    }
++
++                    # Preserve provider_specific_fields from delta (e.g., Gemini thought_signatures)
++                    if provider_fields:
++                        chunk_data['provider_specific_fields'] = provider_fields
++
++                    chunk_data = {k: v for k, v in chunk_data.items() if v is not None}
++                    yield provider_message.MessageChunk(**chunk_data)
+                     chunk_idx += 1
+-                    continue
+-
+-                chunk_data: dict[str, typing.Any] = {
+-                    'role': role,
+-                    'content': delta_content if delta_content else None,
+-                    'tool_calls': tool_calls,
+-                    'is_final': bool(finish_reason),
+-                }
+-
+-                # Preserve provider_specific_fields from delta (e.g., Gemini thought_signatures)
+-                if provider_fields:
+-                    chunk_data['provider_specific_fields'] = provider_fields
+-
+-                chunk_data = {k: v for k, v in chunk_data.items() if v is not None}
+-                yield provider_message.MessageChunk(**chunk_data)
+-                chunk_idx += 1
+-
+-            if reasoning_started and not reasoning_closed:
+-                yield provider_message.MessageChunk(
+-                    role=role,
+-                    content='\n</think>\n',
+-                    is_final=True,
+-                )
+-
+-            if think_state is not None:
+-                pending_content = think_state.flush()
+-                if pending_content:
++
++                if reasoning_started and not reasoning_closed:
+                     yield provider_message.MessageChunk(
+                         role=role,
+-                        content=pending_content,
++                        content='\n</think>\n',
+                         is_final=True,
+                     )
+ 
+-        except Exception as e:
+-            self._handle_litellm_error(e)
+-
+-        finally:
+-            # Closing a downstream async generator must release the provider's
+-            # HTTP stream immediately, including cancellation while at yield.
+-            close = getattr(response, 'aclose', None)
+-            if callable(close):
+-                try:
+-                    await asyncio.wait_for(close(), timeout=5.0)
+-                except Exception as exc:
+-                    self.ap.logger.debug(f'Failed to close LLM stream: {type(exc).__name__}')
++                if think_state is not None:
++                    pending_content = think_state.flush()
++                    if pending_content:
++                        yield provider_message.MessageChunk(
++                            role=role,
++                            content=pending_content,
++                            is_final=True,
++                        )
++
++            except Exception as e:
++                self._handle_litellm_error(e)
++
++            finally:
++                # Closing a downstream async generator must release the provider's
++                # HTTP stream immediately, including cancellation while at yield.
++                close = getattr(response, 'aclose', None)
++                if callable(close):
++                    try:
++                        await asyncio.wait_for(close(), timeout=5.0)
++                    except Exception as exc:
++                        self.ap.logger.debug(f'Failed to close LLM stream: {type(exc).__name__}')
+ 
+     async def invoke_embedding(
+         self,

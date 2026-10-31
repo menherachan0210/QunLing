@@ -53,8 +53,9 @@ services:
       start_period: 120s
       retries: 12
     stop_grace_period: 60s
-    mem_limit: ${QQBOT_APP_MEMORY:-1408m}
-    memswap_limit: ${QQBOT_APP_MEMORY_SWAP:-1792m}
+    mem_limit: ${QQBOT_APP_MEMORY:-1152m}
+    memswap_limit: ${QQBOT_APP_MEMORY_SWAP:-1664m}
+    cgroup_parent: ${QQBOT_APP_CGROUP_PARENT:-}
     mem_reservation: 512m
     cpu_shares: 1024
 
@@ -74,6 +75,7 @@ services:
       - langbot-data:/opt/qq-ai-bot/langbot/data
     mem_limit: ${QQBOT_WORKER_MEMORY:-512m}
     memswap_limit: ${QQBOT_WORKER_MEMORY_SWAP:-768m}
+    cgroup_parent: ${QQBOT_WORKER_CGROUP_PARENT:-}
     cpus: ${QQBOT_WORKER_CPUS:-0.75}
     cpu_shares: 128
     pids_limit: 128

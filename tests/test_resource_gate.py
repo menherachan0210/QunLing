@@ -14,9 +14,36 @@ def test_pressure_uses_available_and_psi_not_total_swap(tmp_path):
     (tmp_path / "meminfo").write_text("MemTotal: 2097152 kB\nMemAvailable: 700000 kB\nSwapTotal: 2097152 kB\nSwapFree: 0 kB\n")
     (tmp_path / "pressure").mkdir()
     (tmp_path / "pressure/memory").write_text("some avg10=26.00 avg60=2.00 total=1000\nfull avg10=6.00 avg60=0.0 total=100\n")
-    value = pressure(tmp_path)
+    value = pressure(tmp_path, tmp_path / "cgroup")
     assert value.total_mib == 2048 and value.available_mib == 683
     assert value.some == 26 and value.full == 6
+
+
+def test_container_headroom_and_pressure_override_a_healthy_host(tmp_path):
+    (tmp_path / "meminfo").write_text("MemTotal: 2097152 kB\nMemAvailable: 1500000 kB\n")
+    group = tmp_path / "cgroup"
+    group.mkdir()
+    (group / "memory.max").write_text(str(1152 * 1024**2))
+    (group / "memory.current").write_text(str(900 * 1024**2))
+    (group / "memory.pressure").write_text("some avg10=28.00 total=1000\nfull avg10=7.00 total=100\n")
+    sampled = pressure(tmp_path, group)
+    assert sampled.local_available_mib == 252
+    assert sampled.some == 28 and sampled.full == 7
+    gate = ResourceGate(tmp_path / "gate", sample=lambda: sampled)
+    ticket = gate.ticket("vision")
+    assert gate.try_acquire(ticket) is None
+    (group / "memory.pressure").write_text("some avg10=0 total=1000\nfull avg10=0 total=100\n")
+    sampled = pressure(tmp_path, group)
+    assert gate.try_acquire(ticket) is None  # Host free RAM cannot bypass the container cap.
+    (group / "memory.current").write_text(str(600 * 1024**2))
+    sampled = pressure(tmp_path, group)
+    assert gate.try_acquire(ticket) is not None
+
+
+def test_unlimited_cgroup_has_no_false_zero_capacity(tmp_path):
+    (tmp_path / "memory.max").write_text("max")
+    (tmp_path / "memory.current").write_text("1")
+    assert pressure(tmp_path / "absent", tmp_path).local_available_mib is None
 
 
 def test_fifo_capacity_and_pressure_across_independent_instances(tmp_path):

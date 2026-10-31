@@ -61,6 +61,7 @@ PATCHES = (
     ("host-dialogue-focus.patch", "host", False),
     ("host-dialogue-review.patch", "host", False),
     ("host-deferred-incoming-images.patch", "host", False),
+    ("host-model-media-budget.patch", "host", False),
     ("host-message-recall.patch", "host", False),
     ("sdk-image-tool-timeout.patch", "sdk", False),
     ("sdk-dedicated-background.patch", "sdk", False),
@@ -344,21 +345,15 @@ def build_plan(name: str, root: Path, source: str, component: str) -> PatchPlan:
 
 
 def build_host_plans(root: Path, entries) -> list[PatchPlan]:
-    """Preflight the recall overlay with its prerequisite patches in a scratch tree.
+    """Unwind verified overlays in scratch, then validate the complete composition.
 
-    The overlay uses code inserted by earlier patches. On repeat checks,
-    temporarily undo the overlay only in the scratch copy so prerequisite
-    verification sees its original context. No installed file changes here.
+    Later patches can change lines introduced by several earlier patches.
+    Reverse checks against the final tree alone would mistake those earlier
+    patches for corrupt installations. Never unwind the installed files.
     """
-    overlay = 'host-message-recall.patch'
-    if overlay not in {name for name, _ in entries}:
-        return [build_plan(name, root, source, 'host') for name, source in entries]
-    assert entries[-1][0] == overlay
     parsed = {name: runtime_payload(source, 'host') for name, source in entries}
     paths = {path for _, targets in parsed.values() for path in targets}
     check_targets(root, paths)
-    overlay_payload = parsed[overlay][0]
-    installed = git_apply(root, overlay_payload, '--reverse', '--check').returncode == 0
     with tempfile.TemporaryDirectory() as directory:
         scratch = Path(directory)
         for path in paths:
@@ -366,16 +361,22 @@ def build_host_plans(root: Path, entries) -> list[PatchPlan]:
                 target = scratch / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(root / path, target)
-        if installed and git_apply(scratch, overlay_payload, '--reverse').returncode != 0:
-            raise PatchError('Recall overlay could not be verified in the scratch tree.')
+        installed = set()
+        for name, _ in reversed(entries):
+            payload = parsed[name][0]
+            if git_apply(scratch, payload, '--reverse', '--check').returncode == 0:
+                if git_apply(scratch, payload, '--reverse').returncode != 0:
+                    raise PatchError(f'{name}: overlay could not be verified in scratch.')
+                installed.add(name)
         plans = []
         for name, source in entries:
             plan = build_plan(name, scratch, source, 'host')
-            overlaps_overlay = bool(set(parsed[name][1]) & set(parsed[overlay][1]))
-            if installed and name != overlay and plan.state != 'already-applied' and overlaps_overlay:
-                raise PatchError('Recall prerequisites changed; rebuild from the pinned source before upgrading.')
+            later = {item for item, _ in entries[len(plans) + 1:]} & installed
+            overlaps_overlay = any(set(parsed[name][1]) & set(parsed[item][1]) for item in later)
+            if name not in installed and plan.state != 'already-applied' and overlaps_overlay:
+                raise PatchError('Overlay prerequisites changed; rebuild from the pinned source before upgrading.')
             plans.append(replace(plan, root=root,
-                                 state='already-applied' if installed and name == overlay else plan.state))
+                                 state='already-applied' if name in installed else plan.state))
             if plan.state == 'ready' and git_apply(scratch, plan.payload).returncode != 0:
                 raise PatchError(f'{name}: prerequisite composition failed; installed files are unchanged.')
         return plans

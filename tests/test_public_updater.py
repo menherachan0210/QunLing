@@ -406,6 +406,18 @@ def test_failed_build_never_stops_or_backs_up_running_services(transaction):
     assert [operation for operation, _ in docker.events] == ["build"]
 
 
+def test_update_preserves_host_pressure_guard_and_its_memory_budget(transaction):
+    engine, docker = transaction
+    guard = {'cgroup_parent': 'qunling-bot.slice', 'mem_limit': '1207959552',
+             'memswap_limit': '1744830464'}
+    docker.current['services']['app'].update(guard)
+    engine.execute(JOB)
+    assert state(engine)['phase'] == 'completed'
+    active = module.read(engine.active_path)['services']['app']
+    assert all(active[key] == value for key, value in guard.items())
+    assert not module.read(engine.active_path)['services']['napcat'].get('cgroup_parent')
+
+
 @pytest.mark.parametrize(
     "change",
     [

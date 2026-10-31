@@ -38,8 +38,11 @@ def contact_sheet(image):
     draw.text((5, 20), status, fill="black")
     for offset, index in enumerate(samples):
         image.seek(index)
-        with image.convert("RGBA") as frame:
-            frame.thumbnail((tile_w - 12, tile_h - 28), Image.Resampling.LANCZOS)
+        # Resize before adding an alpha channel. A small compressed GIF may
+        # have a huge canvas; converting it first allocates another full frame.
+        ratio = min(1, (tile_w - 12) / image.width, (tile_h - 28) / image.height)
+        target = (max(1, int(image.width * ratio)), max(1, int(image.height * ratio)))
+        with image.resize(target, Image.Resampling.LANCZOS, reducing_gap=3) as small, small.convert("RGBA") as frame:
             x = (offset % columns) * tile_w
             y = (offset // columns) * tile_h + 42
             sheet.paste(frame, (x + (tile_w - frame.width) // 2, y + 22), frame)

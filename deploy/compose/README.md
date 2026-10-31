@@ -53,7 +53,7 @@ ssh -N \
 
 图片生成/编辑与文件处理共用数据卷内的资源准入账本。Linux 同时检查可用内存和内存 PSI；2 GB 主机默认重任务额度为 512 MiB，另留 256 MiB 余量。排队在文件任务领取前发生，不消耗执行次数；保留原有任务总截止时间和交付防重记录。图片排队上限 45 秒，未准入不会向供应商提交付费请求。旧的 swap 占用本身不会被误判成当前压力。文件输入、动图素材和 ZIP 素材采用校验过的分块暂存，原附件内容不压缩、不降质。
 
-默认 `app` 上限为 1408 MiB 内存、1792 MiB 内存加交换空间，管理页与更新器各为 192/256 MiB。可通过 `QQBOT_APP_MEMORY`、`QQBOT_APP_MEMORY_SWAP`、`QQBOT_WORKER_MEMORY`、`QQBOT_WORKER_MEMORY_SWAP`、`QQBOT_WORKER_CPUS` 按实际机器调整；这是 2 GB 主机的保守起点，不是任意负载的容量保证。
+默认 `app` 上限为 1152 MiB 内存、1664 MiB 内存加交换空间，管理页与更新器各为 192/256 MiB。可通过 `QQBOT_APP_MEMORY`、`QQBOT_APP_MEMORY_SWAP`、`QQBOT_WORKER_MEMORY`、`QQBOT_WORKER_MEMORY_SWAP`、`QQBOT_WORKER_CPUS` 按实际机器调整；这是 2 GB 主机的保守起点，不是任意负载的容量保证。可选的主机压力保护见 [host/README.md](../host/README.md)，安装后才设置 `QQBOT_APP_CGROUP_PARENT` 和 `QQBOT_WORKER_CGROUP_PARENT`。
 
 Runtime 先自行恢复插件连接，Docker 负责退出进程的重启；独立 updater 再处理持续不健康的 `file-worker`、`wizard` 或 `app`。健康检查连续失败后还需持续异常 90 秒，并有启动宽限、至少 10 分钟的递增冷却和每小时最多 3 次限制。它遵守更新/维护锁和人工停止、暂停状态，不重放聊天、图片供应商请求或 QQ 发送，也不自动重启 NapCat。恢复记录在更新卷的 `recovery.json`。
 

@@ -94,6 +94,20 @@ def test_invalid_dependent_overlay_never_partially_installs_prerequisite(tmp_pat
     assert target.read_text() == 'old\n'
 
 
+def test_multiple_overlapping_host_patches_recheck_without_touching_installation(tmp_path):
+    target = write(tmp_path, 'src/langbot/example.py')
+    entries = [('first.patch', diff('src/langbot/example.py', 'old', 'middle')),
+               ('second.patch', diff('src/langbot/example.py', 'middle', 'next')),
+               ('host-model-media-budget.patch', diff('src/langbot/example.py', 'next', 'final'))]
+    patcher.execute_plans(patcher.build_host_plans(tmp_path, entries), True)
+    assert target.read_text() == 'final\n'
+    before = target.stat().st_mtime_ns
+    plans = patcher.build_host_plans(tmp_path, entries)
+    assert all(plan.state == 'already-applied' for plan in plans)
+    patcher.execute_plans(plans, True)
+    assert target.stat().st_mtime_ns == before
+
+
 def test_sdk_mapping_in_linux_style_nested_git_directory(tmp_path):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     sdk_root = tmp_path / "langbot/.venv/lib/python3.12/site-packages"
@@ -327,7 +341,8 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("host-console-preview.patch", "host", False) in patcher.PATCHES
     assert ("host-deferred-incoming-images.patch", "host", False) in patcher.PATCHES
     assert ("sdk-quote-text.patch", "sdk", False) in patcher.PATCHES
-    assert len(names) == 45
+    assert ("host-model-media-budget.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 46
     assert "host-model-usage.patch" in names
     assert {"host-web-knowledge.patch", "host-memory-recall.patch"} <= names
     assert "host-animation-vision.patch" in names

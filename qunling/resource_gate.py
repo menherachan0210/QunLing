@@ -17,7 +17,7 @@ import sqlite3
 import time
 
 MIB = 1024 * 1024
-WEIGHTS = {"file": 384, "image": 192}
+WEIGHTS = {"file": 384, "image": 192, "vision": 384, "model_media": 128}
 _held = ContextVar("qunling_resource_lease", default=None)
 
 
@@ -43,9 +43,10 @@ class Pressure:
     available_mib: int | None = None
     some: float = 0
     full: float = 0
+    local_available_mib: int | None = None
 
 
-def pressure(proc=Path("/proc")) -> Pressure:
+def pressure(proc=Path("/proc"), cgroup=Path("/sys/fs/cgroup")) -> Pressure:
     total, available, some, full = 2048, None, 0., 0.
     try:
         fields = {line.split(":", 1)[0]: int(line.split()[1]) // 1024
@@ -55,17 +56,26 @@ def pressure(proc=Path("/proc")) -> Pressure:
         # Native Windows still has a bounded global pool; Linux adds PSI and
         # actual available-memory admission. Old swap usage is NOT pressure.
         pass
+    for path in (proc / "pressure/memory", cgroup / "memory.pressure"):
+        try:
+            for line in path.read_text().splitlines():
+                parts = line.split()
+                value = float(dict(part.split("=", 1) for part in parts[1:])["avg10"])
+                if parts[0] == "some":
+                    some = max(some, value)
+                elif parts[0] == "full":
+                    full = max(full, value)
+        except (OSError, ValueError, KeyError, IndexError):
+            pass
+    local_available = None
     try:
-        for line in (proc / "pressure/memory").read_text().splitlines():
-            parts = line.split()
-            value = float(dict(part.split("=", 1) for part in parts[1:])["avg10"])
-            if parts[0] == "some":
-                some = value
-            elif parts[0] == "full":
-                full = value
-    except (OSError, ValueError, KeyError, IndexError):
+        # Docker's MemAvailable describes the host, not this container's limit.
+        maximum = int((cgroup / "memory.max").read_text())
+        current = int((cgroup / "memory.current").read_text())
+        local_available = max(0, maximum - current) // MIB
+    except (OSError, ValueError):
         pass
-    return Pressure(total, available, some, full)
+    return Pressure(total, available, some, full, local_available)
 
 
 class ResourceGate:
@@ -113,6 +123,7 @@ class ResourceGate:
             used = db.execute("SELECT coalesce(sum(weight),0) FROM permits WHERE active=1").fetchone()[0]
             budget = max(512, min(2048, sample.total_mib // 4))
             if (row[0] != first or used + row[1] > budget or sample.some >= 25 or sample.full >= 5
+                    or (sample.local_available_mib is not None and sample.local_available_mib < 32 + row[1])
                     or (sample.available_mib is not None and sample.available_mib < 256 + used + row[1])):
                 return None
             db.execute("UPDATE permits SET active=1 WHERE token=?", (token,))

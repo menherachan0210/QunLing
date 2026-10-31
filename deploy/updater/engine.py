@@ -545,6 +545,14 @@ class UpdateEngine:
                 QQBOT_UPDATE_KEEP_RELEASES=str(self.keep_backups) if self.retention_valid else "disabled")
             new["services"]["updater"]["environment"].pop("QQBOT_UPDATE_KEEP_BACKUPS", None)
             old_env = old["services"]["app"].get("environment", {})
+            # Host-installed pressure guards must survive image updates. They
+            # monitor these dedicated slices, not the whole machine or QQ login.
+            for service in ("app", "file-worker"):
+                previous = old["services"].get(service, {})
+                if service in new["services"] and previous.get("cgroup_parent"):
+                    for key in ("cgroup_parent", "mem_limit", "memswap_limit"):
+                        if key in previous:
+                            new["services"][service][key] = previous[key]
             for key in ("QUNLING_DECISION_TIMEOUT_SECONDS", "QUNLING_REPLY_TIMEOUT_SECONDS", "QUNLING_MODEL_PRICES",
                         "QUNLING_JEV_REVIEW_ENABLED", "QUNLING_JEV_API_KEY_FILE"):
                 if key in old_env:

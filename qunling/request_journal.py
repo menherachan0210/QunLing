@@ -33,6 +33,8 @@ REASONS = frozenset({'', 'queue_full', 'queue_timeout', 'execution_timeout', 'to
 def classify(error, *, phase='running', _depth=0):
     """Inspect type/status only. Exception text can contain credentials or chats."""
     name = type(error).__name__
+    if name == 'ResourceBusy':
+        return 'capacity'
     response = getattr(error, 'response', None)
     status = getattr(error, 'status_code', None) or getattr(response, 'status_code', None)
     if status in (401, 403):

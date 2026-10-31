@@ -10,7 +10,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-def limits():
+def limits(*, memory_bytes=768 * 1024 * 1024, cpu_seconds=45,
+           file_bytes=24 * 1024 * 1024, max_processes=8):
     if os.name == "nt":
         import ctypes as c
         from ctypes import wintypes as w
@@ -40,9 +41,9 @@ def limits():
         handle = kernel.CreateJobObjectW(None, None)
         value = Extended()
         value.basic.flags = 0x200 | 0x2000 | 0x8 | 0x4
-        value.basic.active = 8  # includes bounded 7z child helpers
-        value.basic.job_time = 45 * 10_000_000
-        value.job_memory = 768 * 1024 * 1024
+        value.basic.active = max_processes  # includes bounded 7z child helpers
+        value.basic.job_time = cpu_seconds * 10_000_000
+        value.job_memory = memory_bytes
         if not handle or not kernel.SetInformationJobObject(handle, 9, c.byref(value), c.sizeof(value)):
             raise RuntimeError
         if not kernel.AssignProcessToJobObject(handle, kernel.GetCurrentProcess()):
@@ -50,8 +51,8 @@ def limits():
         return handle
     import resource
     for kind, requested in (
-        (resource.RLIMIT_AS, 768 * 1024 * 1024), (resource.RLIMIT_CPU, 45),
-        (resource.RLIMIT_FSIZE, 24 * 1024 * 1024), (resource.RLIMIT_NOFILE, 64),
+        (resource.RLIMIT_AS, memory_bytes), (resource.RLIMIT_CPU, cpu_seconds),
+        (resource.RLIMIT_FSIZE, file_bytes), (resource.RLIMIT_NOFILE, 64),
     ):
         hard = resource.getrlimit(kind)[1]
         cap = requested if hard == resource.RLIM_INFINITY else min(hard, requested)

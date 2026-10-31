@@ -1,0 +1,14 @@
+[Unit]
+Description=QunLing bot pressure containment
+
+[Slice]
+MemoryAccounting=yes
+MemoryHigh=1056M
+MemoryMax=1152M
+MemorySwapMax=512M
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=30%
+ManagedOOMMemoryPressureDurationSec=20s
+
+[Install]
+WantedBy=multi-user.target
