@@ -1,0 +1,23 @@
+diff --git a/src/langbot/pkg/plugin/handler.py b/src/langbot/pkg/plugin/handler.py
+--- a/src/langbot/pkg/plugin/handler.py
++++ b/src/langbot/pkg/plugin/handler.py
+@@ -435,11 +435,17 @@
+ def _resolve_remove_think(data: dict[str, Any], query: Any | None) -> bool:
+-    """Resolve remove-think using explicit action override, then pipeline config."""
++    """Resolve explicit override, active runner setting, then legacy config."""
+     if 'remove_think' in data:
+         return bool(data.get('remove_think'))
+ 
+     if query and getattr(query, 'pipeline_config', None):
+-        return bool(query.pipeline_config.get('output', {}).get('misc', {}).get('remove-think', False))
++        config = query.pipeline_config
++        runner_id = RunnerConfigResolver.resolve_runner_id(config)
++        if runner_id:
++            runner = RunnerConfigResolver.resolve_runner_config(config, runner_id)
++            if 'remove-think' in runner:
++                return bool(runner['remove-think'])
++        return bool(config.get('output', {}).get('misc', {}).get('remove-think', False))
+ 
+     return False
+ 
+ 

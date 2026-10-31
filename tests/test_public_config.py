@@ -235,6 +235,7 @@ def test_empty_install_configures_distinct_model_roles_memory_processors_and_bot
     pipeline = row(api, "/api/v1/pipelines", result["pipeline_uuid"])
     runner = pipeline["config"]["ai"]["runner_config"][setup.RUNNER]
     assert runner["model"]["primary"] == result["chat_model_uuid"]
+    assert runner["remove-think"] is True
     assert runner["knowledge-bases"] == [result["memory_uuid"]]
     assert runner["box-enabled"] is False and runner["timeout"] >= 600
     assert pipeline["config"]["trigger"]["group-respond-rules"] == {
@@ -582,6 +583,19 @@ def test_ordinary_configure_preserves_advanced_runner_and_unmanaged_plugin_optio
     assert runner["model"]["reasoning"] == {"effort": "high"}
     assert (runner["max-tool-iterations"], runner["timeout"], runner["box-enabled"]) == (7, 420, True)
     assert api.configs["langbot-team/AIImagePlugin"]["unrelated_option"] == "preserve-me"
+
+
+def test_existing_pipeline_hides_reasoning_without_disabling_model_reasoning():
+    api = FakeLangBot()
+    first = run_configure(api)
+    runner = row(api, "/api/v1/pipelines", first["pipeline_uuid"])["config"]["ai"]["runner_config"][setup.RUNNER]
+    runner["remove-think"] = False
+    runner["model"].update(fallbacks=["operator-fallback"], reasoning={first["chat_model_uuid"]: "high"})
+    model_before = deepcopy(runner["model"])
+    run_configure(api, record=first)
+    updated = row(api, "/api/v1/pipelines", first["pipeline_uuid"])["config"]["ai"]["runner_config"][setup.RUNNER]
+    assert updated["remove-think"] is True
+    assert updated["model"] == model_before
 
 
 def test_manager_adopts_legacy_values_without_false_revision_conflict(tmp_path, monkeypatch):

@@ -342,7 +342,8 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("host-deferred-incoming-images.patch", "host", False) in patcher.PATCHES
     assert ("sdk-quote-text.patch", "sdk", False) in patcher.PATCHES
     assert ("host-model-media-budget.patch", "host", False) in patcher.PATCHES
-    assert len(names) == 46
+    assert ("host-thinking-visibility.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 47
     assert "host-model-usage.patch" in names
     assert {"host-web-knowledge.patch", "host-memory-recall.patch"} <= names
     assert "host-animation-vision.patch" in names

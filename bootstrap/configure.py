@@ -588,6 +588,9 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
     runner.update(
         {
             "model": model_config,
+            # QQ replies show the final answer. This does not change the model's
+            # reasoning effort or the provider metadata used by tool follow-ups.
+            "remove-think": True,
             "knowledge-bases": list(
                 dict.fromkeys([kb for kb in [*runner.get("knowledge-bases", []), memory]
                                if kb and ("memory" in config["features"] or kb != record.get("memory_uuid"))])
