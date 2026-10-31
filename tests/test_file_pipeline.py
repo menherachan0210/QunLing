@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-pytestmark = pytest.mark.sdk
+pytestmark = [pytest.mark.sdk, pytest.mark.usefixtures('available_file_resources')]
 from PIL import Image
 
 from qunling import capture, inbox as inbox_module, integration, transfers

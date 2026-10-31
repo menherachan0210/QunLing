@@ -157,7 +157,11 @@ async def main():
         "format": "xlsx", "filename": "ranking.xlsx",
         "payload": {"sheets": [{"name": "Ranking", "rows": [["Name", "Rank"], ["Example", 1]]}]},
     }, "synthetic-request")
-    worker = service.worker()
+    # Exercise the isolated worker with a controlled admission budget. The
+    # parent pytest process shares this CI cgroup, unlike the dedicated service.
+    from qunling.resource_gate import ResourceGate, FileAdmission, Pressure
+    admission = FileAdmission(ResourceGate(data_root(), sample=lambda: Pressure(2048, 1800, local_available_mib=1024)))
+    worker = service.worker(admission=admission)
     await worker.run_once()
     await worker.wait_idle()
     print(json.dumps(service.snapshot(scope, submitted["task_id"])))

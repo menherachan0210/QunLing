@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock
 from PIL import Image
 import pytest
 
+pytestmark = pytest.mark.usefixtures('available_file_resources')
+
 from qunling.animation import render, revise_recipe, validate_recipe
 from qunling.animation_preview import contact_sheet
 from qunling.assets import AssetError, AssetStore

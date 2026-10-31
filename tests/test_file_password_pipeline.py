@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-pytestmark = pytest.mark.sdk
+pytestmark = [pytest.mark.sdk, pytest.mark.usefixtures('available_file_resources')]
 
 from qunling.assets import AssetError, AssetStore
 from qunling.jobs import JobService

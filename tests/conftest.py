@@ -7,8 +7,25 @@ is included automatically, and the real-image job never applies this filter.
 from __future__ import annotations
 
 import ast
+import pytest
 from functools import lru_cache
 from pathlib import Path
+
+
+@pytest.fixture
+def available_file_resources(monkeypatch):
+    """File acceptance tests control admission, not the CI host's current load.
+
+    Real child-process limits still apply. Pressure/FIFO/cancellation behavior
+    has its own tests; an unrelated service consuming RAM must not make a tiny
+    synthetic XLSX wait for the whole admission timeout.
+    """
+    from qunling import resource_gate
+    original = resource_gate.ResourceGate
+    def gate(root, **kwargs):
+        kwargs.setdefault('sample', lambda: resource_gate.Pressure(2048, 1800, local_available_mib=1024))
+        return original(root, **kwargs)
+    monkeypatch.setattr(resource_gate, 'ResourceGate', gate)
 
 
 def sdk_modules(sources: dict[str, str]) -> set[str]:

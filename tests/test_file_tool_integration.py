@@ -12,6 +12,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures('available_file_resources')
 from langbot_plugin.api.entities.builtin.platform.message import File, MessageChain
 
 from qunling.assets import AssetError, AssetStore
