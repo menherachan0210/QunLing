@@ -55,6 +55,12 @@ def test_runtime_rejects_ambiguous_shared_model_and_busy_or_invalid_writes(manag
     assert not manager.writes
 
 
+def test_unchanged_settings_do_not_reload_the_pipeline_or_reset_conversations(manager):
+    before=runtime.settings(manager)
+    assert runtime.save(manager,before['config'])==before
+    assert not manager.writes
+
+
 def test_reasoning_options_are_scoped_to_each_saved_model_and_never_expose_raw_args(manager):
     manager.models[1]['reasoning_capabilities']['levels']=['provider_default','disabled','enabled','invalid',{}]
     result=runtime.settings(manager)

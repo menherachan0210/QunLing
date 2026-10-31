@@ -108,7 +108,9 @@ def save(manager, values):
         levels = runner['model'].setdefault('reasoning', {})
         levels.update({model: level for model, level in selected.items()
                        if level != levels.get(model, 'provider_default')})
-        manager.api.call('PUT', path, {'config': config})
+        # A no-op PUT still reloads the Host pipeline and resets its sessions.
+        if config != pipeline['config']:
+            manager.api.call('PUT', path, {'config': config})
         confirmed = settings(manager)
         if any(confirmed['config'][key] != values[key] for key in ('tool_iterations', 'request_timeout', 'reasoning')):
             raise SetupError('高级参数保存结果未确认，请重新读取后核对。')
