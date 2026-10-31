@@ -726,6 +726,12 @@ class ProactiveEngine:
         self._record(state, "explicit_started")
 
     def explicit_done(self, group_id: str, message_id: str) -> None:
+        self._release_explicit(group_id, message_id, 'explicit_finished')
+
+    def explicit_backgrounded(self, group_id: str, message_id: str) -> None:
+        self._release_explicit(group_id, message_id, 'explicit_backgrounded')
+
+    def _release_explicit(self, group_id, message_id, event):
         state = self._groups.get(group_id)
         if state is None:
             return
@@ -734,7 +740,7 @@ class ProactiveEngine:
             if str(message_id) not in lane.explicit:
                 continue
             lane.explicit.discard(str(message_id))
-            self._record(state, "explicit_finished")
+            self._record(state, event)
             lane.wakeup.set()
             self._queue_lane(group_id, lane)
 

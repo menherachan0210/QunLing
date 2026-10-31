@@ -839,6 +839,16 @@ def completed(adapter, event):
         pass
 
 
+def backgrounded(adapter, event):
+    """Release the chat pause without ending the task or its frozen context."""
+    try:
+        bridge, key = _bridge(getattr(adapter, '_runtime', None)), _event_key(event)
+        if bridge and key and key in bridge.queued:
+            bridge.engine.explicit_backgrounded(*key)
+    except Exception:
+        pass
+
+
 def ingress_done(bot, event):
     try:
         bridge, key = _bridge(bot), _event_key(event)

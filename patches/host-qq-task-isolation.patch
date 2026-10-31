@@ -1,0 +1,46 @@
+diff --git a/src/langbot/pkg/pipeline/preproc/preproc.py b/src/langbot/pkg/pipeline/preproc/preproc.py
+--- a/src/langbot/pkg/pipeline/preproc/preproc.py
++++ b/src/langbot/pkg/pipeline/preproc/preproc.py
+@@ -242,6 +242,9 @@
+             query.bot_uuid,
+         )
+ 
++        from qunling.qq_sessions import prepare_fork_history
++        await prepare_fork_history(self.ap, query, session, conversation)
++
+         # Expire externally managed conversation ids after the conversation has
+         # been idle for longer than the configured conversation expire time.
+         # The idle window is measured from the last preprocess/update time, not
+diff --git a/src/langbot/pkg/pipeline/pipelinemgr.py b/src/langbot/pkg/pipeline/pipelinemgr.py
+--- a/src/langbot/pkg/pipeline/pipelinemgr.py
++++ b/src/langbot/pkg/pipeline/pipelinemgr.py
+@@ -555,6 +555,8 @@
+             await self._assert_execution_active(query)
+             event_ctx = await self.ap.plugin_connector.emit_event(event_obj, bound_plugins)
+             await self._assert_execution_active(query)
++            from qunling.qq_dispatch import context_ready
++            context_ready(query)
+ 
+             if event_ctx.is_prevented_default():
+                 self.ap.logger.debug(
+diff --git a/src/langbot/pkg/pipeline/controller.py b/src/langbot/pkg/pipeline/controller.py
+--- a/src/langbot/pkg/pipeline/controller.py
++++ b/src/langbot/pkg/pipeline/controller.py
+@@ -129,6 +129,8 @@
+                         session = selected_session or await self.ap.sess_mgr.get_session(selected_query)
+                         try:
+                             session._semaphore.release()
++                            from qunling.qq_sessions import release_session
++                            release_session(self.ap, selected_query, session)
+                         finally:
+                             self.ap.query_pool.condition.notify_all()
+             finally:
+@@ -150,6 +152,8 @@
+         finally:
+             async with self.ap.query_pool:
+                 selected_session._semaphore.release()
++                from qunling.qq_sessions import release_session
++                release_session(self.ap, selected_query, selected_session)
+                 self.ap.query_pool.condition.notify_all()
+ 
+     async def consumer(self):

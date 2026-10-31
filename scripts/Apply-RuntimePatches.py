@@ -64,6 +64,7 @@ PATCHES = (
     ("host-model-media-budget.patch", "host", False),
     ("host-thinking-visibility.patch", "host", False),
     ("host-message-recall.patch", "host", False),
+    ("host-qq-task-isolation.patch", "host", False),
     ("sdk-image-tool-timeout.patch", "sdk", False),
     ("sdk-dedicated-background.patch", "sdk", False),
     ("sdk-windows-dependency-temp.patch", "sdk", True),

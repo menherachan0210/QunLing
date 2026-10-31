@@ -328,6 +328,13 @@ class Task:
     notices: set = field(default_factory=set)
     continuation: _ContinuationGrant | None = None
     history_reads: dict = field(default_factory=dict)
+    session: object = None
+    session_key: str | None = None
+    session_route: tuple | None = None
+    started_wall: float = 0.0
+    started: float = 0.0
+    context_ready: bool = False
+    backgrounded: bool = False
 
 
 class Dispatch:
@@ -340,6 +347,8 @@ class Dispatch:
     parked_limit = 2
     tool_queue_timeout = 180.0
     tool_timeout = 180.0
+    conversation_grace = 15.0
+    member_active_limit = 2
 
     def __init__(self, ap):
         self.ap = ap
@@ -360,6 +369,16 @@ class Dispatch:
         self.retired = OrderedDict()
         self.preparing = {}
         self.continuations = OrderedDict()
+        self.session_routes = OrderedDict()
+
+    def background(self, task):
+        if (task.backgrounded or not task.context_ready or task.done.is_set()
+                or not task.started or time.monotonic() - task.started < self.conversation_grace):
+            return
+        task.backgrounded = True
+        from qunling.proactive.host import backgrounded
+        backgrounded(task.query.adapter, task.query.message_event)
+        self.observation_changed.set()
 
     def retire(self, task):
         self.tasks.pop(task.query.query_uuid, None)
@@ -423,7 +442,7 @@ class Dispatch:
                 owner = _scope(candidate[0])
                 sequence = candidate[0]._qq_receive_sequence
                 return (any(other == owner and earlier < sequence for earlier, other in self.preparing.items())
-                        or any(task.owner == owner and not task.done.is_set() and task.sequence < sequence
+                        or any(task.owner == owner and not task.done.is_set() and not task.backgrounded and task.sequence < sequence
                                for task in self.tasks.values()))
             item = next((candidate for candidate in self.observations if not blocked(candidate)), None)
             if item is None:
@@ -495,6 +514,7 @@ class Dispatch:
                 except TimeoutError:
                     pass
                 now = time.monotonic()
+                self.background(task)
                 if task.phase == "queued" and now - task.created >= self.queue_timeout:
                     await self.stop(task, "queue_timeout")
                     break
@@ -770,7 +790,15 @@ def begin_processing(query):
     if task is not None:
         task.runner = asyncio.current_task()
         task.phase, task.changed = "running", time.monotonic()
+        task.started, task.started_wall = time.monotonic(), time.time()
         journal.record(query, 'preparing')
+
+
+def context_ready(query):
+    """Called after receive listeners captured this request's attachments."""
+    task = getattr(query, '_qq_task', None)
+    if task is not None and task.query is query:
+        task.context_ready = True
 
 
 def stage_progress(query):
@@ -1070,8 +1098,21 @@ async def next_query(controller):
     async with pool:
         snapshot = list(pool.queries)
     for query in snapshot:
+        service = getattr(controller.ap, '_qq_dispatch', None)
+        task = getattr(query, '_qq_task', None)
+        forked = False
         try:
             session = await asyncio.wait_for(controller.ap.sess_mgr.get_session(query), 3)
+            if session._semaphore.locked() and service is not None and task is not None:
+                active = [item for item in service.tasks.values() if item.owner == task.owner
+                          and not item.done.is_set() and item.session is not None]
+                blocked = next((item for item in active if item.session is session), None)
+                if blocked is not None:
+                    service.background(blocked)
+                    if blocked.backgrounded and len(active) < service.member_active_limit:
+                        from qunling.qq_sessions import fork_session
+                        session = await asyncio.wait_for(fork_session(controller.ap, query, blocked), 3)
+                        forked = True
         except Exception:
             await fail_cleanup(controller.ap, query)
             await pool.remove_query(query)
@@ -1092,8 +1133,13 @@ async def next_query(controller):
             continue
         async with pool:
             if not any(item is query for item in pool.queries) or session._semaphore.locked():
+                if forked:
+                    controller.ap.sess_mgr._remove_session(session)
                 continue
             await session._semaphore.acquire()  # known available; no suspended I/O
+            if task is not None:
+                from qunling.qq_sessions import remember_route
+                remember_route(service, query, session)
             pool.mark_query_running_locked(query)
             return query, session
     async with pool.condition:
