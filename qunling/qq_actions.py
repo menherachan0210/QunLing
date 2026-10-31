@@ -12,6 +12,7 @@ from qunling.qq_capabilities import OPS, validate_arguments
 from qunling.qq_group_api import qq_id
 from qunling.qq_operation_store import OperationStore, scope_key
 from qunling.scope import Scope
+from qunling.resource_gate import ResourceBusy
 
 
 class QQActionError(ValueError):
@@ -398,6 +399,9 @@ async def handle(handler, data, binding, identity):
         if grant is not None and not grant.allow_actions and not continuation_allowed({"operation": params.get("operation"), "arguments": params.get("arguments", {})}):
             raise QQActionError("普通接话只能查询或进行轻量互动；管理和媒体发送需要实际操作请求。")
         return await service.execute(params.get("operation"), params.get("arguments", {}))
+    except ResourceBusy:
+        return {"status": "error", "code": "capacity",
+                "error": "服务器暂时繁忙，这次操作没有完成；本轮不要重复请求，也不要把资源不足说成文件损坏。"}
     except (QQActionError, AssetError, ValueError) as error:
         return {"status": "error", "error": str(error)}
     except Exception:

@@ -200,3 +200,14 @@ async def test_optional_defaults_do_not_bypass_deduplication(service):
     result = await service.execute("like", {"user_id": "202", "times": 1})
     assert result["already_attempted"]
     assert sum(c[0] == "send_like" for c in service.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_capacity_error_is_reported_without_private_exception_text():
+    from qunling.qq_actions import handle
+    from qunling.resource_gate import ResourceBusy
+    handler = NS(_resolve_query=AsyncMock(side_effect=ResourceBusy('private signed reference')))
+    identity = NS(plugin_author='local', plugin_name='QQGroupContext')
+    result = await handle(handler, {'params': {}}, None, identity)
+    assert result['status'] == 'error' and result['code'] == 'capacity'
+    assert '服务器暂时繁忙' in result['error'] and 'private signed reference' not in str(result)

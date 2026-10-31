@@ -176,3 +176,29 @@ def test_busy_image_is_not_started_and_queue_timeout_releases_ticket(tmp_path, m
         with sqlite3.connect(tmp_path / "resource-admission.sqlite3") as db:
             assert db.execute("SELECT count(*) FROM permits").fetchone()[0] == 0
     asyncio.run(scenario())
+
+
+def test_small_vision_fits_normal_bot_headroom_without_overbooking(tmp_path):
+    sample = Pressure(1930, 540, some=.87, full=.75, local_available_mib=312)
+    gate = ResourceGate(tmp_path, sample=lambda: sample)
+    old = gate.ticket("vision")
+    assert gate.try_acquire(old) is None
+    gate.release(old)
+    assert gate.try_acquire(gate.ticket("vision_small")) is not None
+    assert gate.try_acquire(gate.ticket("vision_small")) is not None
+    third = gate.ticket("vision_small")
+    # Even abundant host RAM cannot let reserved child budgets overbook the
+    # remaining memory inside this container before the children allocate it.
+    sample = Pressure(1930, 1500, local_available_mib=312)
+    assert gate.try_acquire(third) is None
+
+
+@pytest.mark.parametrize("sample", [
+    Pressure(1930, 383, local_available_mib=500),
+    Pressure(1930, 1500, local_available_mib=159),
+    Pressure(1930, 1500, some=25, local_available_mib=500),
+    Pressure(1930, 1500, full=5, local_available_mib=500),
+])
+def test_small_vision_still_respects_memory_and_pressure_limits(tmp_path, sample):
+    gate = ResourceGate(tmp_path, sample=lambda: sample)
+    assert gate.try_acquire(gate.ticket("vision_small")) is None

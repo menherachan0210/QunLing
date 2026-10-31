@@ -11,7 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 def main():
     from qunling._process_worker import limits
-    handle = limits(memory_bytes=384 * 1024 * 1024, cpu_seconds=10,
+    memory_mib = int(sys.argv[1]) if len(sys.argv) == 2 else 384
+    if memory_mib not in (128, 256, 384) or len(sys.argv) > 2:
+        raise ValueError("Invalid decoder budget")
+    handle = limits(memory_bytes=memory_mib * 1024 * 1024, cpu_seconds=10,
                     file_bytes=2 * 1024 * 1024, max_processes=1)
     from qunling.vision_input import animation_data_url, MAX_BYTES
 

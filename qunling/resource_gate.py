@@ -17,7 +17,8 @@ import sqlite3
 import time
 
 MIB = 1024 * 1024
-WEIGHTS = {"file": 384, "image": 192, "vision": 384, "model_media": 128}
+WEIGHTS = {"file": 384, "image": 192, "vision_small": 128,
+           "vision_medium": 256, "vision": 384, "model_media": 128}
 _held = ContextVar("qunling_resource_lease", default=None)
 
 
@@ -133,7 +134,7 @@ class ResourceGate:
             used = db.execute("SELECT coalesce(sum(weight),0) FROM permits WHERE active=1").fetchone()[0]
             budget = max(512, min(2048, sample.total_mib // 4))
             if (row[0] != first or used + row[1] > budget or sample.some >= 25 or sample.full >= 5
-                    or (sample.local_available_mib is not None and sample.local_available_mib < 32 + row[1])
+                    or (sample.local_available_mib is not None and sample.local_available_mib < 32 + used + row[1])
                     or (sample.available_mib is not None and sample.available_mib < 256 + used + row[1])):
                 return None
             db.execute("UPDATE permits SET active=1 WHERE token=?", (token,))

@@ -9,7 +9,7 @@ import pytest
 pytestmark = pytest.mark.sdk
 from PIL import Image
 
-from qunling.vision_input import animation_data_url, model_image_content
+from qunling.vision_input import animation_data_url, model_image_content, decoder_memory_mib
 
 
 def animated_url():
@@ -108,3 +108,66 @@ async def test_decoder_deadline_returns_a_placeholder_and_reaps_process(monkeypa
     monkeypatch.setattr(vision_input, 'DECODE_TIMEOUT', .1)
     result = await model_image_content(animated_url())
     assert result.type == 'text' and children[0].returncode is not None
+
+
+@pytest.mark.parametrize("fmt,animated,lossless", [
+    ('GIF', True, False), ('PNG', False, False), ('PNG', True, False),
+    ('WEBP', False, False), ('WEBP', False, True), ('WEBP', True, False),
+])
+@pytest.mark.asyncio
+async def test_small_image_formats_decode_with_the_small_budget(fmt, animated, lossless):
+    output = io.BytesIO()
+    with Image.new('RGB', (201, 203), 'red') as first, Image.new('RGB', (201, 203), 'blue') as last:
+        options = {'save_all': True, 'append_images': [last], 'duration': 100} if animated else {}
+        if fmt == 'WEBP':
+            options['lossless'] = lossless
+        first.save(output, format=fmt, **options)
+    value = base64.b64encode(output.getvalue()).decode()
+    assert decoder_memory_mib(value) == 128
+    result = await model_image_content(value)
+    assert result.type == 'image_base64'
+    if animated:
+        assert result.image_base64.startswith('data:image/png;')
+
+
+def test_canvas_and_encoded_input_both_count_toward_decoder_budget():
+    raw = bytearray(base64.b64decode(animated_url().partition(',')[2]))
+    raw[6:10] = (2000).to_bytes(2, 'little') * 2
+    assert decoder_memory_mib(base64.b64encode(raw).decode()) == 256
+    raw[6:10] = (4000).to_bytes(2, 'little') + (3000).to_bytes(2, 'little')
+    assert decoder_memory_mib(base64.b64encode(raw).decode()) == 384
+    raw[6:10] = (32).to_bytes(2, 'little') * 2
+    raw.extend(b'\x00' * (9 * 1024**2))
+    assert decoder_memory_mib(base64.b64encode(raw).decode()) == 256
+    assert decoder_memory_mib('not a valid image header') == 384
+
+
+@pytest.mark.asyncio
+async def test_small_animation_runs_under_realistic_headroom_and_matching_child_cap(tmp_path, monkeypatch):
+    from qunling import resource_gate, vision_input
+    original = resource_gate.ResourceGate
+    monkeypatch.setenv('QUNLING_DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(resource_gate, 'ResourceGate', lambda root: original(root,
+        sample=lambda: resource_gate.Pressure(1930, 540, some=.87, full=.75, local_available_mib=312)))
+    create = asyncio.create_subprocess_exec
+    caps = []
+    async def launch(*args, **kwargs):
+        caps.append(args[-1])
+        return await create(*args, **kwargs)
+    monkeypatch.setattr(vision_input.asyncio, 'create_subprocess_exec', launch)
+    result = await model_image_content(animated_url())
+    assert result.type == 'image_base64' and caps == ['128']
+    with sqlite3.connect(tmp_path / 'resource-admission.sqlite3') as db:
+        assert db.execute('SELECT count(*) FROM permits').fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_capacity_placeholder_and_log_are_distinct_from_a_corrupt_image(monkeypatch, caplog):
+    from qunling import resource_gate, vision_input
+    async def busy(_):
+        raise resource_gate.ResourceBusy('private input must not appear in diagnostics')
+    monkeypatch.setattr(vision_input, 'model_image_base64', busy)
+    result = await model_image_content(animated_url())
+    assert result.type == 'text' and '服务器暂时繁忙' in result.text
+    assert '本轮不要重复' in result.text and '不代表图片损坏' in result.text
+    assert 'reason=capacity' in caplog.text and 'private input' not in caplog.text
