@@ -2456,3 +2456,17 @@ tbody tr:hover {
     min-height: 210px;
   }
 }
+.voice-preview audio {
+  display: block;
+  width: 100%;
+  margin: 12px 0;
+}
+.voice-settings .field + .field {
+  margin-top: 20px;
+}
+.voice-settings .toggle-row + .field {
+  margin-top: 20px;
+}
+.voice-preview p {
+  overflow-wrap: anywhere;
+}

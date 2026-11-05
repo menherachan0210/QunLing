@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { api, client, errorText, uid, useData } from "../api";
 import { Reasoning } from "./Reasoning";
+import { Voice } from "./Voice";
 import {
   Badge,
   Button,
@@ -151,6 +152,7 @@ export function Models({ active }: { active: boolean }) {
         {[
           ["models", "模型分工"],
           ["reasoning", "推理等级"],
+          ["voice", "语音"],
           ["features", "功能能力"],
           ["parameters", "工具与上下文"],
           ["test", "连接测试"],
@@ -165,7 +167,9 @@ export function Models({ active }: { active: boolean }) {
           </button>
         ))}
       </div>
-      {tab === "reasoning" ? (
+      {tab === "voice" ? (
+        <Voice active={active} />
+      ) : tab === "reasoning" ? (
         <>
           {(draft.dirty || keyDirty) && (
             <Notice tone="neutral">

@@ -772,21 +772,24 @@ def patched_host(tmp_path):
     spec.loader.exec_module(patcher)
     source = (ROOT / "patches/host-proactive-chat.patch").read_text(encoding="utf-8")
     _, paths = patcher.runtime_payload(source, "host")
-    for path in paths:
+    context_source = (ROOT / "patches/host-proactive-context.patch").read_text(encoding="utf-8")
+    _, context_paths = patcher.runtime_payload(context_source, "host")
+    voice_source = (ROOT / "patches/host-voice.patch").read_text(encoding="utf-8")
+    voice_payload, voice_paths = patcher.runtime_payload(voice_source, "host")
+    for path in set(paths) | set(context_paths) | set(voice_paths):
         target = tmp_path / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((LANGBOT_ROOT / path).read_bytes())
+    # This fixture verifies the original hooks in a private copy. Peel the
+    # later overlapping voice extension; full-chain composition is tested by
+    # test_runtime_patches and voice ingress is exercised by test_voice.
+    if patcher.git_apply(tmp_path, voice_payload, '--reverse', '--check').returncode == 0:
+        assert patcher.git_apply(tmp_path, voice_payload, '--reverse').returncode == 0
     plan = patcher.build_plan("host-proactive-chat.patch", tmp_path, source, "host")
     patcher.execute_plans([plan], apply=True)
     for path in paths:
         ast.parse((tmp_path / path).read_text(encoding="utf-8"))
     assert patcher.build_plan("host-proactive-chat.patch", tmp_path, source, "host").state == "already-applied"
-    context_source = (ROOT / "patches/host-proactive-context.patch").read_text(encoding="utf-8")
-    _, context_paths = patcher.runtime_payload(context_source, "host")
-    for path in context_paths:
-        target = tmp_path / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((LANGBOT_ROOT / path).read_bytes())
     context_plan = patcher.build_plan("host-proactive-context.patch", tmp_path, context_source, "host")
     patcher.execute_plans([context_plan], apply=True)
     assert patcher.build_plan("host-proactive-context.patch", tmp_path, context_source, "host").state == "already-applied"

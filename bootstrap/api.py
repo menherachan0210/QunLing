@@ -59,6 +59,16 @@ class LangBotAPI:
                 except (ValueError, AttributeError):
                     reason = None
                 messages = {
+                    'voice_auth': (400, '语音 API Key 无效或没有模型权限，请检查官方账户。'),
+                    'voice_quota': (429, '语音服务额度不足或达到调用限额，请检查官方账户。'),
+                    'voice_timeout': (504, '语音服务超时，本次没有自动重试。'),
+                    'voice_config': (400, '语音设置无效，请检查 API Key、音色、时长和文本长度。'),
+                    'voice_conflict': (409, '语音设置已变化，请刷新后再操作。'),
+                    'voice_busy': (409, '语音正在处理中，请稍后再试。'),
+                    'voice_audio': (400, '没有读到清晰的音频，请换一段语音再试。'),
+                    'voice_too_long': (400, '音频超过时长或大小限制，请缩短后重试。'),
+                    'voice_unavailable': (503, '官方语音服务暂不可用，本次没有自动重试。'),
+                    'voice_disabled': (400, '语音尚未启用，请先保存设置。'),
                     "preview_busy": (409, "已有试聊进行中，请等待或取消。"),
                     "invalid_preview": (400, "试聊参数无效，请刷新后重试。"),
                     "memory_conflict": (409, "这条记忆已变化，请关闭编辑并刷新后重试。"),

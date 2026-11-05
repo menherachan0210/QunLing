@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from copy import deepcopy
 import json
+import os
 import tempfile
 import threading
 import time
@@ -14,6 +15,7 @@ from bootstrap.api import ProactiveAPIError
 from bootstrap.state import State
 from qunling.proactive.config import validate
 from qunling.knowledge.config import defaults
+from qunling.voice_config import VoiceConfig, VOICES, DEFAULTS as VOICE_DEFAULTS
 
 class Manager:
     secrets = {'setup_token': 'offline-console-test'}
@@ -22,6 +24,9 @@ class Manager:
         self.lock = threading.RLock()
         self.pending = None
         self.update_inflight = False
+        os.environ['QUNLING_DATA_DIR'] = str(root)
+        self.voice_store = VoiceConfig('browser', str(root))
+        self.voice_store.path = Path(root) / 'voice.json'
         self.revision = 0
         self.settings = dict(base_url='https://example.invalid/v1',chat_model='chat-example',api_key_saved=True,
             features=['memory','files','vision','image','search'],image_model='image-example',group_context_hours=24,
@@ -103,6 +108,22 @@ def knowledge_save(manager, values):
     return manager.knowledge
 
 server.console.preview=preview
+
+def voice_settings(manager, values=None, *, test=False):
+    import io, wave, base64
+    store = manager.voice_store
+    if test:
+        if values['revision'] != store.read()['revision']:
+            raise ProactiveAPIError('设置已变化', 409)
+        sample = io.BytesIO()
+        with wave.open(sample, 'wb') as f:
+            f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000); f.writeframes(b'\x00\x00' * 16000)
+        return {'audio_base64':base64.b64encode(sample.getvalue()).decode(), 'transcript':values['text'],
+                'ai_generated':True, 'speech_seconds':2.1, 'transcription_seconds':0.9}
+    config = store.save(values) if values is not None else store.public(store.read())
+    return {'config':config,'voices':list(VOICES)}
+
+server.console.voice=voice_settings
 server.knowledge.settings=lambda manager: manager.knowledge
 server.knowledge.save=knowledge_save
 server.runtime.settings=lambda manager: manager.runtime

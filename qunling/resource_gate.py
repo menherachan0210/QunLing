@@ -20,7 +20,7 @@ import time
 MIB = 1024 * 1024
 WEIGHTS = {"file": 384, "image": 192, "vision_small": 128,
            "vision_medium": 256, "vision": 384, "model_media_small": 32,
-           "model_media_medium": 64, "model_media": 128}
+           "model_media_medium": 64, "model_media": 128, "audio": 96}
 TRANSFER_KINDS = ("model_media_small", "model_media_medium")
 _held = ContextVar("qunling_resource_lease", default=None)
 

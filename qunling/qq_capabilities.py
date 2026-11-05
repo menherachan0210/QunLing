@@ -116,6 +116,8 @@ OPS = {
     "send_media": Operation("把工作区素材作为 QQ 图片/语音/视频发送", "media", write=True,
                             properties={"asset_ref": ID, "kind": text(12, enum=["image", "record", "video"])}, required=("asset_ref", "kind")),
     "transcribe": Operation("识别已导入的语音，需配置语音识别服务", "media", properties={"asset_ref": ID}, required=("asset_ref",)),
+    "voice_reply": Operation("仅当前发言者明确要求语音回复/朗读时，按当前人格拟好内容再发送 AI 语音；不要因为收到语音就自动用语音回复。确认发送后不要重复发文字。",
+        "media", write=True, properties={"text": text(600, minLength=1), "tone": text(400)}, required=("text",)),
     "video_frames": Operation("抽取视频关键帧为图片素材，交给视觉工具分析", "media",
                               properties={"asset_ref": ID, "seconds": number(1, 120), "frames": number(1, 8)}, required=("asset_ref",)),
     "analyze_images": Operation("分析已导入的图片或视频关键帧实际画面", "media",

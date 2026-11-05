@@ -123,7 +123,7 @@ async def prepare_operation(service, operation, args):
         url = data.get("url") or data.get("file_url")
         body = None
         if kind == "record":
-            converted = await service.raw("get_record", file=data.get("file", ""), out_format="wav")
+            converted = await service.raw("get_record", file=data.get("file", ""), out_format="mp3")
             if isinstance(converted, dict):
                 payload = converted.get("base64")
                 if isinstance(payload, str) and len(payload) <= 28 * 1024 * 1024:
@@ -135,7 +135,8 @@ async def prepare_operation(service, operation, args):
             body = (await fetch_public_file(url, max_bytes=20 * 1024 * 1024, timeout=35)).body
         if len(body) > 20 * 1024 * 1024:
             raise ValueError("媒体超过 20 MiB 导入上限。")
-        suffix = {"record": ".wav" if body.startswith(b"RIFF") else ".silk", "video": ".mp4", "file": ".bin"}.get(kind, ".bin")
+        audio_suffix = '.wav' if body.startswith(b'RIFF') else '.mp3' if body.startswith(b'ID3') or body[:1] == b'\xff' else '.silk'
+        suffix = {"record": audio_suffix, "video": ".mp4", "file": ".bin"}.get(kind, ".bin")
         name = image_name(body) if kind == "image" else "qq-media" + suffix
         result = publish(service, name, body, {"media_type": kind, "source_message_id": str(source["message_id"])})
         source["asset"] = result
@@ -184,6 +185,15 @@ async def prepare_operation(service, operation, args):
                 "next_step": "用 analyze_images 实际分析这些 asset_refs；未覆盖的动作与声音不能猜测。"}
     if operation == "transcribe":
         import httpx
+        from qunling.voice import configured
+        official = configured(service.adapter._runtime) if getattr(service.adapter, '_runtime', None) else None
+        if official and official['receive']:
+            if service.state.get('transcription_attempted'):
+                raise ValueError('本轮语音已提交，不自动重复计费。')
+            service.state['transcription_attempted'] = True
+            from qunling.voice_client import transcribe
+            text = await transcribe(official, body)
+            return {'status': 'ok', 'transcript': text, 'truncated': False}
         selected = service.config.get("qq_actions", {}).get("transcription_model", "")
         if not selected:
             raise ValueError("请在管理页 QQ 工具中填写语音识别模型名；复用当前聊天服务地址和凭据。")

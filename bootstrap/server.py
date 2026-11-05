@@ -548,6 +548,13 @@ class Handler(BaseHTTPRequestHandler):
             if self.server.access.origin:
                 value = {**value, "management_url": self.server.access.origin}
             return self._send(200, value)
+        if path == '/api/voice':
+            try:
+                return self._send(200, console.voice(self.server.manager))
+            except SetupError as exc:
+                return self._send(getattr(exc, 'status', 503), {'error': str(exc)})
+            except Exception:
+                return self._send(503, {'error': '语音配置暂时无法读取。'})
         if path in {"/api/runtime", "/api/system"}:
             try:
                 operation = runtime.settings if path == "/api/runtime" else runtime.health
@@ -632,6 +639,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"authenticated": False}, cookie=session_cookie("", clear=True, secure=origin.startswith("https://")))
             elif self.path == "/api/preview":
                 return self._send(200, console.preview(self.server.manager, body))
+            elif self.path in {'/api/voice', '/api/voice/test'}:
+                return self._send(200, console.voice(self.server.manager, body, test=self.path.endswith('/test')))
             elif self.path == "/api/runtime":
                 return self._send(200, runtime.save(self.server.manager, body))
             elif self.path == "/api/configure":

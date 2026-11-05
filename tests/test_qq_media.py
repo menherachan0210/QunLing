@@ -78,7 +78,7 @@ async def test_audio_conversion_and_transcription_use_configured_provider(servic
     raw = service.raw
     async def converted(action, **kwargs):
         if action == "get_record":
-            assert kwargs == {"file": "voice.silk", "out_format": "wav"}
+            assert kwargs == {"file": "voice.silk", "out_format": "mp3"}
             return {"base64": base64.b64encode(b"RIFF\x00\x00\x00\x00WAVE" + b"data").decode()}
         return await raw(action, **kwargs)
     service.raw = converted

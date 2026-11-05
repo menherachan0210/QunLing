@@ -28,3 +28,11 @@ def preview(manager, values):
             raise SetupError('配置正在变更，请稍后试聊。')
         path = _path(manager).removesuffix('/proactive') + '/console/preview'
     return manager.api.call('POST', path, values)
+
+
+def voice(manager, values=None, *, test=False):
+    with manager.lock:
+        if values is not None and (manager.update_inflight or manager.update_status()['busy'] or manager.pending):
+            raise SetupError('配置正在变更，请稍后设置语音。')
+        path = _path(manager).removesuffix('/proactive') + '/console/voice' + ('/test' if test else '')
+    return manager.api.call('GET' if values is None else 'POST', path, values)
