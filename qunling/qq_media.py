@@ -192,7 +192,8 @@ async def prepare_operation(service, operation, args):
                 raise ValueError('本轮语音已提交，不自动重复计费。')
             service.state['transcription_attempted'] = True
             from qunling.voice_client import transcribe
-            text = await transcribe(official, body)
+            from qunling.voice_context import spelling
+            text = await transcribe(official, body, keywords=spelling(service.config, service.query.message_event))
             return {'status': 'ok', 'transcript': text, 'truncated': False}
         selected = service.config.get("qq_actions", {}).get("transcription_model", "")
         if not selected:

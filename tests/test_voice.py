@@ -131,7 +131,7 @@ async def test_transcribe_only_calls_official_audio_and_does_not_forward_private
         assert kwargs['follow_redirects'] is False and kwargs['trust_env'] is False
         return real(transport=httpx.MockTransport(respond), **kwargs)
     monkeypatch.setattr(httpx, 'AsyncClient', fake)
-    assert await voice_client.transcribe({**DEFAULTS, 'api_key': KEY}, wav()) == '今晚一起打游戏吗'
+    assert await voice_client.transcribe({**DEFAULTS, 'api_key': KEY}, wav(), keywords=('群灵',)) == '今晚一起打游戏吗'
     assert len(calls) == 1
 
 
@@ -173,11 +173,14 @@ async def test_realtime_uses_current_audio_protocol_and_bounded_pcm(monkeypatch)
             assert kwargs['headers']['Authorization'] == 'Bearer ' + KEY
             return ws
     monkeypatch.setattr(aiohttp, 'ClientSession', Client)
-    audio, text = await voice_client.synthesize({**DEFAULTS, 'api_key': KEY}, '来啦', style='轻松')
+    audio, text = await voice_client.synthesize({**DEFAULTS, 'api_key': KEY}, '来啦', persona='本群叫小夏，说话活泼', style='轻松')
     with wave.open(io.BytesIO(audio)) as w:
         assert w.getframerate() == 24000 and w.readframes(24000) == pcm
     assert text == '来啦' and ws.closed
     assert ws.sent[0]['session']['audio']['output']['voice'] == 'marin'
+    assert '本群叫小夏，说话活泼' in ws.sent[0]['session']['instructions']
+    assert '轻松' in ws.sent[0]['session']['instructions']
+    assert '不改变人格或原文' in ws.sent[0]['session']['instructions']
     assert ws.sent[1]['response']['conversation'] == 'none'
     ws.events[-1]['response']['status'] = 'failed'
     with pytest.raises(VoiceError):
@@ -342,6 +345,97 @@ def test_voice_prompt_preserves_persona_and_describes_explicit_only_voice(enable
     prompt = query.prompt.messages[-1].content
     assert '当前人格' in prompt and '收到语音本身不代表' in prompt and 'voice_reply' in prompt
     assert KEY not in prompt
+    assert '没有可用的演唱或哼唱能力' in prompt
+
+
+def test_legacy_voice_persona_is_removed_without_losing_credentials_or_custom_vocabulary(tmp_path, monkeypatch):
+    monkeypatch.setenv('QUNLING_DATA_DIR', str(tmp_path))
+    store = VoiceConfig('w', 'b')
+    store.path.parent.mkdir(parents=True)
+    legacy = {**DEFAULTS, 'api_key': KEY, 'enabled': True, 'style': '与聊天人格冲突的旧语气', 'keywords': '群灵'}
+    store.path.write_text(json.dumps(legacy), encoding='utf-8')
+    current = store.read()
+    assert current['api_key'] == KEY and current['enabled']
+    assert current['keywords'] == '' and 'style' not in current
+    assert 'style' not in store.public(current)
+    legacy['keywords'] = '艾尔登法环\n白补线'
+    store.path.write_text(json.dumps(legacy), encoding='utf-8')
+    assert store.read()['keywords'] == legacy['keywords']
+    store.save({**legacy, 'api_key': '', 'voice': 'cedar'})
+    assert store.read()['voice'] == 'cedar' and store.read()['api_key'] == KEY
+    assert 'style' not in json.loads(store.path.read_text(encoding='utf-8'))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind,chat,expected,excluded', [
+    ('group', '300', '说话利落带点调侃', ('默认轻柔', '另一群冷静', '另一群称呼')),
+    ('group', '301', '另一群冷静', ('默认轻柔', '说话利落带点调侃', '小夏')),
+    ('person', '101', '默认轻柔', ('说话利落带点调侃', '另一群冷静', '小夏', '另一群称呼')),
+])
+async def test_voice_inherits_only_current_chat_persona(service, enabled, kind, chat, expected, excluded):
+    service.adapter._runtime = enabled.bot
+    service.kind, service.chat_id = kind, chat
+    service.config.update(default_style='默认轻柔', groups={
+        '300': {'display_name':'小夏', 'persona':'说话利落带点调侃'},
+        '301': {'display_name':'另一群称呼', 'persona':'另一群冷静'}})
+    result = await service.execute('voice_reply', {'text':'来啦', 'tone':'简短'})
+    assert result['status'] == 'confirmed'
+    persona = voice_client.synthesize.await_args.kwargs['persona']
+    assert expected in persona and all(x not in persona for x in excluded)
+    if kind == 'group':
+        assert service.config['groups'][chat]['display_name'] in persona
+
+
+@pytest.mark.asyncio
+async def test_asr_uses_current_group_and_sender_names_only(enabled):
+    state = enabled.store.read()
+    state['groups']['30000'].update(display_name='小夏', persona='只用于聊天的私有人格')
+    state['groups']['30001'] = {**deepcopy(state['groups']['30000']), 'display_name':'隔壁群专属名字'}
+    enabled.store.save(state, known_group_ids={'30000','30001'})
+    value = incoming()
+    value.group.name = '周五放映室'
+    value.sender_member = NS(display_name='白桃')
+    assert await voice.prepare_event(enabled.bot, value, enabled.bot.adapter)
+    hints = voice_client.transcribe.await_args.kwargs['keywords']
+    assert all(v in hints for v in ('小夏', '周五放映室', '白桃'))
+    assert '隔壁群专属名字' not in hints and '只用于聊天的私有人格' not in hints and '群灵' not in hints
+    value = incoming(message_id='1002', group='')
+    assert await voice.prepare_event(enabled.bot, value, enabled.bot.adapter)
+    assert voice_client.transcribe.await_args.kwargs['keywords'] == ('群友',)
+
+
+@pytest.mark.asyncio
+async def test_imported_audio_uses_the_same_chat_spelling_hints(service, enabled):
+    from qunling import qq_media
+    service.adapter._runtime = enabled.bot
+    service.config['groups']['300'] = {'display_name':'小夏', 'persona':'不得发送给识别接口'}
+    service.query.message_event.group = NS(id='300', name='放映室')
+    item = qq_media.publish(service, 'voice.wav', wav())
+    result = await service.execute('transcribe', {'asset_ref': item['asset_ref']})
+    assert result['status'] == 'ok'
+    assert voice_client.transcribe.await_args.kwargs['keywords'] == ('小夏', '放映室')
+
+
+@pytest.mark.asyncio
+async def test_preview_uses_selected_saved_persona_and_rejects_other_or_stale_groups(enabled):
+    state = enabled.store.read()
+    state['groups']['30000'].update(display_name='小夏', persona='直率俏皮')
+    enabled.store.save(state, known_group_ids={'30000'})
+    bot = enabled.bot
+    public = await voice_console.manage(bot.ap, admin_context(), 'bot', 'read')
+    assert public['contexts'] == [{'group_id':'30000', 'display_name':'小夏'}]
+    values = {'revision':public['config']['revision'], 'text':'晚上好', 'group_id':'30000', 'chat_revision':public['chat_revision']}
+    await voice_console.manage(bot.ap, admin_context(), 'bot', 'test', values)
+    assert '直率俏皮' in voice_client.synthesize.await_args.kwargs['persona']
+    assert voice_client.transcribe.await_args.kwargs['keywords'] == ('小夏',)
+    for change in ({'group_id':'999'}, {'chat_revision':'stale'}):
+        with pytest.raises(VoiceError):
+            await voice_console.manage(bot.ap, admin_context(), 'bot', 'test', {**values, **change})
+    bot.adapter.get_group_list.return_value = []
+    with pytest.raises(VoiceError):
+        await voice_console.manage(bot.ap, admin_context(), 'bot', 'test', values)
+    voice_client.synthesize.assert_awaited_once()
+    bot.adapter.bot.call_action.assert_not_awaited()
 
 
 @pytest.mark.asyncio

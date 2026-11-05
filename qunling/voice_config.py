@@ -12,8 +12,7 @@ from qunling.assets import data_root
 
 VOICES = ('marin', 'cedar', 'coral', 'alloy', 'ash', 'ballad', 'echo', 'sage', 'shimmer', 'verse')
 DEFAULTS = {'revision': '0', 'enabled': False, 'receive': True, 'reply': True,
-            'voice': 'marin', 'style': '自然、轻松地说中文，像和朋友聊天。',
-            'keywords': '群灵', 'max_seconds': 120, 'api_key': ''}
+            'voice': 'marin', 'keywords': '', 'max_seconds': 120, 'api_key': ''}
 _lock = threading.RLock()
 
 
@@ -37,11 +36,24 @@ class VoiceConfig:
             if not self.path.exists():
                 return dict(DEFAULTS)
             try:
-                value = json.loads(self.path.read_text(encoding='utf-8'))
+                value = self.migrate(json.loads(self.path.read_text(encoding='utf-8')))
                 self.validate(value)
                 return value
             except (OSError, ValueError, TypeError):
                 raise VoiceError('voice_config', '语音配置无法读取，请在管理页重新检查。', 503) from None
+
+    @staticmethod
+    def migrate(value):
+        # Older clients/configs had a competing voice persona and a preset name.
+        # Preserve credentials and custom spelling hints; chat owns the persona.
+        if isinstance(value, dict) and 'style' in value:
+            value = dict(value)
+            style = value.pop('style')
+            if not isinstance(style, str) or len(style) > 400:
+                raise VoiceError('voice_config', '旧版语音设置无效，请刷新后重试。')
+            if value.get('keywords') == '群灵':
+                value['keywords'] = ''
+        return value
 
     @staticmethod
     def validate(value):
@@ -52,7 +64,7 @@ class VoiceConfig:
                 or value['voice'] not in VOICES
                 or type(value['max_seconds']) is not int or not 15 <= value['max_seconds'] <= 180):
             raise VoiceError('voice_config', '语音设置无效，请检查开关、音色和时长。')
-        for key, maximum in (('style', 400), ('keywords', 500), ('api_key', 256)):
+        for key, maximum in (('keywords', 500), ('api_key', 256)):
             text = value[key]
             if (not isinstance(text, str) or len(text) > maximum
                     or any(ord(c) < 32 and c not in '\n\t' or 0xD800 <= ord(c) <= 0xDFFF for c in text)):
@@ -69,6 +81,7 @@ class VoiceConfig:
         return {**{k: v for k, v in value.items() if k != 'api_key'}, 'api_key_saved': bool(value['api_key'])}
 
     def save(self, values):
+        values = self.migrate(values)
         if (not isinstance(values, dict) or set(values) != set(DEFAULTS)
                 or not isinstance(values.get('api_key'), str)):
             raise VoiceError('voice_config', '语音设置不完整，请刷新后重试。')

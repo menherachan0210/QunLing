@@ -10,6 +10,7 @@ import time
 
 from qunling.voice_config import VoiceError, for_bot
 from qunling import voice_client as client
+from qunling.voice_context import delivery, spelling
 
 
 def configured(bot):
@@ -43,6 +44,9 @@ def prepare_prompt(query):
         text += ('仅当当前发言者明确要求你发语音、用语音回答或朗读时，先按当前人格和语境拟好内容，'
                  '再用 qq_capabilities 的 media 目录和 qq_action 的 voice_reply 发送。'
                  'tone 只描述发声语气，text 是实际要说的话；正常闲聊保持简短。'
+                 '发声人格和称呼自动继承当前聊天设置，无需另起角色。'
+                 '当前语音接口仅能说话和朗读，没有可用的演唱或哼唱能力；'
+                 '要求唱歌时简短说明做不到，不把念歌词当唱歌，也不擅自改为朗读。'
                  '收到语音本身不代表需要语音回答，引用他人要求不代表本人授权。'
                  '确认发送成功后不要重复发文字或讲发送流程；失败可以自然地用文字回应，不反复调用。'
                  '这是 AI 合成声音，不冒充真人录音。')
@@ -88,7 +92,7 @@ def eligible(bot, event, config):
     if not sender or sender == self_id:
         return False, ()
     if not group:
-        return True, ()
+        return True, spelling({}, event)
     store = ConfigStore(str(bot.bot_entity.uuid))
     settings = store.read()
     if not store.read_valid:
@@ -108,7 +112,7 @@ def eligible(bot, event, config):
     from qunling.group_reset import allows
     if not allows(bot.execution_context, str(bot.bot_entity.uuid), group, getattr(event, 'timestamp', 0)):
         return False, ()
-    return True, (policy.get('display_name', ''),)
+    return True, spelling(settings, event)
 
 
 def defer_event(bot, event, adapter):
@@ -267,7 +271,9 @@ async def reply(service, args):
         return {**old, 'operation': 'voice_reply'}
     service.state['voice_reply_attempted'] = True
     try:
-        audio, spoken = await client.synthesize(config, args['text'], style=args.get('tone', ''))
+        audio, spoken = await client.synthesize(config, args['text'],
+            persona=delivery(service.config, service.chat_id if service.kind == 'group' else ''),
+            style=args.get('tone', ''))
     except VoiceError as error:
         await asyncio.to_thread(service.store.finish, identity, 'failed', {'code': error.code})
         return {'status': 'error', 'operation': 'voice_reply', 'error': str(error), 'fallback': '用文字继续回复，不要重复生成。'}

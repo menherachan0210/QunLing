@@ -20,9 +20,8 @@ export function Voice({ active }: { active: boolean }) {
   const save = useAction(),
     test = useAction();
   const [key, setKey] = useState("");
-  const [sample, setSample] = useState(
-    "这是群灵的语音测试。今天群里挺热闹的。",
-  );
+  const [sample, setSample] = useState("今天群里挺热闹的，刚才聊到哪儿了？");
+  const [group, setGroup] = useState("");
   const [preview, setPreview] = useState<any>(null);
   const v = draft.value,
     dirty = draft.dirty || !!key;
@@ -48,8 +47,8 @@ export function Voice({ active }: { active: boolean }) {
         }
       >
         <p className="muted">
-          使用独立的 OpenAI 官方接口。对话内容仍由当前聊天模型和人格决定，声音为
-          AI 合成。
+          说什么、怎么说都沿用聊天人格。群聊使用各群的设置，私聊使用默认聊天语气。
+          声音为 AI 合成；目前支持说话和朗读，不支持唱歌。
         </p>
       </Section>
       <Notice>{remote.error && errorText(remote.error)}</Notice>
@@ -108,8 +107,8 @@ export function Voice({ active }: { active: boolean }) {
               </Field>
             </Section>
             <Section
-              title="声音与语气"
-              description="这里调整怎么说；说什么、如何接话由群聊人格决定。"
+              title="声音"
+              description="音色决定声音本身；情绪、语速和表达自动跟随当前聊天人格。"
             >
               <Field label="音色">
                 <select
@@ -127,24 +126,14 @@ export function Voice({ active }: { active: boolean }) {
                   ))}
                 </select>
               </Field>
-              <Field
-                label="说话语气"
-                hint="例如：语速稍快，轻松俏皮，句尾自然，不要播音腔。"
-              >
-                <textarea
-                  rows={3}
-                  maxLength={400}
-                  value={v.style}
-                  onChange={(e) =>
-                    draft.setValue({ ...v, style: e.target.value })
-                  }
-                />
-              </Field>
+              <p className="muted">
+                称呼和人格在“群聊”中统一修改，这里无需重复填写。
+              </p>
             </Section>
             <Section title="识别设置">
               <Field
-                label="专名提示"
-                hint="帮助识别群名、昵称或作品名，每行一个，最多 30 行。空白时自动识别。"
+                label="额外识别纠错词（可选）"
+                hint="机器人称呼、当前群名和发言者昵称会自动读取。这里只补充容易听错的作品名或术语，每行一个，最多 30 行；不是机器人名称。"
               >
                 <textarea
                   rows={3}
@@ -210,6 +199,16 @@ export function Voice({ active }: { active: boolean }) {
             title="试听与识别测试"
             description="使用已保存的设置合成一段声音，再识别回来。仅在本页试听，不发送到 QQ。"
           >
+            <Field label="试听人格" hint="群聊人格修改并保存后，在这里选择对应群试听。">
+              <select value={group} disabled={busy} onChange={(e) => { setGroup(e.target.value); setPreview(null); }}>
+                <option value="">默认聊天语气（私聊）</option>
+                {(remote.data.contexts || []).map((context: any) => (
+                  <option key={context.group_id} value={context.group_id}>
+                    {context.display_name} · 群 {context.group_id}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field
               label="试听文字"
               hint="最多 100 字，点击测试会调用一次语音合成和一次语音识别。"
@@ -240,6 +239,8 @@ export function Voice({ active }: { active: boolean }) {
                     await api("/api/voice/test", {
                       revision: v.revision,
                       text: sample.trim(),
+                      group_id: group,
+                      chat_revision: remote.data.chat_revision,
                     }),
                   );
                 })

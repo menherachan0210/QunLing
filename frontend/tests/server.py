@@ -121,7 +121,8 @@ def voice_settings(manager, values=None, *, test=False):
         return {'audio_base64':base64.b64encode(sample.getvalue()).decode(), 'transcript':values['text'],
                 'ai_generated':True, 'speech_seconds':2.1, 'transcription_seconds':0.9}
     config = store.save(values) if values is not None else store.public(store.read())
-    return {'config':config,'voices':list(VOICES)}
+    return {'config':config,'voices':list(VOICES), 'chat_revision':manager.config['revision'],
+            'contexts':[{'group_id':gid, 'display_name':policy['display_name']} for gid, policy in manager.config['groups'].items()]}
 
 server.console.voice=voice_settings
 server.knowledge.settings=lambda manager: manager.knowledge
