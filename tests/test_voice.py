@@ -122,6 +122,7 @@ async def test_transcribe_only_calls_official_audio_and_does_not_forward_private
         assert str(request.url) == 'https://api.openai.com/v1/audio/transcriptions'
         assert request.headers['Authorization'] == 'Bearer ' + KEY
         assert b'gpt-transcribe' in request.content and b'keywords[]' in request.content
+        assert '专名拼写参考'.encode() in request.content
         assert '群灵'.encode() in request.content
         assert b'private-persona' not in request.content
         return httpx.Response(200, json={'text': '今晚一起打游戏吗'})

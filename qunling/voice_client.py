@@ -114,6 +114,7 @@ async def transcribe(config, body, *, keywords=()):
         fields = {'model': 'gpt-transcribe', 'response_format': 'json'}
         if hints:
             fields['keywords[]'] = hints
+            fields['prompt'] = '专名拼写参考（仅在音频中实际提到时使用，不补写未说的内容）：' + '、'.join(hints)
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(25, connect=8), trust_env=False, follow_redirects=False) as client:
                 async with client.stream('POST', 'https://api.openai.com/v1/audio/transcriptions',
