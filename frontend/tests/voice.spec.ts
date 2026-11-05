@@ -29,6 +29,8 @@ test("voice saves independently, keeps credentials private and previews only on 
   expect(JSON.stringify(publicConfig)).not.toContain(secret);
   await page.getByRole("button", { name: "试听并验证识别" }).click();
   await expect(page.getByLabel("语音试听")).toBeVisible();
+  await expect.poll(() => page.getByLabel("语音试听").evaluate((audio: HTMLAudioElement) => audio.readyState)).toBeGreaterThanOrEqual(1);
+  await page.getByLabel("语音试听").evaluate(async (audio: HTMLAudioElement) => { await audio.play(); audio.pause(); });
   await expect(page.locator('.voice-preview')).toContainText("这是群灵的语音测试");
   expect(previews).toBe(1);
   await page.screenshot({ path: "../.local/console-browser-results/voice-desktop.png", fullPage: true });
