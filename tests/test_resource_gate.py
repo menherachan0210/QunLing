@@ -252,3 +252,23 @@ def test_failure_evidence_is_numeric_bounded_and_excludes_ticket_identity(tmp_pa
     evidence = json.loads(rows[-1][1])
     assert evidence['reasons'] == ['container_memory', 'host_memory']
     assert evidence['local_available_mib'] == 40 and evidence['weight_mib'] == 32
+
+
+def test_remote_image_fits_incident_headroom_but_decoding_remains_guarded(tmp_path):
+    gate = ResourceGate(tmp_path, sample=lambda: Pressure(1930, 502, some=15.97, full=13.3,
+                                                        local_available_mib=141))
+    image = gate.ticket('image')
+    assert gate.try_acquire(image) is None
+    decode = gate.ticket('vision_small')
+    assert gate.try_acquire(decode) is None
+    upload = gate.ticket('image_transfer')
+    assert gate.try_acquire(upload) is not None
+    second = gate.ticket('image_transfer')
+    assert gate.try_acquire(second) is None
+
+
+@pytest.mark.parametrize('sample', [Pressure(1930, 351, local_available_mib=1000),
+                                    Pressure(1930, 1500, local_available_mib=127)])
+def test_remote_image_still_requires_real_memory(tmp_path, sample):
+    gate = ResourceGate(tmp_path, sample=lambda: sample)
+    assert gate.try_acquire(gate.ticket('image_transfer')) is None

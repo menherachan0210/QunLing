@@ -136,6 +136,10 @@ def _content_refused(exc: Exception) -> bool:
 
 def _provider_error(exc: Exception) -> ImageGenerationError:
     from openai import APIConnectionError, APIStatusError, APITimeoutError
+    from pkg.image_http import ImageResponseLimitError
+
+    if isinstance(exc, ImageResponseLimitError) or isinstance(exc.__cause__, ImageResponseLimitError):
+        return ImageGenerationError("生成服务返回的图片响应超过安全大小或使用了不支持的压缩格式；已停止读取，未自动重试。上游可能已生成或计费。")
 
     # No exception text, response bodies, headers, URLs, or prompts reach the result.
     if isinstance(exc, (APITimeoutError, TimeoutError)):
@@ -226,6 +230,15 @@ async def image_data_url(image: GeneratedImage) -> str:
     return _base64_data_url(payload, reference=True)
 
 
+def image_transfer_kind(encoded_bytes: int) -> str:
+    """Budget bounded JSON output plus copies of the compressed input, not pixels."""
+    estimate = 64 * 1024 * 1024 + 6 * encoded_bytes
+    for kind, budget in (("image_transfer", 96), ("image", 192), ("image_large", 384)):
+        if estimate <= budget * 1024 * 1024:
+            return kind
+    raise ImageGenerationError("多图参考总大小超过限制，未提交图片编辑请求；请缩小图片。")
+
+
 class AIImagePlugin(BasePlugin):
     """Read all credentials and settings per invocation; never cache clients."""
 
@@ -242,6 +255,7 @@ class AIImagePlugin(BasePlugin):
         if not api_key:
             return None
         from openai import AsyncOpenAI
+        from pkg.image_http import ImageHTTPClient
 
         return AsyncOpenAI(
             api_key=api_key,
@@ -250,6 +264,7 @@ class AIImagePlugin(BasePlugin):
             ),
             timeout=_timeout(config),
             max_retries=0,
+            http_client=ImageHTTPClient(timeout=_timeout(config)),
         )
 
     async def generate_image(self, prompt: str) -> GeneratedImage:
@@ -290,6 +305,8 @@ class AIImagePlugin(BasePlugin):
                 )
 
             async def request():
+                from qunling.resource_gate import resource_slot
+
                 body = {
                     "model": model,
                     "prompt": prompt,
@@ -299,55 +316,55 @@ class AIImagePlugin(BasePlugin):
                     "response_format": "b64_json",
                 }
                 if references is None:
-                    return await client.images.generate(**body)
+                    async with resource_slot("image_transfer", wait_seconds=15):
+                        return _image_result(await client.images.generate(**body))
                 from openai.types import ImagesResponse
 
                 # Fetch every source before the first paid POST. Never silently
                 # degrade a two-image request to whichever source was readable.
                 try:
                     async with asyncio.timeout(25):
-                        data_urls = await asyncio.gather(
-                            *(image_data_url(reference) for reference in references),
-                            return_exceptions=True,
-                        )
+                        data_urls = []
+                        for reference in references:
+                            # One bounded download at a time. Previously four
+                            # 10 MiB sources could expand concurrently in RAM.
+                            retained = sum(len(value) for value in data_urls)
+                            async with resource_slot(image_transfer_kind(retained), wait_seconds=5):
+                                data_urls.append(await image_data_url(reference))
                 except TimeoutError:
                     raise ImageGenerationError(
                         "参考图片读取超时，尚未提交图片编辑请求；没有使用剩余图片替代。"
                     ) from None
-                for value in data_urls:
-                    if isinstance(value, ImageGenerationError):
-                        raise value
-                    if isinstance(value, BaseException):
-                        raise ImageGenerationError(
-                            "所选参考图片中有图片读取失败，尚未提交图片编辑请求；没有使用剩余图片替代。"
-                        )
                 if sum(len(value) for value in data_urls) > 40 * 1024 * 1024:
                     raise ImageGenerationError(
                         "多图参考总大小超过限制，未提交图片编辑请求；请缩小图片。"
                     )
-                from qunling.vision_input import animation_data_url
+                from qunling.vision_input import model_image_base64
                 try:
-                    from qunling.resource_gate import finish_thread
-                    normalized = [await finish_thread(animation_data_url, value) for value in data_urls]
-                except (ValueError, OSError):
+                    animated = False
+                    for index, value in enumerate(data_urls):
+                        # Static images retain their exact bytes. Animated
+                        # inputs use the existing capped, isolated decoder.
+                        normalized = await model_image_base64(value)
+                        animated |= normalized != value
+                        data_urls[index] = normalized
+                except (ValueError, OSError, TimeoutError):
                     raise ImageGenerationError("参考动图无法安全读取关键帧，尚未提交编辑请求。") from None
-                data_urls = [value for value, _ in normalized]
-                if any(animated for _, animated in normalized):
+                if animated:
                     body["prompt"] += ("\n部分参考图是带 Frame/时间标记的原动图关键帧采样。"
                                        "按时间顺序参考动作、主体和构图；时间标签不是原图内容，不画进成品。"
                                        "若要求输出多帧，遵循输出分镜布局，不能把参考采样拼图直接当成最终一帧。")
                 body["images"] = [{"image_url": value} for value in data_urls]
-                return await client.post(
-                    "/images/edits", cast_to=ImagesResponse, body=body
-                )
+                async with resource_slot(image_transfer_kind(sum(map(len, data_urls))), wait_seconds=15):
+                    return _image_result(await client.post(
+                        "/images/edits", cast_to=ImagesResponse, body=body
+                    ))
 
-            from qunling.resource_gate import ResourceBusy, resource_slot
+            from qunling.resource_gate import ResourceBusy
             try:
-                async with resource_slot("image"):
-                    response = await asyncio.wait_for(request(), timeout=timeout)
+                return await asyncio.wait_for(request(), timeout=timeout)
             except ResourceBusy:
-                raise ImageGenerationError("图片任务排队超时，尚未提交生成请求；稍后再试。") from None
-            return _image_result(response)
+                raise ImageGenerationError("服务器可用内存暂时不足，图片处理尚未开始或未能继续，尚未提交生成请求；稍后再试。") from None
         except ImageGenerationError:
             raise
         except Exception as exc:

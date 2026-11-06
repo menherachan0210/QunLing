@@ -40,6 +40,9 @@ def main(argv=None):
         os.environ["PATH"] = str(ROOT / ".local/tools/7zip/linux-x64") + os.pathsep + os.environ.get("PATH", os.defpath)
         os.execv(sys.executable, [sys.executable, "-u", "-m", "qunling.daemon", "--concurrency", "2"])
     if role == "app":
+        from deploy.compose.prepare import verify_package_sources
+
+        verify_package_sources(ROOT)
         os.chdir(ROOT / "langbot")
         # Both Host and its automatically managed stdio Runtime use this cwd.
         # Do not pass --standalone-runtime or publish Runtime transport ports.

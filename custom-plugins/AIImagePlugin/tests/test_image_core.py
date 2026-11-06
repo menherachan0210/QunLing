@@ -17,7 +17,7 @@ from main import (
     image_data_url,
 )
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"fixture"
+PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2uoAAAAASUVORK5CYII=")
 PAYLOAD = base64.b64encode(PNG).decode()
 DATA_URL = "data:image/png;base64," + PAYLOAD
 

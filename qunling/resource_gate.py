@@ -18,10 +18,10 @@ import sqlite3
 import time
 
 MIB = 1024 * 1024
-WEIGHTS = {"file": 384, "image": 192, "vision_small": 128,
+WEIGHTS = {"file": 384, "image": 192, "image_large": 384, "image_transfer": 96, "vision_small": 128,
            "vision_medium": 256, "vision": 384, "model_media_small": 32,
            "model_media_medium": 64, "model_media": 128, "audio": 96}
-TRANSFER_KINDS = ("model_media_small", "model_media_medium")
+TRANSFER_KINDS = ("model_media_small", "model_media_medium", "image_transfer")
 _held = ContextVar("qunling_resource_lease", default=None)
 
 
@@ -143,7 +143,8 @@ class ResourceGate:
             # A waiting parser must not block a small upload of an already
             # resident image. FIFO remains intact within each work class.
             lane = "IN" if transfer else "NOT IN"
-            first = db.execute(f"SELECT seq FROM permits WHERE active=0 AND kind {lane} (?,?) ORDER BY seq LIMIT 1",
+            placeholders = ','.join('?' for _ in TRANSFER_KINDS)
+            first = db.execute(f"SELECT seq FROM permits WHERE active=0 AND kind {lane} ({placeholders}) ORDER BY seq LIMIT 1",
                                TRANSFER_KINDS).fetchone()[0]
             used = db.execute("SELECT coalesce(sum(weight),0) FROM permits WHERE active=1").fetchone()[0]
             budget = max(512, min(2048, sample.total_mib // 4))

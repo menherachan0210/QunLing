@@ -85,17 +85,19 @@ def fake_openai(monkeypatch):
 
     class _AsyncOpenAI:
         def __init__(
-            self, *, api_key: str, base_url: str, timeout: float, max_retries: int
+            self, *, api_key: str, base_url: str, timeout: float, max_retries: int, http_client
         ) -> None:
             assert timeout == 300
             assert max_retries == 0
             entry = {"api_key": api_key, "base_url": base_url, "closed": False}
             created.append(entry)
             self.entry = entry
+            self.http_client = http_client
             self.images = _Images(entry)
 
         async def close(self) -> None:
             self.entry["closed"] = True
+            await self.http_client.aclose()
 
     module = types.ModuleType("openai")
     module.AsyncOpenAI = _AsyncOpenAI

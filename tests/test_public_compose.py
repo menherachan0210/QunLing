@@ -36,6 +36,27 @@ healthcheck = load("healthcheck")
 smoke = load("smoke")
 
 
+def test_incremental_release_rejects_stale_bundled_shared_code(tmp_path):
+    shared = tmp_path / 'qunling'
+    shared.mkdir()
+    source = shared / 'resource_gate.py'
+    source.write_text('budget = 96\n')
+    directory = tmp_path / 'packages'
+    directory.mkdir()
+    index = []
+    for name in prepare.PLUGIN_NAMES:
+        path = directory / (name + '.lbpkg')
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr('qunling/resource_gate.py', source.read_bytes())
+        index.append({'filename': path.name, 'identity': 'test/' + name,
+                      'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
+    (directory / 'packages.json').write_text(json.dumps(index))
+    prepare.verify_package_sources(tmp_path)
+    source.write_text('budget = 128\n')
+    with pytest.raises(ValueError, match='Stale shared code'):
+        prepare.verify_package_sources(tmp_path)
+
+
 def test_file_worker_readiness_rejects_missing_stale_and_dead_heartbeat(tmp_path, monkeypatch):
     import time
     heartbeat = tmp_path / "heartbeat"
@@ -515,6 +536,8 @@ def test_app_and_wizard_exec_without_standalone_runtime(
     tmp_path, monkeypatch, role, expected
 ):
     monkeypatch.setattr(entrypoint, "ROOT", tmp_path)
+    verify = Mock()
+    monkeypatch.setattr('deploy.compose.prepare.verify_package_sources', verify)
     chdir, execute = Mock(), Mock()
     monkeypatch.setattr(entrypoint.os, "chdir", chdir)
     monkeypatch.setattr(entrypoint.os, "umask", Mock())
@@ -529,6 +552,10 @@ def test_app_and_wizard_exec_without_standalone_runtime(
     expected = [str(tmp_path / "scripts/Run-LangBot.py") if value == "SUPERVISOR" else value
                 for value in expected]
     execute.assert_called_once_with(sys.executable, [sys.executable, *expected])
+    if role == 'app':
+        verify.assert_called_once_with(tmp_path)
+    else:
+        verify.assert_not_called()
     assert chdir.call_args.args[0] == (
         tmp_path / "langbot" if role == "app" else tmp_path
     )

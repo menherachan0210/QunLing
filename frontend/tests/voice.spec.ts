@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
 test("voice saves independently, keeps credentials private and previews only on demand", async ({ page }) => {
   let previews = 0;
   page.on("request", request => { if (request.url().endsWith("/api/voice/test")) previews++; });
-  const secret = "sk-offline-voice-browser-only-123456789";
+  const secret = "synthetic-voice-credential-never-sent";
   await page.getByLabel("官方语音 API Key").fill(secret);
   await page.getByRole("switch", { name: "启用语音", exact: true }).check();
   await page.getByLabel("音色", { exact: true }).selectOption("cedar");

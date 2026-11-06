@@ -353,7 +353,30 @@ def build_packages(root: Path):
     (output / "packages.json").write_text(
         json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+    verify_package_sources(root)
     print("Prepared seven plugin packages and packages.json.")
+
+
+def verify_package_sources(root: Path):
+    """Reject incremental images whose bundled shared code no longer matches Host."""
+    directory = root / "packages"
+    index = json.loads((directory / "packages.json").read_text(encoding="utf-8"))
+    if len(index) != len(PLUGIN_NAMES) or {p["identity"].split("/")[-1] for p in index} != set(PLUGIN_NAMES):
+        raise ValueError("Release must contain all seven plugin packages")
+    expected = {p.relative_to(root).as_posix(): p.read_bytes()
+                for p in (root / "qunling").rglob("*.py") if "__pycache__" not in p.parts}
+    if not expected:
+        raise ValueError("Shared runtime sources are missing")
+    for item in index:
+        path = directory / item["filename"]
+        if path.parent.resolve() != directory.resolve() or path.suffix != ".lbpkg":
+            raise ValueError("Invalid package path")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
+            raise ValueError("Package digest mismatch")
+        with zipfile.ZipFile(path) as archive:
+            names = {name for name in archive.namelist() if name.startswith("qunling/") and name.endswith(".py")}
+            if names != set(expected) or any(archive.read(name) != value for name, value in expected.items()):
+                raise ValueError("Stale shared code in " + item["identity"] + "; rebuild plugin packages with Host sources")
 
 
 def prepare_embedding():
