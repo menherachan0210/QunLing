@@ -530,6 +530,16 @@ async def test_ai_frames_use_one_paid_request_then_durable_gif_job(tool_env, tmp
     from qunling.assets import AssetStore
     from qunling.jobs import JobService
     from qunling.scope import Scope
+    from qunling import resource_gate
+
+    # This test embeds the file worker beside the SDK in one small CI cgroup.
+    # Production uses its own worker container. Exercise job completion here;
+    # admission/pressure behavior has dedicated resource-gate regressions.
+    original_gate = resource_gate.ResourceGate
+    def available_gate(root, **kwargs):
+        kwargs.setdefault('sample', lambda: resource_gate.Pressure(1930, 1500, local_available_mib=1024))
+        return original_gate(root, **kwargs)
+    monkeypatch.setattr(resource_gate, 'ResourceGate', available_gate)
 
     env = tool_env
     monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path))

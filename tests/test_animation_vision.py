@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-pytestmark = pytest.mark.sdk
+pytestmark = [pytest.mark.sdk, pytest.mark.usefixtures('available_file_resources')]
 from PIL import Image
 
 from qunling.vision_input import animation_data_url, model_image_content, decoder_memory_mib

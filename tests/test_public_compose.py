@@ -536,6 +536,7 @@ def test_app_and_wizard_exec_without_standalone_runtime(
     tmp_path, monkeypatch, role, expected
 ):
     monkeypatch.setattr(entrypoint, "ROOT", tmp_path)
+    monkeypatch.setenv('QUNLING_DATA_DIR', str(tmp_path / 'private-data'))
     verify = Mock()
     monkeypatch.setattr('deploy.compose.prepare.verify_package_sources', verify)
     chdir, execute = Mock(), Mock()
