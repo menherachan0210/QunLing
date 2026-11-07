@@ -49,6 +49,20 @@ def provider_status(status, body=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('wrapped', [False, True])
+async def test_invalid_image_error_reports_reference_failure_without_private_body(monkeypatch, wrapped):
+    error = {'code': 'invalid_image_file', 'type': 'image_generation_user_error',
+             'param': 'images[0].image_url', 'message': SECRET}
+    plugin, client = plugin_and_client(monkeypatch, error=provider_status(
+        400, {'error': error} if wrapped else error))
+    with pytest.raises(ImageGenerationError) as caught:
+        await plugin.edit_image('edit', GeneratedImage(base64=DATA_URL))
+    assert '参考图片' in str(caught.value) and 'invalid_image_file' in str(caught.value)
+    assert '未自动重试' in str(caught.value) and SECRET not in str(caught.value)
+    client.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["generate", "edit"])
 @pytest.mark.parametrize(
     ("error", "expected"),

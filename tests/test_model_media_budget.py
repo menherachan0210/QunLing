@@ -107,7 +107,7 @@ async def test_warm_busy_host_sends_static_screenshot_without_animation_work(tmp
     file_ticket = blocked.ticket('file')
     assert blocked.try_acquire(file_ticket) is None
     decoder = AsyncMock(side_effect=AssertionError('A static screenshot must not start the animation decoder'))
-    monkeypatch.setattr(vision_input, '_isolated_animation', decoder)
+    monkeypatch.setattr(vision_input, '_isolated_image', decoder)
     content = await vision_input.model_image_content(value)
     assert content.type == 'image_base64' and content.image_base64 == value
     decoder.assert_not_called()

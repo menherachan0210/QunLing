@@ -1,14 +1,46 @@
 import asyncio
+import base64
+import io
 from contextlib import asynccontextmanager
 
 import httpx
 import pytest
 from openai import AsyncOpenAI
+from PIL import Image
 
 from main import GeneratedImage, ImageGenerationError, image_transfer_kind
 from pkg import image_http
 from qunling import resource_gate, vision_input
 from test_image_core import DATA_URL, PAYLOAD, plugin_with_client, response
+
+
+@pytest.mark.asyncio
+async def test_single_frame_gif_is_png_in_actual_edit_request_without_animation_prompt(monkeypatch):
+    monkeypatch.delenv('QUNLING_DATA_DIR', raising=False)
+    output = io.BytesIO()
+    with Image.new('RGBA', (48, 48), (100, 20, 70, 255)) as image:
+        image.save(output, format='GIF')
+    raw = output.getvalue()
+    plugin, client = plugin_with_client(monkeypatch, response(b64_json=PAYLOAD))
+    await plugin.edit_image('change drawing style', GeneratedImage(base64=base64.b64encode(raw).decode()))
+    client.post.assert_awaited_once()
+    body = client.post.await_args.kwargs['body']
+    assert body['prompt'] == 'change drawing style'
+    value = body['images'][0]['image_url']
+    assert value.startswith('data:image/png;base64,')
+    with Image.open(io.BytesIO(base64.b64decode(value.partition(',')[2]))) as sent:
+        with Image.open(io.BytesIO(raw)) as original:
+            assert sent.size == original.size
+            assert sent.convert('RGBA').tobytes() == original.convert('RGBA').tobytes()
+
+
+@pytest.mark.asyncio
+async def test_corrupt_gif_fails_before_paid_edit_request(monkeypatch):
+    monkeypatch.delenv('QUNLING_DATA_DIR', raising=False)
+    plugin, client = plugin_with_client(monkeypatch)
+    with pytest.raises(ImageGenerationError, match='尚未提交编辑请求'):
+        await plugin.edit_image('edit', GeneratedImage(base64=base64.b64encode(b'GIF89a corrupt').decode()))
+    client.post.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -21,7 +53,7 @@ async def test_small_static_edit_survives_incident_pressure_without_pixel_decode
     monkeypatch.setattr(resource_gate, 'ResourceGate', lambda root: gate_type(root, sample=resource_gate.pressure))
     async def forbidden_decode(*args, **kwargs):
         raise AssertionError('A static image must not run a decoder')
-    monkeypatch.setattr(vision_input, '_isolated_animation', forbidden_decode)
+    monkeypatch.setattr(vision_input, '_isolated_image', forbidden_decode)
     plugin, client = plugin_with_client(monkeypatch, response(b64_json=PAYLOAD))
     assert await plugin.edit_image('restyle', GeneratedImage(base64=DATA_URL)) == GeneratedImage(base64=DATA_URL)
     client.post.assert_awaited_once()

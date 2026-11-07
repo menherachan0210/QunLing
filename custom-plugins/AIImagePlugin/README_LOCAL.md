@@ -1,6 +1,6 @@
 # 本地图片生成和编辑扩展
 
-当前本地版本为 `0.1.7-local.9`，基于官方 AIImagePlugin 0.1.6（`upstream-source.json` 记录精确版本）定制。该目录不包含密钥，也未向插件市场发布。
+当前本地版本为 `0.1.7-local.12`，基于官方 AIImagePlugin 0.1.6（`upstream-source.json` 记录精确版本）定制。该目录不包含密钥，也未向插件市场发布。
 
 ## 使用
 
@@ -34,6 +34,8 @@
 | `request_timeout_seconds` | `300`，允许 30–300 秒 |
 
 生成使用 `/images/generations`；编辑使用 `/images/edits` JSON `images:[{image_url:dataURI}, ...]`，单次包含 1–4 个参考。每个请求只生成一张，优先读取 `b64_json`，也兼容服务返回 HTTP(S) 图片 URL。所有参考图必须先读取成功，任何一张失败都不会提交部分参考或改为文生图。
+
+编辑参考按实际文件内容识别格式。单帧 GIF 会自动无损转换为 PNG，保留原尺寸、颜色和透明度；静态 PNG/JPEG/WebP 保持原始字节。多帧动图转换为有时间标记的关键帧拼图，单帧格式转换不会添加动图提示。上游返回 `invalid_image_file` 时会单独提示参考图格式或编码不兼容，不自动重复提交。
 
 ## 生命周期与限制
 

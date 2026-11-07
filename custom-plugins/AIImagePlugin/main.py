@@ -150,6 +150,8 @@ def _provider_error(exc: Exception) -> ImageGenerationError:
         )
     if isinstance(exc, APIStatusError):
         status = exc.status_code
+        body = getattr(exc, "body", None)
+        error = body.get("error", body) if isinstance(body, dict) else None
         if status == 401:
             message = "图片生成服务认证失败（HTTP 401）；请检查图片插件的 API Key。"
         elif status == 429:
@@ -166,6 +168,11 @@ def _provider_error(exc: Exception) -> ImageGenerationError:
             )
         elif status == 413:
             message = "图片生成服务拒绝了过大的请求（HTTP 413）；请缩小参考图片。"
+        elif status in {400, 422} and isinstance(error, dict) and error.get("code") == "invalid_image_file":
+            message = (
+                f"图片编辑服务无法读取参考图片（HTTP {status}，invalid_image_file）："
+                "图片格式或编码不兼容，没有返回生成结果；请重新上传原图。"
+            )
         elif status in {400, 422}:
             message = (
                 f"图片生成服务不接受本次请求（HTTP {status}）；"
@@ -339,17 +346,19 @@ class AIImagePlugin(BasePlugin):
                     raise ImageGenerationError(
                         "多图参考总大小超过限制，未提交图片编辑请求；请缩小图片。"
                     )
-                from qunling.vision_input import model_image_base64
+                from qunling.vision_input import edit_image_input
                 try:
                     animated = False
                     for index, value in enumerate(data_urls):
-                        # Static images retain their exact bytes. Animated
-                        # inputs use the existing capped, isolated decoder.
-                        normalized = await model_image_base64(value)
-                        animated |= normalized != value
+                        # Static GIFs need lossless PNG conversion for edits.
+                        # Conversion alone does not imply an animation sheet.
+                        normalized, is_animation = await edit_image_input(value)
+                        animated |= is_animation
                         data_urls[index] = normalized
                 except (ValueError, OSError, TimeoutError):
-                    raise ImageGenerationError("参考动图无法安全读取关键帧，尚未提交编辑请求。") from None
+                    raise ImageGenerationError("参考图片或动图无法安全读取，尚未提交编辑请求。") from None
+                if sum(map(len, data_urls)) > 40 * 1024 * 1024:
+                    raise ImageGenerationError("转换后的参考图片总大小超过限制，尚未提交编辑请求。")
                 if animated:
                     body["prompt"] += ("\n部分参考图是带 Frame/时间标记的原动图关键帧采样。"
                                        "按时间顺序参考动作、主体和构图；时间标签不是原图内容，不画进成品。"

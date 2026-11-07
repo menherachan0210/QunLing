@@ -1,4 +1,4 @@
-"""Turn animated references into bounded chronological model inputs, not first frames."""
+"""Prepare bounded image inputs for vision and image editing."""
 from __future__ import annotations
 
 import asyncio
@@ -57,7 +57,7 @@ def decoder_memory_mib(value: str) -> int:
     return next((size for size in (128, 256) if estimate <= size * 1024**2), 384)
 
 
-def animation_data_url(value: str) -> tuple[str, bool]:
+def animation_data_url(value: str, *, for_edit: bool = False) -> tuple[str, bool]:
     """Keep originals outside this adapter; only the model gets a sampled sheet."""
     if not isinstance(value, str):
         raise ValueError("Invalid image input")
@@ -73,8 +73,17 @@ def animation_data_url(value: str) -> tuple[str, bool]:
     with Image.open(io.BytesIO(raw)) as image:
         if image.width * image.height > 40_000_000:
             raise ValueError("Image exceeds pixel budget")
-        if not getattr(image, "is_animated", False):
-            return value, False
+        animated = bool(getattr(image, "is_animated", False))
+        if not animated:
+            # Vision accepts static GIFs; the image-edit endpoint does not.
+            # Preserve the palette, transparency and dimensions without a sheet.
+            if not for_edit or image.format != "GIF":
+                return value, False
+            output = io.BytesIO()
+            image.save(output, format="PNG")
+            if output.tell() > MAX_BYTES:
+                raise ValueError("Converted image exceeds output budget")
+            return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii"), False
         if image.width * image.height > MAX_ANIMATION_PIXELS:
             raise ValueError("Animation canvas exceeds decoder budget")
         with contact_sheet(image) as sheet:
@@ -95,7 +104,8 @@ async def _stop_decoder(process):
     await process.wait()
 
 
-async def _isolated_animation(value: str, *, memory_mib: int = 384) -> str:
+async def _isolated_image(value: str, *, memory_mib: int = 384,
+                          for_edit: bool = False) -> tuple[str, bool]:
     from qunling.resource_gate import finish_thread
 
     with tempfile.TemporaryDirectory(prefix="qunling-vision-") as temporary:
@@ -109,6 +119,7 @@ async def _isolated_animation(value: str, *, memory_mib: int = 384) -> str:
                    else {"start_new_session": True})
         launch = asyncio.create_task(asyncio.create_subprocess_exec(
             sys.executable, "-I", str(Path(__file__).with_name("_vision_worker.py")), str(memory_mib),
+            *(["edit"] if for_edit else []),
             cwd=temporary, env=env, stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options))
         try:
@@ -130,16 +141,18 @@ async def _isolated_animation(value: str, *, memory_mib: int = 384) -> str:
         result = json.loads(result_path.read_text(encoding="ascii"))
         if not result.get("ok"):
             raise ValueError("Image could not be decoded within its resource limit")
-        if not result.get("animated"):
-            return value
+        animated = bool(result.get("animated"))
+        if not result.get("converted"):
+            return value, animated
         preview = root / "preview.png"
-        if not preview.is_file() or preview.stat().st_size > MAX_PREVIEW_BYTES:
+        limit = MAX_BYTES if for_edit and not animated else MAX_PREVIEW_BYTES
+        if not preview.is_file() or preview.stat().st_size > limit:
             raise ValueError("Image preview exceeds output budget")
         body = await finish_thread(preview.read_bytes)
-        return "data:image/png;base64," + base64.b64encode(body).decode("ascii")
+        return "data:image/png;base64," + base64.b64encode(body).decode("ascii"), animated
 
 
-async def model_image_base64(value: str) -> str:
+async def _model_image_input(value: str, *, for_edit: bool = False) -> tuple[str, bool]:
     from qunling.resource_gate import resource_slot
 
     if not isinstance(value, str):
@@ -147,18 +160,27 @@ async def model_image_base64(value: str) -> str:
     # Inspect a small prefix without copying a multi-megabyte data URI.
     start = value.find(",", 0, 128) + 1 if value.startswith("data:") else 0
     if not value.startswith(("R0lGOD", "iVBORw0KGgo", "UklGR"), start):
-        return value
+        return value, False
     if len(value) > 4 * ((MAX_BYTES + 2) // 3) + 128:
         raise ValueError("Image exceeds input budget")
     from qunling.image_header import static_image
     if static_image(value):
         # The provider consumes compressed static images directly. Do not
         # reserve animation buffers or launch a pixel decoder for a screenshot.
-        return value
+        return value, False
     memory_mib = decoder_memory_mib(value)
     kind = {128: "vision_small", 256: "vision_medium", 384: "vision"}[memory_mib]
     async with resource_slot(kind, wait_seconds=3):
-        return await _isolated_animation(value, memory_mib=memory_mib)
+        return await _isolated_image(value, memory_mib=memory_mib, for_edit=for_edit)
+
+
+async def model_image_base64(value: str) -> str:
+    return (await _model_image_input(value))[0]
+
+
+async def edit_image_input(value: str) -> tuple[str, bool]:
+    """Return an edit-compatible image and whether it represents animation frames."""
+    return await _model_image_input(value, for_edit=True)
 
 
 async def model_image_content(value: str):

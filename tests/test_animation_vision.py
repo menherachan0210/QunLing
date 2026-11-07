@@ -9,7 +9,7 @@ import pytest
 pytestmark = [pytest.mark.sdk, pytest.mark.usefixtures('available_file_resources')]
 from PIL import Image
 
-from qunling.vision_input import animation_data_url, model_image_content, decoder_memory_mib
+from qunling.vision_input import animation_data_url, model_image_content, decoder_memory_mib, edit_image_input
 
 
 def animated_url():
@@ -17,6 +17,54 @@ def animated_url():
     output = io.BytesIO()
     frames[0].save(output, format="GIF", save_all=True, append_images=frames[1:], duration=[100, 200, 300])
     return "data:image/gif;base64," + base64.b64encode(output.getvalue()).decode()
+
+
+def static_gif():
+    output = io.BytesIO()
+    with Image.new('P', (48, 48), 0) as image:
+        image.putpalette([12, 34, 56, 220, 40, 80] + [0] * (768 - 6))
+        image.paste(1, (5, 7, 21, 29))
+        image.save(output, format='GIF', transparency=0)
+    return 'data:image/gif;base64,' + base64.b64encode(output.getvalue()).decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('plain_base64', [False, True])
+async def test_edit_static_gif_converts_losslessly_in_isolated_worker(plain_base64):
+    original = static_gif()
+    value = original.partition(',')[2] if plain_base64 else original
+    # Ordinary vision still accepts the original GIF.
+    assert animation_data_url(value) == (value, False)
+    result, animated = await edit_image_input(value)
+    assert result.startswith('data:image/png;base64,') and not animated
+    with Image.open(io.BytesIO(base64.b64decode(original.partition(',')[2]))) as before:
+        with Image.open(io.BytesIO(base64.b64decode(result.partition(',')[2]))) as after:
+            assert before.n_frames == 1 and after.format == 'PNG'
+            assert after.size == before.size == (48, 48)
+            assert after.convert('RGBA').tobytes() == before.convert('RGBA').tobytes()
+
+
+@pytest.mark.asyncio
+async def test_edit_animated_gif_still_reports_a_temporal_sheet():
+    result, animated = await edit_image_input(animated_url())
+    assert animated and result.startswith('data:image/png;base64,')
+    with Image.open(io.BytesIO(base64.b64decode(result.partition(',')[2]))) as sheet:
+        colors = sheet.convert('RGB').getdata()
+        assert (255, 0, 0) in colors and (0, 0, 255) in colors and (0, 128, 0) in colors
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('fmt,mime', [('PNG', 'png'), ('JPEG', 'jpeg'), ('WEBP', 'webp')])
+async def test_edit_compatible_static_formats_keep_original_bytes(fmt, mime, monkeypatch):
+    from qunling import vision_input
+    async def forbidden(*args, **kwargs):
+        raise AssertionError('Compatible static images do not need a pixel decoder')
+    monkeypatch.setattr(vision_input, '_isolated_image', forbidden)
+    output = io.BytesIO()
+    with Image.new('RGB', (48, 48), 'blue') as image:
+        image.save(output, format=fmt)
+    value = 'data:image/' + mime + ';base64,' + base64.b64encode(output.getvalue()).decode()
+    assert await edit_image_input(value) == (value, False)
 
 
 def test_animation_model_input_contains_chronological_frames_not_raw_gif():
