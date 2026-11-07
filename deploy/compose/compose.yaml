@@ -53,8 +53,8 @@ services:
       start_period: 120s
       retries: 12
     stop_grace_period: 60s
-    mem_limit: ${QQBOT_APP_MEMORY:-1152m}
-    memswap_limit: ${QQBOT_APP_MEMORY_SWAP:-1664m}
+    mem_limit: ${QQBOT_APP_MEMORY:-1280m}
+    memswap_limit: ${QQBOT_APP_MEMORY_SWAP:-1792m}
     cgroup_parent: ${QQBOT_APP_CGROUP_PARENT:-}
     mem_reservation: 512m
     cpu_shares: 1024
