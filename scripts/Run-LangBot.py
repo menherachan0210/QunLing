@@ -116,6 +116,12 @@ def main():
     app = root / "langbot"
     env = os.environ.copy()
     env.setdefault("QUNLING_DATA_DIR", str(app / "data/qunling"))
+    # Return large JSON/media buffers to Linux instead of accumulating idle
+    # allocator arenas across the Host and its runtime processes.
+    if sys.platform == "linux":
+        env.setdefault("MALLOC_ARENA_MAX", "2")
+        env.setdefault("MALLOC_MMAP_THRESHOLD_", "131072")
+        env.setdefault("MALLOC_TRIM_THRESHOLD_", "131072")
     # Independent group members use independent sessions. Bound foreground
     # work and its queue so a busy group cannot start one pipeline per person.
     # Lightweight participation retains its own bounded model slots.

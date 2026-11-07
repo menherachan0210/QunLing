@@ -14,6 +14,9 @@ ENV PYTHONUTF8=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     UV_LINK_MODE=copy \
     UV_NO_PROGRESS=1 \
+    MALLOC_ARENA_MAX=2 \
+    MALLOC_MMAP_THRESHOLD_=131072 \
+    MALLOC_TRIM_THRESHOLD_=131072 \
     ANONYMIZED_TELEMETRY=False
 
 WORKDIR /opt/qq-ai-bot
@@ -31,6 +34,7 @@ ENV VIRTUAL_ENV=/opt/qq-ai-bot/langbot/.venv \
 COPY qunling/requirements.txt /opt/qq-ai-bot/qunling/requirements.txt
 RUN uv pip install --python /opt/qq-ai-bot/langbot/.venv/bin/python --no-cache -r qunling/requirements.txt
 COPY scripts/Apply-RuntimePatches.py scripts/Setup-ArchiveTools.py scripts/Setup-FileRuntime.py scripts/Run-LangBot.py scripts/chat_style.py /opt/qq-ai-bot/scripts/
+COPY scripts/runtime-patch-versions /opt/qq-ai-bot/scripts/runtime-patch-versions
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /opt/qq-ai-bot/
 COPY licenses /opt/qq-ai-bot/licenses
 COPY config/chat-style.txt /opt/qq-ai-bot/config/chat-style.txt

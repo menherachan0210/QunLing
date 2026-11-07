@@ -178,6 +178,7 @@ def test_explicit_docker_copies_never_import_workstation_runtimes():
         "scripts/Setup-FileRuntime.py",
         "scripts/Run-LangBot.py",
         "scripts/chat_style.py",
+        "scripts/runtime-patch-versions",
         "qunling",
         "qunling/requirements.txt",
         "LICENSE",

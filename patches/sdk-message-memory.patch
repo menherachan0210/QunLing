@@ -1,0 +1,14 @@
+--- a/.venv/Lib/site-packages/langbot_plugin/runtime/io/handler.py
++++ b/.venv/Lib/site-packages/langbot_plugin/runtime/io/handler.py
+@@ -932,6 +932,11 @@
+         disconnect_error = ConnectionClosedError("Connection closed")
+         try:
+             while True:
++                # A connection can remain idle indefinitely after a large
++                # image RPC. The action task or response waiter owns the data
++                # it still needs; the receive loop must not retain another
++                # raw and decoded copy while waiting for the next frame.
++                message = req_data = None
+                 try:
+                     message = await self.conn.receive()
+                 except ConnectionClosedError as exc:

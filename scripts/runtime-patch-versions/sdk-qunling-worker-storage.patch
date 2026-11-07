@@ -1,0 +1,44 @@
+--- a/langbot_plugin/runtime/plugin/worker_launcher.py
++++ b/langbot_plugin/runtime/plugin/worker_launcher.py
+@@ -237,6 +237,7 @@
+         # explicit profile cross this process boundary.
+         del policy
+         worker_environment = self._windows_worker_environment()
++        worker_environment.update(self._qunling_worker_environment())
+         worker_environment.update(
+             {
+                 PLUGIN_FILE_STORAGE_DIR_ENV: str(
+@@ -799,6 +800,23 @@
+             for name in _WINDOWS_WORKER_ENV_ALLOWLIST
+             if (value := os.environ.get(name)) is not None
+         }
++
++    @staticmethod
++    def _qunling_worker_environment() -> dict[str, str]:
++        # QunLing's trusted host, daemon and direct plugin workers share one
++        # scoped attachment store. Only this configured absolute path and PATH
++        # (for the bundled native decoder) cross the process boundary, never
++        # arbitrary provider keys or the rest of the parent's environment.
++        # The nsjail/shared branch above deliberately does not call this helper.
++        value = os.environ.get("QUNLING_DATA_DIR")
++        if not value:
++            return {}
++        if not pathlib.Path(value).is_absolute():
++            raise RuntimeError("QUNLING_DATA_DIR must be an absolute host path")
++        environment = {"QUNLING_DATA_DIR": value}
++        if (path := os.environ.get("PATH")) is not None:
++            environment["PATH"] = path
++        return environment
+ 
+     def _write_dependency_requirements(
+         self,
+--- a/langbot_plugin/runtime/plugin/mgr.py
++++ b/langbot_plugin/runtime/plugin/mgr.py
+@@ -631,6 +631,7 @@
+         child_env = (
+             self._windows_plugin_environment() if get_platform() == "win32" else {}
+         )
++        child_env.update(self.worker_launcher._qunling_worker_environment())
+         python_paths = [str(self.worker_launcher.runtime_import_root)]
+         plugin_site_packages = pkgmgr_helper.get_plugin_site_packages(plugin_path)
+         if plugin_site_packages is not None:

@@ -328,6 +328,7 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("onebot-forward-placeholder.patch", "host", False) in patcher.PATCHES
     assert ("host-plugin-health.patch", "host", False) in patcher.PATCHES
     assert ("sdk-transport-recovery.patch", "sdk", False) in patcher.PATCHES
+    assert ("sdk-message-memory.patch", "sdk", False) in patcher.PATCHES
     assert ("host-request-diagnostics.patch", "host", False) in patcher.PATCHES
     assert ("sdk-utf8-chunk-performance.patch", "sdk", False) in patcher.PATCHES
     assert ("host-group-memory-reset.patch", "host", False) in patcher.PATCHES
@@ -343,7 +344,7 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("sdk-quote-text.patch", "sdk", False) in patcher.PATCHES
     assert ("host-model-media-budget.patch", "host", False) in patcher.PATCHES
     assert ("host-thinking-visibility.patch", "host", False) in patcher.PATCHES
-    assert len(names) == 49
+    assert len(names) == 50
     assert 'host-voice.patch' in names
     assert "host-qq-task-isolation.patch" in names
     assert "host-model-usage.patch" in names

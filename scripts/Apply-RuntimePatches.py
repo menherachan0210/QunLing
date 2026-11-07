@@ -74,6 +74,7 @@ PATCHES = (
     ("sdk-tool-provenance.patch", "sdk", False),
     ("sdk-qunling-worker-storage.patch", "sdk", False),
     ("sdk-transport-recovery.patch", "sdk", False),
+    ("sdk-message-memory.patch", "sdk", False),
     ("sdk-quote-text.patch", "sdk", False),
 )
 
@@ -293,10 +294,11 @@ def proactive_reply_upgrade(name: str, root: Path, payload: bytes, component: st
 
 
 def recovery_patch_upgrade(name: str, root: Path, payload: bytes, component: str) -> PatchPlan | None:
-    """Upgrade only the complete, pinned previous recovery patch in a scratch tree."""
+    """Upgrade only a complete, pinned previous patch in a scratch tree."""
     versions = {
         ('sdk-transport-recovery.patch', 'sdk'): '3a7ae8c346d3abe3ddd0df2c40157133c787c0c5142034e9207c9fa5f47804b0',
         ('host-plugin-health.patch', 'host'): '55cfdf7b4d4a7f47716046a12286c882a3161e54818f743d76bf921ba54b7074',
+        ('sdk-qunling-worker-storage.patch', 'sdk'): '1c19b1745975797b8457f9e15eb1f7b59c49679793befdac018af79158cdda3f',
     }
     expected = versions.get((name, component))
     if expected is None:

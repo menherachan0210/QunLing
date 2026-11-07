@@ -359,7 +359,8 @@ async def test_managed_chat_can_start_while_unselected_optional_worker_is_broken
 
 
 @pytest.mark.parametrize('name,component', [
-    ('sdk-transport-recovery.patch', 'sdk'), ('host-plugin-health.patch', 'host')])
+    ('sdk-transport-recovery.patch', 'sdk'), ('host-plugin-health.patch', 'host'),
+    ('sdk-qunling-worker-storage.patch', 'sdk')])
 def test_upgrade_previous_complete_recovery_patch(tmp_path, name, component):
     import langbot_plugin
     patcher = load('recovery_upgrade_patcher', ROOT/'scripts/Apply-RuntimePatches.py')

@@ -8,7 +8,7 @@
          worker_environment.update(
              {
                  PLUGIN_FILE_STORAGE_DIR_ENV: str(
-@@ -799,6 +800,23 @@
+@@ -799,6 +800,32 @@
              for name in _WINDOWS_WORKER_ENV_ALLOWLIST
              if (value := os.environ.get(name)) is not None
          }
@@ -16,9 +16,9 @@
 +    @staticmethod
 +    def _qunling_worker_environment() -> dict[str, str]:
 +        # QunLing's trusted host, daemon and direct plugin workers share one
-+        # scoped attachment store. Only this configured absolute path and PATH
-+        # (for the bundled native decoder) cross the process boundary, never
-+        # arbitrary provider keys or the rest of the parent's environment.
++        # scoped attachment store. Forward only its absolute path, PATH for
++        # the bundled decoder, and the three allocator settings below. Never
++        # forward arbitrary provider keys or the parent's full environment.
 +        # The nsjail/shared branch above deliberately does not call this helper.
 +        value = os.environ.get("QUNLING_DATA_DIR")
 +        if not value:
@@ -28,6 +28,15 @@
 +        environment = {"QUNLING_DATA_DIR": value}
 +        if (path := os.environ.get("PATH")) is not None:
 +            environment["PATH"] = path
++        # Large image RPC buffers should be returned after a completed call.
++        # Direct workers otherwise discard the Host's allocator environment.
++        for name, default in (
++            ("MALLOC_ARENA_MAX", "2"),
++            ("MALLOC_MMAP_THRESHOLD_", "131072"),
++            ("MALLOC_TRIM_THRESHOLD_", "131072"),
++        ):
++            environment[name] = os.environ.get(name, default)
++
 +        return environment
  
      def _write_dependency_requirements(

@@ -76,9 +76,23 @@ def test_direct_worker_forwards_only_explicit_storage_not_parent_secrets(patched
     controller = launcher.create_controller(spec)
     assert controller.env["QUNLING_DATA_DIR"] == directory
     assert controller.env["PATH"] == os.environ["PATH"]
+    for name, default in (("MALLOC_ARENA_MAX", "2"),
+                          ("MALLOC_MMAP_THRESHOLD_", "131072"),
+                          ("MALLOC_TRIM_THRESHOLD_", "131072")):
+        assert controller.env[name] == os.environ.get(name, default)
     assert "OPENAI_API_KEY" not in controller.env
     assert "QUNLING_UNRELATED_SECRET" not in controller.env
     assert "untrusted-parent-path" not in controller.env["PYTHONPATH"]
+
+
+def test_allocator_override_reaches_direct_workers(patched_sdk, tmp_path, monkeypatch):
+    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path / "shared-data"))
+    monkeypatch.setenv("MALLOC_ARENA_MAX", "3")
+    monkeypatch.setenv("MALLOC_MMAP_THRESHOLD_", "262144")
+    launcher, spec = launch(patched_sdk, tmp_path, "linux")
+    environment = launcher.create_controller(spec).env
+    assert environment["MALLOC_ARENA_MAX"] == "3"
+    assert environment["MALLOC_MMAP_THRESHOLD_"] == "262144"
 
 
 def test_unconfigured_and_relative_storage_do_not_create_an_implicit_working_directory(patched_sdk, monkeypatch):

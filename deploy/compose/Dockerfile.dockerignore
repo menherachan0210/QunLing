@@ -5,6 +5,8 @@
 !scripts/Setup-FileRuntime.py
 !scripts/Run-LangBot.py
 !scripts/chat_style.py
+!scripts/runtime-patch-versions/
+!scripts/runtime-patch-versions/*.patch
 !qunling/
 !qunling/**
 !LICENSE
