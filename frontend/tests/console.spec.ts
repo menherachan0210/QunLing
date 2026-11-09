@@ -188,6 +188,67 @@ test("reasoning settings save shared roles, supported choices and reload without
   });
 });
 
+test("native GIF defaults, settings and playback duration survive saving and reload", async ({
+  page,
+}) => {
+  await page.getByRole("link", { name: "模型与能力" }).click();
+  await page.getByRole("button", { name: "工具与上下文", exact: true }).click();
+  await expect(page.getByLabel("GIF 默认帧数", { exact: true })).toHaveValue(
+    "16",
+  );
+  await expect(page.getByLabel("原生 GIF 模型", { exact: true })).toHaveValue(
+    "gpt-image-2.6-sunburst",
+  );
+  await page
+    .getByLabel("原生 GIF 模型", { exact: true })
+    .fill("gpt-image-2.6-flare");
+  await page
+    .getByLabel("GIF 每帧尺寸", { exact: true })
+    .selectOption("512x512");
+  await page.getByLabel("GIF 每帧时长（毫秒）", { exact: true }).fill("100");
+  await page.getByLabel("图片复杂度", { exact: true }).selectOption("medium");
+  await expect(
+    page.getByText("当前设置每轮约 1.60 秒。", { exact: true }),
+  ).toBeVisible();
+  const submitted = page.waitForRequest(
+    (r) => r.url().endsWith("/api/configure") && r.method() === "POST",
+  );
+  await page.getByRole("button", { name: "应用设置", exact: true }).click();
+  expect((await submitted).postDataJSON()).toMatchObject({
+    gif_model: "gpt-image-2.6-flare",
+    gif_size: "512x512",
+    gif_frame_duration_ms: 100,
+    image_complexity: "medium",
+  });
+  await expect(page.locator(".save-bar")).toHaveCount(0);
+  await page.reload();
+  await page.getByRole("button", { name: "工具与上下文", exact: true }).click();
+  await expect(page.getByLabel("原生 GIF 模型", { exact: true })).toHaveValue(
+    "gpt-image-2.6-flare",
+  );
+  await expect(page.getByLabel("GIF 默认帧数", { exact: true })).toHaveValue(
+    "16",
+  );
+  await expect(
+    page.getByLabel("GIF 每帧时长（毫秒）", { exact: true }),
+  ).toHaveValue("100");
+  await page.screenshot({
+    path: "../.local/console-browser-results/native-gif-desktop.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByLabel("原生 GIF 模型", { exact: true }).scrollIntoViewIfNeeded();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "../.local/console-browser-results/native-gif-mobile.png",
+    fullPage: true,
+  });
+});
+
 test("reasoning draft survives navigation and conflicting saves keep the draft", async ({
   page,
 }) => {

@@ -5,7 +5,7 @@ metadata:
   author: langbot-team
   name: AIImagePlugin
   repository: https://github.com/langbot-app/langbot-plugins/tree/main/misc/AIImagePlugin
-  version: 0.1.7-local.12
+  version: 0.1.7-local.13
   description:
     en_US: 'Local extension: generate and edit images through an OpenAI-compatible
       image API.'
@@ -133,6 +133,60 @@ spec:
       label:
         en_US: max
         zh_Hans: max
+  - name: complexity
+    type: select
+    label:
+      en_US: Image complexity
+      zh_Hans: 图片复杂度
+    default: auto
+    required: false
+    options:
+    - name: auto
+      label: {en_US: Model default, zh_Hans: 模型默认}
+    - name: low
+      label: {en_US: Low, zh_Hans: 低}
+    - name: medium
+      label: {en_US: Medium, zh_Hans: 中}
+    - name: high
+      label: {en_US: High, zh_Hans: 高}
+  - name: gif_model_name
+    type: string
+    label: {en_US: Native GIF model, zh_Hans: 原生 GIF 模型}
+    description:
+      en_US: Uses the same image provider; requires native GIF access.
+      zh_Hans: 使用图片服务的地址和密钥，模型须支持原生 GIF 并已获访问权限。
+    default: gpt-image-2.6-sunburst
+    required: false
+  - name: gif_size
+    type: select
+    label: {en_US: GIF frame size, zh_Hans: GIF 每帧尺寸}
+    default: auto
+    required: false
+    options:
+    - name: auto
+      label: {en_US: Automatic, zh_Hans: 自动}
+    - name: 256x256
+      label: {en_US: 256x256, zh_Hans: 256x256}
+    - name: 384x384
+      label: {en_US: 384x384, zh_Hans: 384x384}
+    - name: 512x512
+      label: {en_US: 512x512, zh_Hans: 512x512}
+    - name: 768x768
+      label: {en_US: 768x768, zh_Hans: 768x768}
+    - name: 1024x1024
+      label: {en_US: 1024x1024, zh_Hans: 1024x1024}
+  - name: gif_frame_count
+    type: integer
+    label: {en_US: GIF frame count, zh_Hans: GIF 默认帧数}
+    description: {en_US: 2–16 frames., zh_Hans: 2–16 帧，默认 16 帧。}
+    default: 16
+    required: false
+  - name: gif_frame_duration_ms
+    type: integer
+    label: {en_US: GIF frame duration (ms), zh_Hans: GIF 每帧时长（毫秒）}
+    description: {en_US: 20–2000 ms; rounded to 10 ms by the provider., zh_Hans: 20–2000 毫秒，上游按 10 毫秒取整。}
+    default: 200
+    required: false
   - name: request_timeout_seconds
     type: integer
     label:

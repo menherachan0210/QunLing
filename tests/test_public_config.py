@@ -503,7 +503,7 @@ def test_public_settings_uses_allowlist_for_future_private_fields():
     config.update({"onebot_token": "synthetic-private", "credentials": {"password": "synthetic-private"}})
     public = setup.public_settings(config)
     assert set(public) == {
-        "base_url", "chat_model", "vision_model", "image_model", "search_model", "decision_model", "api_key_saved",
+        "base_url", "chat_model", "vision_model", "image_model", "gif_model", "search_model", "decision_model", "api_key_saved",
         "group_context_hours", "group_context_max_messages", "features", "reconcile_model",
     } | set(setup.TOOL_CHOICES) | set(setup.TOOL_LIMITS) | {role + suffix for role in setup.PROVIDER_ROLES for suffix in ("_base_url", "_api_key_saved")}
     assert public["api_key_saved"] is True
@@ -517,10 +517,31 @@ def test_public_settings_uses_allowlist_for_future_private_fields():
     ("image_timeout_seconds", True), ("search_timeout_seconds", "1e3"),
     ("search_timeout_seconds", 91), ("search_timeout_seconds", 29),
     ("search_provider", "other"), ("search_base_url", "https://user:secret@example.com"),
+    ("gif_frame_count", 17), ("gif_frame_count", True), ("gif_frame_duration_ms", 19),
+    ("gif_frame_duration_ms", 2001), ("gif_size", "huge"), ("image_complexity", []), ("gif_model", ""),
 ])
 def test_tool_settings_reject_invalid_values(field, value):
     with pytest.raises(SetupError):
         settings(**{field: value})
+
+
+def test_native_gif_settings_roundtrip_preserves_provider_and_static_preferences():
+    api = FakeLangBot()
+    initial = settings(image_size='768x1280', image_quality='high')
+    assert initial['gif_frame_count'] == 16 and initial['gif_frame_duration_ms'] == 200
+    first = run_configure(api, initial)
+    revised = setup.settings_from_input({'gif_model': 'gpt-image-2.6-flare', 'gif_frame_count': '16',
+        'gif_frame_duration_ms': '100', 'gif_size': '512x512', 'image_complexity': 'medium'}, initial)
+    run_configure(api, revised, first)
+    actual = api.configs['langbot-team/AIImagePlugin']
+    assert actual['api_base_url'] == initial['base_url'] and actual['openai_api_key'] == initial['api_key']
+    assert actual['model_name'] == initial['image_model'] and actual['image_size'] == '768x1280'
+    assert actual['quality'] == 'high' and actual['complexity'] == 'medium'
+    assert actual['gif_model_name'] == 'gpt-image-2.6-flare'
+    assert (actual['gif_size'], actual['gif_frame_count'], actual['gif_frame_duration_ms']) == ('512x512', 16, 100)
+    public = setup.public_settings(revised)
+    assert public['gif_model'] == revised['gif_model'] and public['gif_frame_count'] == 16
+    assert initial['api_key'] not in json.dumps(public)
 
 
 def test_independent_search_roundtrip_and_explicit_switch_back_to_shared():

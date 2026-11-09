@@ -274,16 +274,17 @@ class AIImagePlugin(BasePlugin):
             http_client=ImageHTTPClient(timeout=_timeout(config)),
         )
 
-    async def generate_image(self, prompt: str) -> GeneratedImage:
-        return await self._request_image(prompt)
+    async def generate_image(self, prompt: str, *, output: dict | None = None) -> GeneratedImage:
+        return await self._request_image(prompt, output=output)
 
     async def edit_image(
-        self, prompt: str, image: GeneratedImage | list[GeneratedImage]
+        self, prompt: str, image: GeneratedImage | list[GeneratedImage], *, output: dict | None = None
     ) -> GeneratedImage:
-        return await self._request_image(prompt, image=image)
+        return await self._request_image(prompt, image=image, output=output)
 
     async def _request_image(
-        self, prompt: str, image: GeneratedImage | list[GeneratedImage] | None = None
+        self, prompt: str, image: GeneratedImage | list[GeneratedImage] | None = None,
+        *, output: dict | None = None
     ) -> GeneratedImage:
         prompt = validate_prompt(prompt)
         references = None
@@ -296,6 +297,12 @@ class AIImagePlugin(BasePlugin):
                     "一次编辑请选择 1–4 张有效参考图片；未提交生成请求。"
                 )
         config = self.get_config()
+        from pkg.output_options import request_options
+        from qunling.assets import AssetError
+        try:
+            extra = request_options(config, output)
+        except AssetError as exc:
+            raise ImageGenerationError(str(exc)) from None
         timeout = _timeout(config)
         quality = config.get("quality", "auto")
         if quality not in QUALITY_VALUES:
@@ -322,10 +329,19 @@ class AIImagePlugin(BasePlugin):
                     "n": 1,
                     "response_format": "b64_json",
                 }
+                body.update(extra)
+                if body.get("output_format") == "gif":
+                    # GPT Image returns b64_json by default. Native GIF parameters
+                    # use the JSON endpoint, independent of the installed SDK schema.
+                    body.pop("response_format", None)
+                from openai.types import ImagesResponse
                 if references is None:
                     async with resource_slot("image_transfer", wait_seconds=15):
+                        if extra:
+                            return _image_result(await client.post(
+                                "/images/generations", cast_to=ImagesResponse, body=body
+                            ))
                         return _image_result(await client.images.generate(**body))
-                from openai.types import ImagesResponse
 
                 # Fetch every source before the first paid POST. Never silently
                 # degrade a two-image request to whichever source was readable.
@@ -362,7 +378,7 @@ class AIImagePlugin(BasePlugin):
                 if animated:
                     body["prompt"] += ("\n部分参考图是带 Frame/时间标记的原动图关键帧采样。"
                                        "按时间顺序参考动作、主体和构图；时间标签不是原图内容，不画进成品。"
-                                       "若要求输出多帧，遵循输出分镜布局，不能把参考采样拼图直接当成最终一帧。")
+                                       "输出原生动图时根据这些动作生成连贯动画，成品不包含采样拼图或时间标签。")
                 body["images"] = [{"image_url": value} for value in data_urls]
                 async with resource_slot(image_transfer_kind(sum(map(len, data_urls))), wait_seconds=15):
                     return _image_result(await client.post(

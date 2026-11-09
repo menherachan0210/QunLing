@@ -9,7 +9,8 @@ from langbot_plugin.api.proxies.query_based_api import QueryBasedAPIProxy
 
 from main import ImageGenerationError
 from pkg.image_context import query_claim_lock, remember_output
-from pkg.gif_output import prepare_prompt, prepare_context, finish, finish_asset, finish_static
+from pkg.media_output import prepare_context, finish_native, finish_asset, finish_static
+from pkg.output_options import output_options
 from qunling.assets import AssetError
 
 
@@ -32,7 +33,6 @@ _STATE_MESSAGES = {
     "generation_failed": GENERATION_FAILED,
     "send_failed": SEND_FAILED,
     "sent": SENT,
-    "gif_saved": "分镜已生成并进入 GIF 处理流程；用 file_task 或 file_workspace 查看已有任务和素材，不要重新生图或重复发送。",
     "asset_saved": "图片生成请求已执行；使用返回的 asset_ref 或文件工作区查看已保存素材，不要重新生图。",
 }
 
@@ -57,7 +57,7 @@ class GenerateImage(Tool):
         query_uuid: str | None = None,
     ) -> str:
         if (not isinstance(params, dict) or "prompt" not in params
-                or set(params) - {"prompt", "gif_frames", "frame_duration_ms", "deliver"}):
+                or set(params) - {"prompt", "output_format", "frame_count", "frame_duration_ms", "deliver"}):
             return INVALID_PROMPT
 
         prompt = params["prompt"]
@@ -68,7 +68,7 @@ class GenerateImage(Tool):
         ):
             return INVALID_PROMPT
         try:
-            plan, prompt = prepare_prompt(params)
+            output = output_options(params)
         except AssetError as exc:
             return str(exc)
 
@@ -85,7 +85,7 @@ class GenerateImage(Tool):
                     return GUARD_UNAVAILABLE
                 if QUERY_STATE_KEY in variables:
                     return state_message(variables)
-                context = await prepare_context(self.plugin, reply_api, plan, deliver=params.get("deliver", True))
+                context = await prepare_context(self.plugin, reply_api)
                 # Persist before any billable request, including possible timeouts.
                 await reply_api.set_query_var(QUERY_STATE_KEY, "started")
         except AssetError as exc:
@@ -94,7 +94,7 @@ class GenerateImage(Tool):
             return GUARD_UNAVAILABLE
 
         try:
-            result = await self.plugin.generate_image(prompt.strip())
+            result = await self.plugin.generate_image(prompt.strip(), **({"output": output} if output else {}))
             if not result.base64 and not result.url:
                 raise ImageGenerationError("绘图服务未返回可发送的图片。")
         except ImageGenerationError as exc:
@@ -104,9 +104,9 @@ class GenerateImage(Tool):
             await self._record_state(reply_api, "generation_failed")
             return GENERATION_FAILED
 
-        if plan is not None:
-            await self._record_state(reply_api, "gif_saved")
-            return await finish(context, plan, result)
+        if output:
+            return await finish_native(self.plugin, reply_api, context, result, QUERY_STATE_KEY,
+                                       deliver=params.get("deliver", True), timeout=REPLY_TIMEOUT_SECONDS)
         if params.get("deliver", True) is False:
             await self._record_state(reply_api, "asset_saved")
             return await finish_asset(context, result)

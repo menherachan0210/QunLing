@@ -177,6 +177,113 @@ async def call(env, params=None, *, query_id=1, query_uuid="query-one", edit=Fal
     )
 
 
+@pytest.fixture
+def native_tool_env(tool_env, monkeypatch):
+    import base64, io, json
+    from PIL import Image as PillowImage
+    from qunling.native_gif import inspect_gif
+    from qunling import vision_input
+    frames = [PillowImage.new('RGB', (32, 32), (i * 12, 80, 120)) for i in range(16)]
+    stream = io.BytesIO()
+    frames[0].save(stream, format='GIF', save_all=True, append_images=frames[1:], duration=200, loop=0)
+    for frame in frames:
+        frame.close()
+    raw = stream.getvalue()
+    encoded = 'data:image/gif;base64,' + base64.b64encode(raw).decode()
+    tool_env.generator.return_value = tool_env.editor.return_value = SimpleNamespace(base64=encoded, url=None)
+    monkeypatch.setattr(sys.modules['main'], 'image_data_url', AsyncMock(return_value=encoded))
+    # Exercise real frame parsing here; the isolated process/caps have dedicated tests.
+    async def inspect(value):
+        return inspect_gif(value)
+    monkeypatch.setattr(vision_input, 'inspect_generated_gif', inspect)
+    return tool_env, raw
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('edit', [False, True])
+@pytest.mark.parametrize('deliver', [False, True])
+async def test_native_gif_saves_and_delivers_original_bytes_once(native_tool_env, edit, deliver):
+    import base64, json
+    from qunling.assets import AssetStore, AssetError
+    from qunling.scope import Scope
+    env, raw = native_tool_env
+    params = {'prompt': '猫挥手然后回到起始姿势', 'output_format': 'gif', 'deliver': deliver}
+    result = json.loads(await call(env, params, edit=edit))
+    assert result['status'] == ('sent' if deliver else 'created')
+    assert result['delivery_status'] == ('sent' if deliver else 'not_requested')
+    assert result['frame_count'] == 16 and result['duration_ms'] == 3200
+    assert result['name'].endswith('.gif')
+    # Retrieve through the same query-bound scope that was used for persistence.
+    from qunling.integration import descriptor
+    context = descriptor(env.tool.plugin, SimpleNamespace(bot_uuid='bot', launcher_type='group',
+                         launcher_id='group', sender_id='member'), 'query-one')
+    scope = Scope(**context['scope'])
+    store = AssetStore.from_env()
+    assert store.read(scope, result['asset_ref']) == raw
+    with pytest.raises(AssetError):
+        store.read(Scope(scope.workspace_id, scope.bot_id, 'group:other', scope.actor_id), result['asset_ref'])
+    if deliver:
+        assert base64.b64decode(env.handler.delivered[0][0].base64) == raw
+        env.remember_output.assert_awaited_once()
+    else:
+        assert env.handler.delivered == []
+    generator = env.editor if edit else env.generator
+    generator.assert_awaited_once()
+    assert generator.call_args.args[0] == params['prompt']
+    assert generator.call_args.kwargs == {'output': {'output_format': 'gif'}}
+    await call(env, params, edit=not edit)
+    assert env.generator.await_count + env.editor.await_count == 1
+    assert len(env.handler.attempts) == int(deliver)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['send', 'validation', 'storage'])
+async def test_native_failure_keeps_claim_and_never_repeats_generation(native_tool_env, monkeypatch, failure):
+    import json
+    from qunling import vision_input
+    from qunling.assets import AssetStore
+    env, raw = native_tool_env
+    if failure == 'send':
+        env.handler.send_error = True
+    elif failure == 'validation':
+        monkeypatch.setattr(vision_input, 'inspect_generated_gif', AsyncMock(side_effect=ValueError('bad GIF')))
+    else:
+        def unavailable(*a, **kw):
+            raise OSError('disk unavailable')
+        monkeypatch.setattr(AssetStore, 'put', unavailable)
+    params = {'prompt': '挥手', 'output_format': 'gif'}
+    result = json.loads(await call(env, params))
+    assert result['status'] == 'partial'
+    assert ('asset_ref' in result) is (failure != 'storage')
+    assert not env.handler.delivered
+    await call(env, params, edit=True)
+    assert env.generator.await_count + env.editor.await_count == 1
+    assert len(env.handler.attempts) == int(failure == 'send')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('options', [
+    {'gif_frames': ['a', 'b']}, {'output_format': 'video'}, {'output_format': []},
+    {'frame_count': 16}, {'frame_duration_ms': 200}, {'output_format': 'gif', 'frame_count': True},
+    {'output_format': 'gif', 'frame_count': 17}, {'output_format': 'gif', 'frame_duration_ms': 2001},
+])
+async def test_invalid_native_or_removed_options_never_charge(tool_env, options):
+    await call(tool_env, {'prompt': 'wave', **options})
+    tool_env.generator.assert_not_awaited()
+    assert not tool_env.handler.writes
+
+
+@pytest.mark.asyncio
+async def test_native_gif_still_delivers_if_optional_state_update_fails(native_tool_env):
+    import json
+    env, _ = native_tool_env
+    env.handler.final_write_error = True
+    result = json.loads(await call(env, {'prompt': 'wave', 'output_format': 'gif'}))
+    assert result['status'] == 'sent' and len(env.handler.delivered) == 1
+    await call(env, {'prompt': 'wave', 'output_format': 'gif'}, edit=True)
+    assert env.generator.await_count + env.editor.await_count == 1
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "params",
@@ -515,96 +622,6 @@ async def test_delivery_timeout_does_not_trigger_second_charge(
     assert await call(env, edit=edit) == result
     assert env.generator.await_count + env.editor.await_count == 1
     env.remember_output.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("edit", [False, True])
-@pytest.mark.parametrize("deliver", [False, True])
-async def test_ai_frames_use_one_paid_request_then_durable_gif_job(tool_env, tmp_path, monkeypatch, edit, deliver):
-    import base64
-    import hashlib
-    import io
-    import json
-    import time
-    from PIL import Image as PillowImage
-    from qunling.assets import AssetStore
-    from qunling.jobs import JobService
-    from qunling.scope import Scope
-    from qunling import resource_gate
-
-    # This test embeds the file worker beside the SDK in one small CI cgroup.
-    # Production uses its own worker container. Exercise job completion here;
-    # admission/pressure behavior has dedicated resource-gate regressions.
-    original_gate = resource_gate.ResourceGate
-    def available_gate(root, **kwargs):
-        kwargs.setdefault('sample', lambda: resource_gate.Pressure(1930, 1500, local_available_mib=1024))
-        return original_gate(root, **kwargs)
-    monkeypatch.setattr(resource_gate, 'ResourceGate', available_gate)
-
-    env = tool_env
-    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path))
-    route = {"instance_uuid": "instance", "workspace_uuid": "workspace", "placement_generation": 1}
-    env.tool.plugin.get_installation_binding = lambda: SimpleNamespace(**route)
-    tenant = hashlib.sha256(json.dumps(["instance", "workspace"]).encode()).hexdigest()
-    scope = Scope(tenant, "bot", "group:123", "member")
-    context = {"version": 1, "scope": scope.as_dict(), "created": time.time(), "query_uuid": "query-one",
-               "request_key": "query-one", "host_route": route}
-    env.handler.variables[(1, "query-one")] = {"qunling.context.v1": context}
-    sheet = PillowImage.new("RGB", (128, 128), "white")
-    sheet.paste("red", (0, 0, 64, 64))
-    sheet.paste("blue", (64, 0, 128, 64))
-    out = io.BytesIO()
-    sheet.save(out, format="PNG")
-    sheet.close()
-    encoded = "data:image/png;base64," + base64.b64encode(out.getvalue()).decode()
-    env.generator.return_value = env.editor.return_value = SimpleNamespace(base64=encoded, url=None)
-    monkeypatch.setattr(sys.modules["main"], "image_data_url", AsyncMock(return_value=encoded), raising=False)
-    stop = asyncio.Event()
-    worker = asyncio.create_task(JobService(tmp_path).worker().serve(stop))
-    params = {"prompt": "一只挥手的猫", "gif_frames": ["举起左手", "放下左手"], "frame_duration_ms": 250, "deliver": deliver}
-    try:
-        result = json.loads(await call(env, params, edit=edit))
-        assert result["status"] == "completed"
-        assert (result.get("delivery_status") == "queued") is deliver
-        assert len(result["frame_refs"]) == 2 and len(result["saved_refs"]) == 3
-        store = AssetStore.from_env()
-        gif = store.read(scope, result["result_refs"][0])
-        with PillowImage.open(io.BytesIO(gif)) as output:
-            assert output.n_frames == 2 and output.info["duration"] == 250
-            assert output.convert("RGB").getpixel((32, 32)) == (255, 0, 0)
-            output.seek(1)
-            assert output.convert("RGB").getpixel((32, 32)) == (0, 0, 255)
-        generator = env.editor if edit else env.generator
-        generator.assert_awaited_once()
-        prompt = generator.call_args.args[0]
-        assert "2 by 2" in prompt and "Frame 1: 举起左手" in prompt and "一只挥手的猫" in prompt
-        assert env.handler.attempts == []
-        env.remember_output.assert_not_awaited()
-        assert "不要重新生图" in await call(env, params, edit=not edit)
-        assert env.generator.await_count + env.editor.await_count == 1
-        assert len(JobService(tmp_path).list(scope)) == 1
-    finally:
-        stop.set()
-        await worker
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("options", [
-    {"gif_frames": ["only one"]}, {"gif_frames": ["a"] * 7},
-    {"gif_frames": ["a", ""]}, {"gif_frames": ["a", "b"], "frame_duration_ms": True},
-    {"frame_duration_ms": 300},
-])
-async def test_bad_frame_plans_never_charge(tool_env, options):
-    await call(tool_env, {"prompt": "猫", **options})
-    tool_env.generator.assert_not_awaited()
-    assert tool_env.handler.writes == []
-
-
-@pytest.mark.asyncio
-async def test_missing_animation_route_fails_before_charge(tool_env):
-    assert "尚未发起" in await call(tool_env, {"prompt": "猫", "gif_frames": ["睁眼", "闭眼"]})
-    tool_env.generator.assert_not_awaited()
-    assert tool_env.handler.writes == []
 
 
 @pytest.mark.asyncio

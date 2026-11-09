@@ -12,17 +12,17 @@ import time
 
 from bootstrap.api import SetupError
 
-CHECKS = {"chat", "vision", "search", "image"}
+CHECKS = {"chat", "vision", "search", "image", "gif"}
 
 
 class ProbeError(ValueError):
     pass
 
 
-async def _post(config, path, payload, *, maximum=1024*1024):
+async def _post(config, path, payload, *, maximum=1024*1024, timeout_seconds=60):
     import httpx
     async with httpx.AsyncClient(trust_env=False, follow_redirects=False,
-                                timeout=httpx.Timeout(60, connect=10)) as client:
+                                timeout=httpx.Timeout(timeout_seconds, connect=10)) as client:
         async with client.stream("POST", config["base_url"].rstrip("/")+path,
                                  headers={"Authorization": "Bearer "+config["api_key"]}, json=payload) as response:
             if not 200 <= response.status_code < 300:
@@ -45,8 +45,28 @@ def _red_image():
 
 async def probe(config, kind):
     from bootstrap.configure import role_settings
-    config = role_settings(config, kind)
-    async with asyncio.timeout(95 if kind == "image" else 70):
+    config = role_settings(config, "image" if kind == "gif" else kind)
+    timeout = min(300, max(30, int(config.get("image_timeout_seconds", 300)))) if kind == "gif" else 60
+    async with asyncio.timeout(timeout + 20 if kind == "gif" else 95 if kind == "image" else 70):
+        if kind == "gif":
+            from qunling.resource_gate import resource_slot
+            from qunling.vision_input import inspect_generated_gif
+            body = {"model": config.get("gif_model", "gpt-image-2.6-sunburst"),
+                    "prompt": "A red ball bounces once and returns to its starting pose. Fixed camera, smooth loop, no text.",
+                    "output_format": "gif", "n": 1, "quality": "low", "size": config.get("gif_size", "auto"),
+                    "frame_count": config.get("gif_frame_count", 16),
+                    "frame_duration_ms": config.get("gif_frame_duration_ms", 200)}
+            if config.get("image_complexity", "auto") != "auto":
+                body["complexity"] = config["image_complexity"]
+            async with resource_slot("image_transfer", wait_seconds=15):
+                response = await _post(config, "/images/generations", body,
+                                       maximum=16*1024*1024, timeout_seconds=timeout)
+            payload = response["data"][0].get("b64_json")
+            if not isinstance(payload, str):
+                raise ProbeError("原生 GIF 测试未返回可校验的 b64_json 动图。")
+            info = await inspect_generated_gif("data:image/gif;base64," + payload)
+            return (f"已收到并解码原生 GIF：{info['frame_count']} 帧，{info['width']}×{info['height']}，"
+                    f"一轮 {info['duration_ms']/1000:g} 秒。未发送到 QQ；参考图生成动图需另行验证。")
         if kind == "search":
             from qunling.web_search import search_web
             await search_web({"api_base_url": config["base_url"], "api_key": config["api_key"],
@@ -102,13 +122,13 @@ class Checks:
     def start(self, config, values):
         if (not isinstance(values, dict) or set(values) != {"checks", "acknowledge_cost", "request_id"}
                 or values["acknowledge_cost"] is not True
-                or not isinstance(values["checks"], list) or not 1 <= len(values["checks"]) <= 4
+                or not isinstance(values["checks"], list) or not 1 <= len(values["checks"]) <= len(CHECKS)
                 or any(not isinstance(item, str) or item not in CHECKS for item in values["checks"])
                 or len(set(values["checks"])) != len(values["checks"])
                 or not isinstance(values["request_id"], str) or not re.fullmatch(r"[a-zA-Z0-9_-]{16,64}", values["request_id"])):
             raise SetupError("请选择测试项目并确认可能产生的服务费用。")
         key = values["request_id"]
-        if any(kind != "chat" and kind not in config.get("features", CHECKS) for kind in values["checks"]):
+        if any(kind != "chat" and ("image" if kind == "gif" else kind) not in config.get("features", CHECKS) for kind in values["checks"]):
             raise SetupError("请先启用对应功能，再进行能力测试。")
         with self.lock:
             if key in self.jobs:

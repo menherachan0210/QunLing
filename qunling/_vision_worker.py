@@ -13,7 +13,8 @@ def main():
     from qunling._process_worker import limits
     memory_mib = int(sys.argv[1]) if len(sys.argv) >= 2 else 384
     for_edit = len(sys.argv) == 3 and sys.argv[2] == "edit"
-    if memory_mib not in (128, 256, 384) or len(sys.argv) > 3 or (len(sys.argv) == 3 and not for_edit):
+    inspect_gif = len(sys.argv) == 3 and sys.argv[2] == "gif"
+    if memory_mib not in (128, 256, 384) or len(sys.argv) > 3 or (len(sys.argv) == 3 and not (for_edit or inspect_gif)):
         raise ValueError("Invalid decoder budget")
     handle = limits(memory_bytes=memory_mib * 1024 * 1024, cpu_seconds=10,
                     file_bytes=(10 if for_edit else 2) * 1024 * 1024, max_processes=1)
@@ -26,6 +27,11 @@ def main():
         if source.stat().st_size > 4 * ((MAX_BYTES + 2) // 3) + 128:
             raise ValueError("Image exceeds input budget")
         value = source.read_text(encoding="ascii")
+        if inspect_gif:
+            from qunling.native_gif import inspect_gif as inspect
+            result = {"ok": True, "metadata": inspect(value)}
+            (root / "result.json").write_text(json.dumps(result), encoding="ascii")
+            return handle
         normalized, animated = animation_data_url(value, for_edit=for_edit)
         converted = normalized != value
         if converted:

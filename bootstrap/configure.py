@@ -34,8 +34,11 @@ PROVIDER_ROLES = ("vision", "image", "search", "decision", "reconcile")
 TOOL_CHOICES = {
     "image_size": ("1024x1024", {"1024x1024", "1280x1280", "768x1280", "1280x768", "720x1280", "1280x720", "1024x768", "768x1024"}),
     "image_quality": ("auto", {"auto", "low", "medium", "high", "xhigh", "max"}),
+    "image_complexity": ("auto", {"auto", "low", "medium", "high"}),
+    "gif_size": ("auto", {"auto", "256x256", "384x384", "512x512", "768x768", "1024x1024"}),
 }
-TOOL_LIMITS = {"image_timeout_seconds": (300, 30, 300), "search_timeout_seconds": (65, 30, 90)}
+TOOL_LIMITS = {"image_timeout_seconds": (300, 30, 300), "search_timeout_seconds": (65, 30, 90),
+               "gif_frame_count": (16, 2, 16), "gif_frame_duration_ms": (200, 20, 2000)}
 TOOL_FIELDS = set(TOOL_CHOICES) | set(TOOL_LIMITS) | {"search_base_url", "search_api_key", "search_provider"}
 
 
@@ -58,14 +61,15 @@ def tool_settings(values, previous=None):
     for key, (default, choices) in TOOL_CHOICES.items():
         value = values.get(key, previous.get(key, default))
         if not isinstance(value, str) or value not in choices:
-            raise SetupError("图片尺寸或画质选项无效。")
+            raise SetupError("图片尺寸、画质或复杂度选项无效。")
         result[key] = value
     for key, (default, minimum, maximum) in TOOL_LIMITS.items():
         value = values.get(key, previous.get(key, default))
-        if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 3:
+        if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= len(str(maximum)):
             value = int(value)
         if type(value) is not int or not minimum <= value <= maximum:
-            raise SetupError(f"工具请求超时需为 {minimum}–{maximum} 秒之间的整数。")
+            label = {"gif_frame_count": "GIF 帧数", "gif_frame_duration_ms": "GIF 每帧毫秒数"}.get(key, "工具请求超时秒数")
+            raise SetupError(f"{label}需为 {minimum}–{maximum} 之间的整数。")
         result[key] = value
     return result
 
@@ -81,7 +85,9 @@ def adopt_tool_settings(api, values):
     config = legacy_search_settings(values)
     features = config.get("features", list(FEATURE_PLUGINS) if config.get("image_model") else [])
     image_fields = {"image_size": "image_size", "image_quality": "quality",
-                    "image_timeout_seconds": "request_timeout_seconds"}
+                    "image_timeout_seconds": "request_timeout_seconds", "image_complexity": "complexity",
+                    "gif_model": "gif_model_name", "gif_size": "gif_size", "gif_frame_count": "gif_frame_count",
+                    "gif_frame_duration_ms": "gif_frame_duration_ms"}
     if "image" in features and not image_fields.keys() <= config.keys():
         image = api.call("GET", "/api/v1/plugins/langbot-team/AIImagePlugin/config")["config"]
         for field, source in image_fields.items():
@@ -170,6 +176,7 @@ def settings_from_input(values, previous=None):
         "chat_model",
         "vision_model",
         "image_model",
+        "gif_model",
         "search_model",
         "decision_model",
         "reconcile_model",
@@ -181,7 +188,7 @@ def settings_from_input(values, previous=None):
     config = {}
     for key in text_fields:
         # Saving only the context controls must not erase the AI configuration.
-        value = values.get(key, previous.get(key, ""))
+        value = values.get(key, previous.get(key, "gpt-image-2.6-sunburst" if key == "gif_model" else ""))
         if not isinstance(value, str) or len(value) > (
             4096 if key.endswith("api_key") else 1024
         ):
@@ -204,6 +211,8 @@ def settings_from_input(values, previous=None):
         raise SetupError("请填写聊天 API Key 和聊天模型名。")
     if "image" in features and not config["image_model"]:
         raise SetupError("启用图片生成时需要填写图片模型名。")
+    if "image" in features and not config["gif_model"]:
+        raise SetupError("请填写支持原生 GIF 的模型名。")
     try:
         parsed = urlsplit(config["base_url"])
         if (
@@ -252,7 +261,7 @@ def settings_from_input(values, previous=None):
 
 def public_settings(config):
     config = legacy_search_settings(config)
-    fields = {"base_url", "chat_model", "vision_model", "image_model", "search_model", "decision_model", "reconcile_model", "features"}
+    fields = {"base_url", "chat_model", "vision_model", "image_model", "gif_model", "search_model", "decision_model", "reconcile_model", "features"}
     fields.update(role + "_base_url" for role in PROVIDER_ROLES)
     return {
         **{k: v for k, v in config.items() if k in fields},
@@ -636,6 +645,11 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
             "model_name": config["image_model"],
             "image_size": config["image_size"],
             "quality": config["image_quality"],
+            "complexity": config["image_complexity"],
+            "gif_model_name": config["gif_model"],
+            "gif_size": config["gif_size"],
+            "gif_frame_count": config["gif_frame_count"],
+            "gif_frame_duration_ms": config["gif_frame_duration_ms"],
             "request_timeout_seconds": config["image_timeout_seconds"],
             "history_hours": config["group_context_hours"],
             "history_max_messages": config["group_context_max_messages"],

@@ -23,7 +23,8 @@ from components.tools.generate_image import (
 )
 from main import ImageGenerationError
 from pkg.image_context import query_claim_lock, remember_output, select_image
-from pkg.gif_output import prepare_prompt, prepare_context, finish, finish_asset, finish_static
+from pkg.media_output import prepare_context, finish_native, finish_asset, finish_static
+from pkg.output_options import output_options
 from qunling.assets import AssetError
 
 
@@ -40,7 +41,7 @@ class EditImage(Tool):
         if (
             not isinstance(params, dict)
             or "prompt" not in params
-            or set(params) - {"prompt", "image_refs", "asset_refs", "gif_frames", "frame_duration_ms", "deliver"}
+            or set(params) - {"prompt", "image_refs", "asset_refs", "output_format", "frame_count", "frame_duration_ms", "deliver"}
             or ("image_refs" in params and "asset_refs" in params)
         ):
             return INVALID_PROMPT
@@ -52,7 +53,7 @@ class EditImage(Tool):
         ):
             return INVALID_PROMPT
         try:
-            plan, prompt = prepare_prompt(params)
+            output = output_options(params)
         except AssetError as exc:
             return str(exc)
         try:
@@ -83,7 +84,7 @@ class EditImage(Tool):
                     )
                 else:
                     image = select_image(self.plugin, variables)
-                context = await prepare_context(self.plugin, reply_api, plan, deliver=params.get("deliver", True))
+                context = await prepare_context(self.plugin, reply_api)
                 await reply_api.set_query_var(QUERY_STATE_KEY, "started")
         except ImageGenerationError as exc:
             return str(exc)
@@ -93,7 +94,7 @@ class EditImage(Tool):
             return GUARD_UNAVAILABLE
 
         try:
-            result = await self.plugin.edit_image(prompt.strip(), image)
+            result = await self.plugin.edit_image(prompt.strip(), image, **({"output": output} if output else {}))
             if not result.base64 and not result.url:
                 raise ImageGenerationError("绘图服务未返回可发送的图片。")
         except ImageGenerationError as exc:
@@ -102,9 +103,9 @@ class EditImage(Tool):
         except Exception:
             await GenerateImage._record_state(reply_api, "generation_failed")
             return GENERATION_FAILED
-        if plan is not None:
-            await GenerateImage._record_state(reply_api, "gif_saved")
-            return await finish(context, plan, result)
+        if output:
+            return await finish_native(self.plugin, reply_api, context, result, QUERY_STATE_KEY,
+                                       deliver=params.get("deliver", True), timeout=REPLY_TIMEOUT_SECONDS)
         if params.get("deliver", True) is False:
             await GenerateImage._record_state(reply_api, "asset_saved")
             return await finish_asset(context, result)

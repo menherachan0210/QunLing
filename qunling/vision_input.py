@@ -104,8 +104,8 @@ async def _stop_decoder(process):
     await process.wait()
 
 
-async def _isolated_image(value: str, *, memory_mib: int = 384,
-                          for_edit: bool = False) -> tuple[str, bool]:
+async def _run_decoder(value: str, *, memory_mib: int = 384,
+                       for_edit: bool = False, inspect_gif: bool = False) -> tuple[dict, bytes | None]:
     from qunling.resource_gate import finish_thread
 
     with tempfile.TemporaryDirectory(prefix="qunling-vision-") as temporary:
@@ -119,7 +119,7 @@ async def _isolated_image(value: str, *, memory_mib: int = 384,
                    else {"start_new_session": True})
         launch = asyncio.create_task(asyncio.create_subprocess_exec(
             sys.executable, "-I", str(Path(__file__).with_name("_vision_worker.py")), str(memory_mib),
-            *(["edit"] if for_edit else []),
+            *(["gif"] if inspect_gif else ["edit"] if for_edit else []),
             cwd=temporary, env=env, stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options))
         try:
@@ -143,13 +143,30 @@ async def _isolated_image(value: str, *, memory_mib: int = 384,
             raise ValueError("Image could not be decoded within its resource limit")
         animated = bool(result.get("animated"))
         if not result.get("converted"):
-            return value, animated
+            return result, None
         preview = root / "preview.png"
         limit = MAX_BYTES if for_edit and not animated else MAX_PREVIEW_BYTES
         if not preview.is_file() or preview.stat().st_size > limit:
             raise ValueError("Image preview exceeds output budget")
         body = await finish_thread(preview.read_bytes)
-        return "data:image/png;base64," + base64.b64encode(body).decode("ascii"), animated
+        return result, body
+
+
+async def _isolated_image(value: str, *, memory_mib: int = 384,
+                          for_edit: bool = False) -> tuple[str, bool]:
+    result, body = await _run_decoder(value, memory_mib=memory_mib, for_edit=for_edit)
+    normalized = ("data:image/png;base64," + base64.b64encode(body).decode("ascii")
+                  if body is not None else value)
+    return normalized, bool(result.get("animated"))
+
+
+async def inspect_generated_gif(value: str) -> dict:
+    from qunling.resource_gate import resource_slot
+    memory_mib = decoder_memory_mib(value)
+    kind = {128: "vision_small", 256: "vision_medium", 384: "vision"}[memory_mib]
+    async with resource_slot(kind, wait_seconds=3):
+        result, _ = await _run_decoder(value, memory_mib=memory_mib, inspect_gif=True)
+    return result["metadata"]
 
 
 async def _model_image_input(value: str, *, for_edit: bool = False) -> tuple[str, bool]:

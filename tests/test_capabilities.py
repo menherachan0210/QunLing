@@ -70,3 +70,40 @@ async def test_image_probe_checks_real_bytes_without_saving_or_sending(monkeypat
         return {"data": [{"b64_json": module._red_image().split(",", 1)[1]}]}
     monkeypatch.setattr(module, "_post", post)
     assert "未发送" in await module.probe(CONFIG, "image")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('available_file_resources')
+async def test_native_gif_probe_validates_frames_and_uses_image_provider(monkeypatch):
+    import base64, io
+    from PIL import Image
+    frames = [Image.new('RGB', (32, 32), (i*12, 20, 100)) for i in range(16)]
+    stream = io.BytesIO()
+    frames[0].save(stream, format='GIF', save_all=True, append_images=frames[1:], duration=200, loop=0)
+    for frame in frames:
+        frame.close()
+    calls = []
+    async def post(config, path, payload, **kwargs):
+        assert config['base_url'] == 'https://image.example/v1'
+        assert config['api_key'] == 'synthetic-image-key'
+        assert path == '/images/generations' and kwargs['timeout_seconds'] == 180
+        calls.append(payload)
+        return {'data': [{'b64_json': base64.b64encode(stream.getvalue()).decode()}]}
+    monkeypatch.setattr(module, '_post', post)
+    result = await module.probe({**CONFIG, 'image_base_url': 'https://image.example/v1',
+        'image_api_key': 'synthetic-image-key', 'image_timeout_seconds': 180}, 'gif')
+    assert '16 帧' in result and '3.2 秒' in result and '未发送到 QQ' in result
+    assert len(calls) == 1 and calls[0]['frame_count'] == 16 and calls[0]['output_format'] == 'gif'
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('available_file_resources')
+async def test_static_response_cannot_pass_native_gif_probe(monkeypatch):
+    calls = []
+    async def post(*args, **kwargs):
+        calls.append(True)
+        return {'data': [{'b64_json': module._red_image().split(',', 1)[1]}]}
+    monkeypatch.setattr(module, '_post', post)
+    with pytest.raises(ValueError):
+        await module.probe(CONFIG, 'gif')
+    assert len(calls) == 1

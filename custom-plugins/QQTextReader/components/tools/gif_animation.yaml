@@ -36,9 +36,9 @@ spec:
   llm_prompt: |
     Use for a natural request to make/edit a GIF, including free dialogue; no @ or
     fixed command is required. This renders frames locally, without a video model.
-    If new AI-drawn poses are needed, use generate_image or edit_image with gif_frames;
-    those tools create and preserve 2–6 frames and automatically assemble a GIF.
-    Reuse their returned recipe/frame_refs here for revisions without generating again.
+    For new AI-drawn motion, use generate_image or edit_image with output_format=gif.
+    They return a complete native GIF from one paid request. Reuse the returned
+    asset_ref here for speed, caption or other local revisions without generating again.
     Select actual referenced images: file_workspace list/import for current or
     quoted images; read_recent_group_context + import_group_context_images for
     selected same-group history, including the bot's images. Use only returned

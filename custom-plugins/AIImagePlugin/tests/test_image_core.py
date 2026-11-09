@@ -83,6 +83,56 @@ async def test_edit_uses_json_image_data_not_model_supplied_url(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('edit', [False, True])
+async def test_native_gif_uses_one_json_request_with_sixteen_frames(monkeypatch, edit):
+    plugin, client = plugin_with_client(monkeypatch, response(b64_json=PAYLOAD))
+    if edit:
+        await plugin.edit_image('猫挥手并回到起始姿势', GeneratedImage(base64=DATA_URL), output={'output_format': 'gif'})
+    else:
+        await plugin.generate_image('猫挥手并回到起始姿势', output={'output_format': 'gif'})
+    client.post.assert_awaited_once()
+    client.images.generate.assert_not_awaited()
+    assert client.post.call_args.args == ('/images/edits' if edit else '/images/generations',)
+    body = client.post.call_args.kwargs['body']
+    assert body['model'] == 'gpt-image-2.6-sunburst'
+    assert body['output_format'] == 'gif' and body['frame_count'] == 16
+    assert body['frame_duration_ms'] == 200 and body['size'] == 'auto'
+    assert body['prompt'] == '猫挥手并回到起始姿势' and body['n'] == 1
+    assert not {'response_format', 'output_compression', 'stream', 'partial_images', 'mask'} & body.keys()
+
+
+@pytest.mark.asyncio
+async def test_native_gif_honors_admin_settings_and_explicit_speed(monkeypatch):
+    plugin, client = plugin_with_client(monkeypatch, response(b64_json=PAYLOAD), config={
+        'gif_model_name': 'gpt-image-2.6-flare', 'gif_size': '512x512', 'gif_frame_count': 12,
+        'gif_frame_duration_ms': 200, 'complexity': 'medium'})
+    await plugin.generate_image('wave', output={'output_format': 'gif', 'frame_duration_ms': 100})
+    body = client.post.call_args.kwargs['body']
+    assert (body['model'], body['size'], body['frame_count'], body['frame_duration_ms'], body['complexity']) == (
+        'gpt-image-2.6-flare', '512x512', 12, 100, 'medium')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('config', [{'gif_frame_count': True}, {'gif_frame_count': 17},
+    {'gif_frame_duration_ms': 0}, {'gif_size': '999x999'}, {'gif_model_name': ''}, {'complexity': []}])
+async def test_invalid_native_settings_never_send_paid_request(monkeypatch, config):
+    plugin, client = plugin_with_client(monkeypatch, config=config)
+    with pytest.raises(ImageGenerationError):
+        await plugin.generate_image('wave', output={'output_format': 'gif'})
+    client.post.assert_not_awaited()
+    client.images.generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_provider_error_does_not_fall_back_or_repeat(monkeypatch):
+    plugin, client = plugin_with_client(monkeypatch, error=RuntimeError('private upstream failure'))
+    with pytest.raises(ImageGenerationError):
+        await plugin.generate_image('wave', output={'output_format': 'gif'})
+    client.post.assert_awaited_once()
+    client.images.generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_multi_edit_sends_all_ordered_references_in_one_paid_request(monkeypatch):
     plugin, client = plugin_with_client(monkeypatch, response(b64_json=PAYLOAD))
     inputs = [

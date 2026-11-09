@@ -157,47 +157,6 @@ def test_identical_pixels_can_retain_distinct_edit_recipes(tmp_path):
     assert one["sha256"] == two["sha256"]
 
 
-def test_ai_frame_storage_failure_preserves_original_and_completed_frames(tmp_path):
-    from qunling.ai_animation import frame_plan, save_frames
-    store = AssetStore(tmp_path, max_assets=2)
-    scope = Scope("tenant", "bot", "group:1", "member")
-    stream = io.BytesIO()
-    with Image.new("RGB", (128, 128), "blue") as sheet:
-        sheet.save(stream, format="PNG")
-    result = save_frames(store, scope, {"request_key": "gif-request"}, stream.getvalue(),
-                         frame_plan({"gif_frames": ["wave", "smile"]}))
-    assert result["status"] == "partial" and result["error_code"] == "storage_full"
-    assert len(result["saved_refs"]) == 2 and len(result["frame_refs"]) == 1
-    assert store.read(scope, result["storyboard_ref"]) == stream.getvalue()
-    with pytest.raises(AssetError):
-        store.read(Scope("tenant", "bot", "group:2", "member"), result["frame_refs"][0])
-
-
-def test_six_ai_frames_follow_grid_order_and_exclude_unused_cells(tmp_path):
-    from qunling.ai_animation import frame_plan, save_frames
-    from PIL import ImageColor
-    store = AssetStore(tmp_path)
-    scope = Scope("tenant", "bot", "group:1", "member")
-    stream = io.BytesIO()
-    colors = ["red", "green", "blue", "yellow", "purple", "orange"]
-    with Image.new("RGB", (192, 192), "black") as sheet:
-        for index, color in enumerate(colors):
-            row, column = divmod(index, 3)
-            sheet.paste(color, (column * 64, row * 64, (column + 1) * 64, (row + 1) * 64))
-        sheet.save(stream, format="PNG")
-    result = save_frames(store, scope, {"request_key": "gif-request"}, stream.getvalue(),
-                         frame_plan({"gif_frames": colors, "frame_duration_ms": 100}))
-    assert len(result["frame_refs"]) == 6
-    inputs = {ref: store.read(scope, ref) for ref in result["frame_refs"]}
-    target = tmp_path / "six.gif"
-    info = render(result["recipe"], inputs, target)
-    assert info["frame_count"] == 6 and info["duration_ms"] == 600
-    with Image.open(target) as gif:
-        for index, color in enumerate(colors):
-            gif.seek(index)
-            assert gif.convert("RGB").getpixel((32, 32)) == ImageColor.getrgb(color)
-
-
 @pytest.mark.asyncio
 async def test_tool_background_worker_and_outbox_send_actual_gif_once(tmp_path, monkeypatch):
     import hashlib

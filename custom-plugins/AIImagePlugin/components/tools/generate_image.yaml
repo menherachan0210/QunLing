@@ -6,8 +6,8 @@ metadata:
     en_US: Generate an image
     zh_Hans: 生成图片
   description:
-    en_US: Generate an image or animation storyboard and send an image or assembled GIF.
-    zh_Hans: 按自然语言要求生成新图，或画多帧分镜并自动合成 GIF 发回原会话。
+    en_US: Generate a new image or native animated GIF and send it to the current conversation.
+    zh_Hans: 按自然语言生成新图或原生 GIF 动图，发回当前会话。
 spec:
   parameters:
     type: object
@@ -21,21 +21,21 @@ spec:
         minLength: 1
         maxLength: 8000
         description: The user's requested new image, with its subject, style and composition.
-      gif_frames:
-        type: array
-        minItems: 2
-        maxItems: 6
-        items:
-          type: string
-          minLength: 1
-          maxLength: 300
-        description: Optional ordered pose/expression descriptions for 2–6 AI-drawn animation frames. One storyboard request is split and assembled into a looping GIF.
+      output_format:
+        type: string
+        enum: [png, gif]
+        default: png
+        description: Use gif when the user requests AI-generated motion or a looping animation. Describe motion and loop in prompt. Otherwise use png.
+      frame_count:
+        type: integer
+        minimum: 2
+        maximum: 16
+        description: Only for GIF. Omit to use the administrator setting (16 frames by default); override only when the user requests a frame count.
       frame_duration_ms:
         type: integer
-        minimum: 100
-        maximum: 1500
-        default: 350
-        description: Hold time per frame; only with gif_frames.
+        minimum: 20
+        maximum: 2000
+        description: Only for GIF. Omit for the administrator setting (200 ms by default). The provider rounds to 10 ms. Set only for a requested playback speed.
     required:
       - prompt
     additionalProperties: false
@@ -53,19 +53,16 @@ spec:
     Do not call for a quoted or hypothetical image-generation request.
     Pass a non-empty prompt of at most 8000 characters. Do not supply account IDs,
     recipients, API credentials, endpoints, model names, or image counts.
-    For a request to AI-draw several poses/images and assemble a GIF, supply gif_frames
-    in playback order and optionally frame_duration_ms. prompt describes the common
-    subject, style and background. This uses ONE paid storyboard request, then splits
-    it into reusable frame images and composes a GIF; it does not use an AI video API.
-    Do not supply gif_frames for an ordinary still image. For animating supplied
-    images with shake/bounce/spin/text or stitching existing pictures, use gif_animation
-    instead; no paid generation is needed. To change an existing character's poses,
-    use edit_image with gif_frames and the actual selected reference images.
-    GIF output returns task_id, saved_refs, frame_refs and recipe. Continue with
-    file_task; queued/started delivery is not confirmed sent and must not be duplicated.
-    On a partial result preserve/reuse the saved frames. Revisions to speed, ordering
-    or subtitles use gif_animation, never another paid generation. More frames are
-    not necessarily smoother; generated poses/grid alignment require visual checking.
+    For AI-generated motion, set output_format=gif. In prompt describe the subject,
+    motion, camera and desired loop. One paid request returns a complete native GIF.
+    Do not ask for a grid, contact sheet or separate frame images. Frame count and
+    speed use administrator defaults; override only for a user's explicit preference.
+    For simple shake/bounce/spin/text or stitching supplied images, use gif_animation;
+    no paid generation is needed. For an existing character use edit_image with
+    output_format=gif and selected references. Reuse the returned asset_ref for
+    speed, captions or packaging. A partial/unconfirmed result never authorizes
+    another paid request or a different generation method. Only delivery_status=sent
+    confirms delivery; deliver=false saves an intermediate without sending it.
     The tool creates one image request per user message and delivers to its own chat.
     Call at most once for the same user message. Do not retry on failure, timeout,
     an unconfirmed result, or delivery failure: another generation could be billed again.

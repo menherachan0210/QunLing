@@ -1,30 +1,16 @@
-"""Optional animation output for the existing single billed image request."""
+"""Persist and deliver provider output unchanged, including native GIFs."""
 from __future__ import annotations
 
 import base64
 import json
 
-from qunling.ai_animation import assemble, frame_plan, storyboard_prompt
-from qunling.assets import AssetError
 from qunling.integration import query_context
 
 
-def prepare_prompt(params):
-    if type(params.get("deliver", True)) is not bool:
-        raise AssetError("invalid_parameters", "deliver 必须为 true 或 false。")
-    plan = frame_plan(params)
-    if plan is not None and params.get("deliver", True) is False:
-        plan["deliver"] = False
-    return plan, storyboard_prompt(params["prompt"], plan)
-
-
-async def prepare_context(plugin, api, plan, *, deliver=True):
+async def prepare_context(plugin, api):
     context = await query_context(plugin, api)
     from qunling.assets import AssetStore
     AssetStore.from_env()
-    route = context.get("host_route")
-    if plan is not None and deliver and (not isinstance(route, dict) or not all(route.get(key) for key in ("instance_uuid", "workspace_uuid", "placement_generation"))):
-        raise AssetError("scope_unavailable", "动画交付服务暂不可用，尚未发起生图请求。")
     return context
 
 
@@ -45,13 +31,19 @@ async def persist_image(context, image):
 
 async def finish_static(plugin, api, context, image, state_key, *, sent_message, failed_message, timeout):
     """Durably save billed output before any QQ send; ambiguous delivery is not retried."""
-    import asyncio
-    from langbot_plugin.api.entities.builtin.platform.message import Image, MessageChain
-    from pkg.image_context import remember_output
     try:
         scope, store, asset, raw = await persist_image(context, image)
     except Exception:
         return "图片生成接口已返回，但共享素材保存失败；未发送图片。请勿重新生图，以免重复计费。"
+    return await _deliver_saved(plugin, api, context, image, state_key, scope, store, asset, raw,
+                                sent_message=sent_message, failed_message=failed_message, timeout=timeout)
+
+
+async def _deliver_saved(plugin, api, context, image, state_key, scope, store, asset, raw,
+                         *, sent_message, failed_message, timeout):
+    import asyncio
+    from langbot_plugin.api.entities.builtin.platform.message import Image, MessageChain
+    from pkg.image_context import remember_output
     ref, request = asset["asset_ref"], context["request_key"]
     try:
         await api.set_query_var(state_key + ".asset", ref)
@@ -82,16 +74,34 @@ async def finish_static(plugin, api, context, image, state_key, *, sent_message,
     return sent_message
 
 
-async def finish(context, plan, image):
-    from main import image_data_url
-
+async def finish_native(plugin, api, context, image, state_key, *, deliver, timeout):
+    """Keep paid bytes even when validation or delivery fails; never render frames."""
+    from qunling.vision_input import inspect_generated_gif
+    from qunling.integration import task_hint
+    asset = {}
     try:
-        data = await image_data_url(image)
-        raw = base64.b64decode(data.split(",", 1)[1], validate=True)
-        result = await assemble(context, raw, plan)
+        scope, store, asset, raw = await persist_image(context, image)
+        try:
+            await api.set_query_var(state_key + ".asset", asset["asset_ref"])
+            await api.set_query_var(state_key, "asset_saved")
+        except Exception:
+            pass  # The pre-request claim and durable asset grant still prevent regeneration.
+        metadata = await inspect_generated_gif("data:image/gif;base64," + base64.b64encode(raw).decode("ascii"))
     except Exception:
-        result = {"status": "partial", "error_code": "animation_output_failed",
-                  "error": "生图接口已返回，但分镜读取或合成失败；不代表生成未发生，不要重复生图。"}
+        return json.dumps({"status": "partial", **asset, "delivery_status": "not_sent",
+                           "error_code": "native_gif_validation_failed",
+                           "error": "生成接口已返回，但原生 GIF 保存或校验未完成，尚未发送。"
+                                    "如有 asset_ref 可查看已保存产物；不要重新生图或改用其他生成方式。"}, ensure_ascii=False)
+    result = {"status": "created", **asset, **metadata, "delivery_status": "not_requested",
+              "instruction": "原生 GIF 已保存，可复用 asset_ref 加字、调速或打包，无需重新生图。",
+              "_qunling_task": task_hint()}
+    if deliver:
+        result.pop("_qunling_task", None)
+        sent = "原生 GIF 已发送。"
+        message = await _deliver_saved(plugin, api, context, image, state_key, scope, store, asset, raw,
+            sent_message=sent, failed_message="原生 GIF 已生成，但发送结果未确认。", timeout=timeout)
+        result.update(status="sent" if message == sent else "partial",
+                      delivery_status="sent" if message == sent else "unconfirmed", instruction=message)
     return json.dumps(result, ensure_ascii=False)
 
 

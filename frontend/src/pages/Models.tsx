@@ -392,6 +392,81 @@ export function Models({ active }: { active: boolean }) {
                             ))}
                           </select>
                         </Field>
+                        <Field
+                          label="图片复杂度"
+                          hint="控制绘制前的规划程度，适用于 GPT Image 2.6 等支持该参数的模型。"
+                        >
+                          <select
+                            value={v.image_complexity || "auto"}
+                            onChange={(e) =>
+                              edit("image_complexity", e.target.value)
+                            }
+                          >
+                            <option value="auto">模型默认</option>
+                            <option value="low">低</option>
+                            <option value="medium">中</option>
+                            <option value="high">高</option>
+                          </select>
+                        </Field>
+                        <Field
+                          label="原生 GIF 模型"
+                          hint="与图片共用服务地址和密钥，用于生成动作和循环表情。"
+                        >
+                          <input
+                            value={v.gif_model ?? "gpt-image-2.6-sunburst"}
+                            onChange={(e) => edit("gif_model", e.target.value)}
+                          />
+                        </Field>
+                        <Field
+                          label="GIF 每帧尺寸"
+                          hint="自动尺寸由上游按帧数选择；手动尺寸受模型总像素预算限制。"
+                        >
+                          <select
+                            value={v.gif_size || "auto"}
+                            onChange={(e) => edit("gif_size", e.target.value)}
+                          >
+                            <option value="auto">自动</option>
+                            {[
+                              "256x256",
+                              "384x384",
+                              "512x512",
+                              "768x768",
+                              "1024x1024",
+                            ].map((size) => (
+                              <option key={size}>{size}</option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="GIF 默认帧数">
+                          <input
+                            type="number"
+                            min={2}
+                            max={16}
+                            step={1}
+                            value={v.gif_frame_count ?? 16}
+                            onChange={(e) =>
+                              edit("gif_frame_count", Number(e.target.value))
+                            }
+                          />
+                        </Field>
+                        <Field
+                          label="GIF 每帧时长（毫秒）"
+                          hint={`当前设置每轮约 ${(((v.gif_frame_count ?? 16) * Math.round((v.gif_frame_duration_ms ?? 200) / 10) * 10) / 1000).toFixed(2)} 秒。`}
+                        >
+                          <input
+                            type="number"
+                            min={20}
+                            max={2000}
+                            step={10}
+                            value={v.gif_frame_duration_ms ?? 200}
+                            onChange={(e) =>
+                              edit(
+                                "gif_frame_duration_ms",
+                                Number(e.target.value),
+                              )
+                            }
+                          />
+                        </Field>
                         <Field label="图片超时（秒）">
                           <input
                             type="number"
@@ -435,6 +510,7 @@ export function Models({ active }: { active: boolean }) {
                           ["vision", "视觉理解"],
                           ["search", "联网搜索"],
                           ["image", "图片生成"],
+                          ["gif", "原生 GIF"],
                         ].map(([key, label]) => (
                           <label key={key}>
                             <input
