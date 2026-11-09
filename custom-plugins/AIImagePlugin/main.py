@@ -137,6 +137,7 @@ def _content_refused(exc: Exception) -> bool:
 def _provider_error(exc: Exception) -> ImageGenerationError:
     from openai import APIConnectionError, APIStatusError, APITimeoutError
     from pkg.image_http import ImageResponseLimitError
+    from qunling.native_gif import GIF_ACCESS_UNAVAILABLE, gif_access_unavailable
 
     if isinstance(exc, ImageResponseLimitError) or isinstance(exc.__cause__, ImageResponseLimitError):
         return ImageGenerationError("生成服务返回的图片响应超过安全大小或使用了不支持的压缩格式；已停止读取，未自动重试。上游可能已生成或计费。")
@@ -160,6 +161,8 @@ def _provider_error(exc: Exception) -> ImageGenerationError:
             message = f"图片生成服务暂时异常（HTTP {status}）；请检查上游服务。"
         elif status in {400, 403, 422} and _content_refused(exc):
             message = f"图片生成服务明确拒绝了本次内容（HTTP {status}，内容审核拒绝）。"
+        elif status in {400, 403, 422} and gif_access_unavailable(body):
+            message = GIF_ACCESS_UNAVAILABLE
         elif status == 403:
             message = "图片生成服务拒绝访问（HTTP 403）；请检查账号或模型权限。"
         elif status == 404:
@@ -256,8 +259,8 @@ class AIImagePlugin(BasePlugin):
         revoke_installation(binding)
         STORE.revoke(_binding_owner(binding))
 
-    def create_client(self):
-        config = self.get_config()
+    def create_client(self, config=None):
+        config = self.get_config() if config is None else config
         api_key = str(config.get("openai_api_key", "") or "")
         if not api_key:
             return None
@@ -312,7 +315,17 @@ class AIImagePlugin(BasePlugin):
             raise ImageGenerationError("请先配置图片生成模型。")
         client = None
         try:
-            client = self.create_client()
+            gif_provider = config.get("gif_provider", "custom" if config.get("gif_api_base_url") else "image")
+            if extra.get("output_format") == "gif" and gif_provider != "image":
+                endpoint = DEFAULT_BASE_URL if gif_provider == "official" else config.get("gif_api_base_url")
+                if gif_provider not in {"official", "custom"} or not endpoint:
+                    raise ImageGenerationError("原生 GIF 服务选项或独立地址无效，未提交生成请求。")
+                if not config.get("gif_api_key"):
+                    raise ImageGenerationError("原生 GIF 独立服务缺少 API Key，未提交生成请求。")
+                client = self.create_client({**config, "api_base_url": endpoint,
+                                             "openai_api_key": config["gif_api_key"]})
+            else:
+                client = self.create_client()
             if client is None:
                 raise ImageGenerationError(
                     "未配置图片生成 API Key，请先在插件设置中配置。"

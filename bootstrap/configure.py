@@ -30,11 +30,12 @@ FEATURE_PLUGINS = {
     "search": {"local/QQWebSearch", "local/QQTextReader"},
     "comic": {"local/QQComicTranslator", "local/QQTextReader", "local/QQGroupContext"},
 }
-PROVIDER_ROLES = ("vision", "image", "search", "decision", "reconcile")
+PROVIDER_ROLES = ("vision", "image", "gif", "search", "decision", "reconcile")
 TOOL_CHOICES = {
     "image_size": ("1024x1024", {"1024x1024", "1280x1280", "768x1280", "1280x768", "720x1280", "1280x720", "1024x768", "768x1024"}),
     "image_quality": ("auto", {"auto", "low", "medium", "high", "xhigh", "max"}),
     "image_complexity": ("auto", {"auto", "low", "medium", "high"}),
+    "gif_provider": ("image", {"image", "official", "custom"}),
     "gif_size": ("auto", {"auto", "256x256", "384x384", "512x512", "768x768", "1024x1024"}),
 }
 TOOL_LIMITS = {"image_timeout_seconds": (300, 30, 300), "search_timeout_seconds": (65, 30, 90),
@@ -59,6 +60,9 @@ def tool_settings(values, previous=None):
     previous = previous or {}
     result = {}
     for key, (default, choices) in TOOL_CHOICES.items():
+        if key == "gif_provider":
+            endpoint = values.get("gif_base_url", previous.get("gif_base_url", ""))
+            default = "official" if isinstance(endpoint, str) and endpoint.rstrip('/') == "https://api.openai.com/v1" else "custom" if endpoint else "image"
         value = values.get(key, previous.get(key, default))
         if not isinstance(value, str) or value not in choices:
             raise SetupError("图片尺寸、画质或复杂度选项无效。")
@@ -87,11 +91,14 @@ def adopt_tool_settings(api, values):
     image_fields = {"image_size": "image_size", "image_quality": "quality",
                     "image_timeout_seconds": "request_timeout_seconds", "image_complexity": "complexity",
                     "gif_model": "gif_model_name", "gif_size": "gif_size", "gif_frame_count": "gif_frame_count",
-                    "gif_frame_duration_ms": "gif_frame_duration_ms"}
+                    "gif_frame_duration_ms": "gif_frame_duration_ms", "gif_base_url": "gif_api_base_url",
+                    "gif_api_key": "gif_api_key", "gif_provider": "gif_provider"}
     if "image" in features and not image_fields.keys() <= config.keys():
         image = api.call("GET", "/api/v1/plugins/langbot-team/AIImagePlugin/config")["config"]
         for field, source in image_fields.items():
             if field not in config and source in image:
+                if field == "gif_api_key" and image[source] == "***":
+                    raise SetupError("已有原生 GIF 服务的密钥无法读取，请填写独立地址和密钥后保存；原配置未覆盖。")
                 config[field] = image[source]
     search_fields = {"search_base_url", "search_api_key", "search_timeout_seconds"}
     if "search" in features and not search_fields <= config.keys():
@@ -120,7 +127,14 @@ def enabled_plugins(config):
 
 
 def role_settings(config, role):
-    """Empty role endpoint inherits the chat provider; secrets never reach public settings."""
+    """GIF inherits images; other empty roles inherit chat. Never cross-send secrets."""
+    if role == "gif":
+        inherited = role_settings(config, "image")
+        mode = tool_settings(config)["gif_provider"]
+        if mode != "image":
+            endpoint = "https://api.openai.com/v1" if mode == "official" else config.get("gif_base_url", "")
+            return {**config, "base_url": endpoint, "api_key": config.get("gif_api_key", "")}
+        return inherited
     endpoint = config.get(role + "_base_url")
     return {**config, "base_url": endpoint or config["base_url"],
             "api_key": config.get(role + "_api_key") or config["api_key"]}
@@ -230,6 +244,11 @@ def settings_from_input(values, previous=None):
             "AI 地址需为完整 HTTP(S) 接口地址，例如 https://api.example.com/v1。"
         ) from None
     config["base_url"] = config["base_url"].rstrip("/")
+    gif_mode = tool_settings(values, previous)["gif_provider"]
+    if gif_mode == "official":
+        config["gif_base_url"] = "https://api.openai.com/v1"
+    if gif_mode == "custom" and not config["gif_base_url"]:
+        raise SetupError("请填写原生 GIF 独立服务地址。")
     for role in PROVIDER_ROLES:
         endpoint, secret = role + "_base_url", role + "_api_key"
         if config[endpoint]:
@@ -246,7 +265,7 @@ def settings_from_input(values, previous=None):
                 config[secret] = ""
             if not config[secret] and config[endpoint] == previous.get(endpoint):
                 config[secret] = previous.get(secret, "")
-            if not config[secret]:
+            if not config[secret] and not (role == "gif" and gif_mode == "image"):
                 raise SetupError("独立服务地址需要自己的 API Key，避免将聊天密钥发往其他服务。")
         else:
             config[secret] = ""
@@ -647,6 +666,9 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
             "quality": config["image_quality"],
             "complexity": config["image_complexity"],
             "gif_model_name": config["gif_model"],
+            "gif_api_base_url": config["gif_base_url"],
+            "gif_api_key": config["gif_api_key"],
+            "gif_provider": config["gif_provider"],
             "gif_size": config["gif_size"],
             "gif_frame_count": config["gif_frame_count"],
             "gif_frame_duration_ms": config["gif_frame_duration_ms"],
@@ -683,7 +705,7 @@ def configure(api, config, record, persist, onebot_token, langbot_url, archive_p
         path = "/api/v1/plugins/" + identity + "/config"
         old = api.call("GET", path)["config"]
         needs_update, digest = changed(
-            identity, values, old, {"api_key", "openai_api_key"}
+            identity, values, old, {"api_key", "openai_api_key", "gif_api_key"}
         )
         if needs_update:
             api.call("PUT", path, {**old, **values})

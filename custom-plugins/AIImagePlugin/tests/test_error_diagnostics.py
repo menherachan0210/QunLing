@@ -49,6 +49,20 @@ def provider_status(status, body=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('body', [
+    {'detail': 'GIF output is not enabled for this request.', 'private': SECRET},
+    {'error': {'message': 'GIF output is not enabled for this request.', 'private': SECRET}},
+])
+async def test_native_gif_access_denial_explains_account_permission_once(monkeypatch, body):
+    plugin, client = plugin_and_client(monkeypatch, error=provider_status(400, body))
+    with pytest.raises(ImageGenerationError, match='尚未开通原生 GIF 权限') as caught:
+        await plugin.generate_image('bounce', output={'output_format': 'gif'})
+    assert SECRET not in str(caught.value) and '未自动重试' in str(caught.value)
+    client.post.assert_awaited_once()
+    client.images.generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('wrapped', [False, True])
 async def test_invalid_image_error_reports_reference_failure_without_private_body(monkeypatch, wrapped):
     error = {'code': 'invalid_image_file', 'type': 'image_generation_user_error',

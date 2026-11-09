@@ -2,6 +2,22 @@
 import base64
 import io
 
+GIF_ACCESS_UNAVAILABLE = (
+    "当前图片服务账号尚未开通原生 GIF 权限，未能生成动图；"
+    "请在后台更换已开通该权限的服务或账号。"
+)
+
+
+def gif_access_unavailable(body):
+    """Recognize the observed provider denial without reflecting error contents."""
+    if not isinstance(body, dict):
+        return False
+    error = body.get("error", body)
+    if not isinstance(error, dict):
+        return False
+    return any(error.get(key) == "GIF output is not enabled for this request."
+               for key in ("message", "detail"))
+
 
 def inspect_gif(value):
     from PIL import Image

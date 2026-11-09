@@ -26,6 +26,19 @@ async def _post(config, path, payload, *, maximum=1024*1024, timeout_seconds=60)
         async with client.stream("POST", config["base_url"].rstrip("/")+path,
                                  headers={"Authorization": "Bearer "+config["api_key"]}, json=payload) as response:
             if not 200 <= response.status_code < 300:
+                if payload.get("output_format") == "gif" and response.status_code in {400, 403, 422}:
+                    from qunling.native_gif import GIF_ACCESS_UNAVAILABLE, gif_access_unavailable
+                    error_data = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        if len(error_data) + len(chunk) > 8192:
+                            break
+                        error_data.extend(chunk)
+                    try:
+                        denied = gif_access_unavailable(json.loads(error_data))
+                    except (ValueError, UnicodeError):
+                        denied = False
+                    if denied:
+                        raise ProbeError(GIF_ACCESS_UNAVAILABLE)
                 raise ProbeError(f"接口返回 HTTP {response.status_code}，请检查权限、额度及模型/接口支持。")
             data = bytearray()
             async for chunk in response.aiter_bytes():
@@ -45,7 +58,7 @@ def _red_image():
 
 async def probe(config, kind):
     from bootstrap.configure import role_settings
-    config = role_settings(config, "image" if kind == "gif" else kind)
+    config = role_settings(config, kind)
     timeout = min(300, max(30, int(config.get("image_timeout_seconds", 300)))) if kind == "gif" else 60
     async with asyncio.timeout(timeout + 20 if kind == "gif" else 95 if kind == "image" else 70):
         if kind == "gif":

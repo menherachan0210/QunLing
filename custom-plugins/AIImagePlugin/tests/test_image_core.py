@@ -102,6 +102,58 @@ async def test_native_gif_uses_one_json_request_with_sixteen_frames(monkeypatch,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('edit', [False, True])
+async def test_native_gif_routes_only_animation_to_its_own_provider(monkeypatch, edit):
+    plugin, client = plugin_with_client(monkeypatch, response(b64_json=PAYLOAD), config={
+        'api_base_url': 'https://images.example/v1',
+        'gif_api_base_url': 'https://gif.example/v1', 'gif_api_key': 'synthetic-gif-key'})
+    selected = []
+    def factory(config=None):
+        selected.append(config if config is not None else plugin.get_config())
+        return client
+    monkeypatch.setattr(plugin, 'create_client', factory)
+    if edit:
+        await plugin.edit_image('bounce', GeneratedImage(base64=DATA_URL), output={'output_format': 'gif'})
+    else:
+        await plugin.generate_image('bounce', output={'output_format': 'gif'})
+    await plugin.generate_image('still')
+    assert [(v['api_base_url'], v['openai_api_key']) for v in selected] == [
+        ('https://gif.example/v1', 'synthetic-gif-key'), ('https://images.example/v1', 'test-secret')]
+    assert plugin.get_config()['openai_api_key'] == 'test-secret'
+    client.post.assert_awaited_once()
+    client.images.generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_native_gif_independent_endpoint_never_borrows_image_secret(monkeypatch):
+    plugin, client = plugin_with_client(monkeypatch, config={'gif_api_base_url': 'https://gif.example/v1'})
+    with pytest.raises(ImageGenerationError, match='独立服务缺少 API Key'):
+        await plugin.generate_image('bounce', output={'output_format': 'gif'})
+    client.post.assert_not_awaited()
+    client.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_gif_provider_switch_keeps_cached_key_but_never_automatically_falls_back(monkeypatch):
+    plugin, client = plugin_with_client(monkeypatch, response(b64_json=PAYLOAD), config={
+        'gif_provider': 'image', 'api_base_url': 'https://sub2api.example/v1',
+        'gif_api_base_url': 'https://api.openai.com/v1', 'gif_api_key': 'synthetic-official'})
+    selected = []
+    def factory(config=None):
+        selected.append(config if config is not None else plugin.get_config().copy())
+        return client
+    monkeypatch.setattr(plugin, 'create_client', factory)
+    await plugin.generate_image('bounce', output={'output_format': 'gif'})
+    plugin.config['gif_provider'] = 'official'
+    client.post.side_effect = RuntimeError('synthetic-provider-failure')
+    with pytest.raises(ImageGenerationError):
+        await plugin.generate_image('bounce', output={'output_format': 'gif'})
+    assert [(v['api_base_url'], v['openai_api_key']) for v in selected] == [
+        ('https://sub2api.example/v1', 'test-secret'), ('https://api.openai.com/v1', 'synthetic-official')]
+    assert client.post.await_count == 2 and plugin.config['gif_api_key'] == 'synthetic-official'
+
+
+@pytest.mark.asyncio
 async def test_native_gif_honors_admin_settings_and_explicit_speed(monkeypatch):
     plugin, client = plugin_with_client(monkeypatch, response(b64_json=PAYLOAD), config={
         'gif_model_name': 'gpt-image-2.6-flare', 'gif_size': '512x512', 'gif_frame_count': 12,

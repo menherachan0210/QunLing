@@ -5,7 +5,7 @@ metadata:
   author: langbot-team
   name: AIImagePlugin
   repository: https://github.com/langbot-app/langbot-plugins/tree/main/misc/AIImagePlugin
-  version: 0.1.7-local.13
+  version: 0.1.7-local.14
   description:
     en_US: 'Local extension: generate and edit images through an OpenAI-compatible
       image API.'
@@ -153,9 +153,32 @@ spec:
     type: string
     label: {en_US: Native GIF model, zh_Hans: 原生 GIF 模型}
     description:
-      en_US: Uses the same image provider; requires native GIF access.
-      zh_Hans: 使用图片服务的地址和密钥，模型须支持原生 GIF 并已获访问权限。
+      en_US: Requires native GIF access; can use an independent provider below.
+      zh_Hans: 模型须支持原生 GIF 并已获访问权限，可在下方配置独立服务。
     default: gpt-image-2.6-sunburst
+    required: false
+  - name: gif_provider
+    type: select
+    label: {en_US: GIF provider, zh_Hans: GIF 服务}
+    default: image
+    required: false
+    options:
+    - name: image
+      label: {en_US: Use image provider, zh_Hans: sub2api / 当前图片服务}
+    - name: official
+      label: {en_US: OpenAI official API, zh_Hans: OpenAI 官方 API}
+    - name: custom
+      label: {en_US: Other compatible service, zh_Hans: 其他兼容服务}
+  - name: gif_api_base_url
+    type: string
+    label: {en_US: Independent GIF API URL, zh_Hans: GIF 独立服务地址}
+    description: {en_US: Empty inherits the image provider., zh_Hans: 留空共用图片服务；填写后须提供该服务的密钥。}
+    default: ''
+    required: false
+  - name: gif_api_key
+    type: secret
+    label: {en_US: Independent GIF API key, zh_Hans: GIF 独立服务密钥}
+    default: ''
     required: false
   - name: gif_size
     type: select

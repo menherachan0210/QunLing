@@ -53,6 +53,7 @@ class Manager:
     def submit(self, value):
         if value.get('settings_revision')!=str(self.revision): raise ProactiveAPIError('设置已变化',409)
         self.settings.update({k:v for k,v in value.items() if not k.endswith('api_key') and k!='settings_revision'})
+        self.settings.update({k+'_saved':True for k,v in value.items() if k.endswith('api_key') and v})
         self.revision+=1
         return str(self.revision)
     def update_status(self):

@@ -207,6 +207,14 @@ test("native GIF defaults, settings and playback duration survive saving and rel
     .selectOption("512x512");
   await page.getByLabel("GIF 每帧时长（毫秒）", { exact: true }).fill("100");
   await page.getByLabel("图片复杂度", { exact: true }).selectOption("medium");
+  await page.getByLabel("GIF 服务", { exact: true }).selectOption("official");
+  await expect(
+    page.getByLabel("GIF 独立服务地址", { exact: true }),
+  ).toHaveValue("https://api.openai.com/v1");
+  await page.getByLabel("API Key", { exact: true }).fill("synthetic-gif-key");
+  expect(
+    await page.evaluate(() => JSON.stringify(sessionStorage)),
+  ).not.toContain("synthetic-gif-key");
   await expect(
     page.getByText("当前设置每轮约 1.60 秒。", { exact: true }),
   ).toBeVisible();
@@ -219,10 +227,28 @@ test("native GIF defaults, settings and playback duration survive saving and rel
     gif_size: "512x512",
     gif_frame_duration_ms: 100,
     image_complexity: "medium",
+    gif_provider: "official",
+    gif_base_url: "https://api.openai.com/v1",
+    gif_api_key: "synthetic-gif-key",
   });
   await expect(page.locator(".save-bar")).toHaveCount(0);
   await page.reload();
   await page.getByRole("button", { name: "工具与上下文", exact: true }).click();
+  await expect(
+    page.getByLabel("GIF 独立服务地址", { exact: true }),
+  ).toHaveValue("https://api.openai.com/v1");
+  await expect(page.getByLabel("API Key", { exact: true })).toHaveValue("");
+  await expect(page.getByPlaceholder("已保存 · 留空保留")).toBeVisible();
+  await page.getByLabel("GIF 服务", { exact: true }).selectOption("image");
+  await page.getByRole("button", { name: "应用设置", exact: true }).click();
+  await expect(page.locator(".save-bar")).toHaveCount(0);
+  await page.reload();
+  await page.getByRole("button", { name: "工具与上下文", exact: true }).click();
+  await expect(page.getByLabel("GIF 服务", { exact: true })).toHaveValue(
+    "image",
+  );
+  await page.getByLabel("GIF 服务", { exact: true }).selectOption("official");
+  await expect(page.getByPlaceholder("已保存 · 留空保留")).toBeVisible();
   await expect(page.getByLabel("原生 GIF 模型", { exact: true })).toHaveValue(
     "gpt-image-2.6-flare",
   );
@@ -237,7 +263,9 @@ test("native GIF defaults, settings and playback duration survive saving and rel
     fullPage: true,
   });
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByLabel("原生 GIF 模型", { exact: true }).scrollIntoViewIfNeeded();
+  await page
+    .getByLabel("原生 GIF 模型", { exact: true })
+    .scrollIntoViewIfNeeded();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

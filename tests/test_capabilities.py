@@ -74,7 +74,8 @@ async def test_image_probe_checks_real_bytes_without_saving_or_sending(monkeypat
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures('available_file_resources')
-async def test_native_gif_probe_validates_frames_and_uses_image_provider(monkeypatch):
+@pytest.mark.parametrize('independent', [False, True])
+async def test_native_gif_probe_validates_frames_and_uses_image_provider(monkeypatch, independent):
     import base64, io
     from PIL import Image
     frames = [Image.new('RGB', (32, 32), (i*12, 20, 100)) for i in range(16)]
@@ -84,14 +85,15 @@ async def test_native_gif_probe_validates_frames_and_uses_image_provider(monkeyp
         frame.close()
     calls = []
     async def post(config, path, payload, **kwargs):
-        assert config['base_url'] == 'https://image.example/v1'
-        assert config['api_key'] == 'synthetic-image-key'
+        assert config['base_url'] == ('https://gif.example/v1' if independent else 'https://image.example/v1')
+        assert config['api_key'] == ('synthetic-gif-key' if independent else 'synthetic-image-key')
         assert path == '/images/generations' and kwargs['timeout_seconds'] == 180
         calls.append(payload)
         return {'data': [{'b64_json': base64.b64encode(stream.getvalue()).decode()}]}
     monkeypatch.setattr(module, '_post', post)
     result = await module.probe({**CONFIG, 'image_base_url': 'https://image.example/v1',
-        'image_api_key': 'synthetic-image-key', 'image_timeout_seconds': 180}, 'gif')
+        'image_api_key': 'synthetic-image-key', 'image_timeout_seconds': 180,
+        **({'gif_base_url': 'https://gif.example/v1', 'gif_api_key': 'synthetic-gif-key'} if independent else {})}, 'gif')
     assert '16 帧' in result and '3.2 秒' in result and '未发送到 QQ' in result
     assert len(calls) == 1 and calls[0]['frame_count'] == 16 and calls[0]['output_format'] == 'gif'
 
@@ -107,3 +109,19 @@ async def test_static_response_cannot_pass_native_gif_probe(monkeypatch):
     with pytest.raises(ValueError):
         await module.probe(CONFIG, 'gif')
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_native_gif_probe_reports_access_denial_without_returning_error_body(monkeypatch):
+    import httpx
+    original_client = httpx.AsyncClient
+    calls = []
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(400, json={'error': {
+            'message': 'GIF output is not enabled for this request.', 'private': 'synthetic-private-key'}})
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original_client(
+        transport=httpx.MockTransport(handler), **kwargs))
+    with pytest.raises(module.ProbeError, match='尚未开通原生 GIF 权限') as caught:
+        await module._post(CONFIG, '/images/generations', {'output_format': 'gif'})
+    assert 'synthetic-private-key' not in str(caught.value) and len(calls) == 1

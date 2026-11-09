@@ -24,6 +24,39 @@ def settings(**changes):
     return setup.settings_from_input({**values, **changes})
 
 
+def test_gif_provider_inherits_image_or_uses_an_independent_secret():
+    config = settings(image_base_url='https://images.example/v1', image_api_key='synthetic-image')
+    inherited = setup.role_settings(config, 'gif')
+    assert (inherited['base_url'], inherited['api_key']) == ('https://images.example/v1', 'synthetic-image')
+    config = setup.settings_from_input({'gif_provider': 'custom', 'gif_base_url': 'https://gif.example/v1', 'gif_api_key': 'synthetic-gif'}, config)
+    updated = setup.settings_from_input({'gif_frame_count': 12, 'gif_api_key': ''}, config)
+    assert updated['gif_api_key'] == 'synthetic-gif' and updated['image_api_key'] == 'synthetic-image'
+    effective = setup.role_settings(updated, 'gif')
+    assert (effective['base_url'], effective['api_key']) == ('https://gif.example/v1', 'synthetic-gif')
+    public = setup.public_settings(updated)
+    assert public['gif_api_key_saved'] is True and 'synthetic-gif' not in json.dumps(public)
+    with pytest.raises(SetupError, match='自己的 API Key'):
+        setup.settings_from_input({'gif_base_url': 'https://other.example/v1'}, updated)
+    shared = setup.settings_from_input({'gif_provider': 'image'}, updated)
+    assert shared['gif_api_key'] == 'synthetic-gif' and setup.role_settings(shared, 'gif')['api_key'] == 'synthetic-image'
+    official = setup.settings_from_input({'gif_provider': 'official', 'gif_api_key': 'synthetic-official'}, shared)
+    assert official['gif_base_url'] == 'https://api.openai.com/v1'
+    shared = setup.settings_from_input({'gif_provider': 'image'}, official)
+    switched = setup.settings_from_input({'gif_provider': 'official'}, shared)
+    assert switched['gif_api_key'] == 'synthetic-official'
+    assert setup.role_settings(shared, 'gif')['api_key'] == 'synthetic-image'
+
+
+def test_gif_provider_is_applied_without_changing_regular_image_provider():
+    api = FakeLangBot()
+    config = settings(image_base_url='https://images.example/v1', image_api_key='synthetic-image',
+                      gif_base_url='https://gif.example/v1', gif_api_key='synthetic-gif')
+    run_configure(api, config)
+    actual = api.configs['langbot-team/AIImagePlugin']
+    assert (actual['api_base_url'], actual['openai_api_key']) == ('https://images.example/v1', 'synthetic-image')
+    assert (actual['gif_api_base_url'], actual['gif_api_key']) == ('https://gif.example/v1', 'synthetic-gif')
+
+
 class FakeLangBot:
     """In-memory shapes from LangBot 4.11 controller/service contracts."""
 
@@ -72,7 +105,7 @@ class FakeLangBot:
             if method == "GET":
                 config = deepcopy(self.configs[identity])
                 if self.mask_secrets:
-                    for key in ("api_key", "openai_api_key"):
+                    for key in ("api_key", "openai_api_key", "gif_api_key"):
                         if config.get(key):
                             config[key] = "***"
                 return {"config": config}

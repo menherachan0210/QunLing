@@ -410,13 +410,68 @@ export function Models({ active }: { active: boolean }) {
                         </Field>
                         <Field
                           label="原生 GIF 模型"
-                          hint="与图片共用服务地址和密钥，用于生成动作和循环表情。"
+                          hint="用于生成动作和循环表情，服务账号需具备原生 GIF 权限。"
                         >
                           <input
                             value={v.gif_model ?? "gpt-image-2.6-sunburst"}
                             onChange={(e) => edit("gif_model", e.target.value)}
                           />
                         </Field>
+                        <Field label="GIF 服务">
+                          <select
+                            value={v.gif_provider || "image"}
+                            onChange={(e) =>
+                              draft.setValue({
+                                ...v,
+                                gif_provider: e.target.value,
+                                ...(e.target.value === "official"
+                                  ? {
+                                      gif_base_url: "https://api.openai.com/v1",
+                                      gif_api_key_saved:
+                                        v.gif_base_url ===
+                                          "https://api.openai.com/v1" &&
+                                        !!v.gif_api_key_saved,
+                                    }
+                                  : {}),
+                              })
+                            }
+                          >
+                            <option value="image">
+                              sub2api / 当前图片服务
+                            </option>
+                            <option value="official">OpenAI 官方 API</option>
+                            <option value="custom">其他兼容服务</option>
+                          </select>
+                        </Field>
+                        {v.gif_provider !== "image" && v.gif_provider && (
+                          <>
+                            <Field
+                              label="GIF 独立服务地址"
+                              hint="原生 GIF 使用此服务的额度；切换回图片服务会保留此处已保存的密钥。"
+                            >
+                              <input
+                                type="url"
+                                placeholder="留空共用图片服务"
+                                value={
+                                  v.gif_provider === "official"
+                                    ? "https://api.openai.com/v1"
+                                    : v.gif_base_url || ""
+                                }
+                                readOnly={v.gif_provider === "official"}
+                                onChange={(e) =>
+                                  edit("gif_base_url", e.target.value)
+                                }
+                              />
+                            </Field>
+                            <Field label="GIF 独立服务密钥">
+                              <Secret
+                                value={v.gif_api_key || ""}
+                                saved={!!v.gif_api_key_saved}
+                                onChange={(value) => edit("gif_api_key", value)}
+                              />
+                            </Field>
+                          </>
+                        )}
                         <Field
                           label="GIF 每帧尺寸"
                           hint="自动尺寸由上游按帧数选择；手动尺寸受模型总像素预算限制。"
