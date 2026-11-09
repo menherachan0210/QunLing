@@ -59,8 +59,8 @@ spec:
         xlsx payload={sheets:[{name:string,rows:[[scalar,...],...]}]}
         pptx payload={slides:[{title:string,text:string}]}
         zip payload={files:[{name:relative_member_name,text:string}|{name:relative_member_name,asset_ref:string}]}
-        For GIF animations prefer gif_animation; it supports pictures, text, shapes,
-        effects and keyframes plus saved recipe revision and inline GIF delivery.
+        For GIF generation/editing use generate_image/edit_image with output_format=gif.
+        This file tool does not generate animation frames or assemble GIFs.
       delete: {asset_ref}, only when user asks to delete that stored file.
     Input download limit 40 MiB; generated/sent file limit 20 MiB; creation arguments
     limit 512 KiB. Outputs get an asset_ref; use send_attachment for actual delivery.

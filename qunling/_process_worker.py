@@ -104,14 +104,8 @@ def dispatch(operation, args, request, root, password):
                                read_file, search_file)
     from qunling.assets import safe_name
     if operation == "create":
-        if args["format"] == "gif":
-            from qunling.animation import render
-            inputs = {ref: (root / safe_name(name)).read_bytes()
-                      for ref, name in request.get("animation_inputs", {}).items()}
-            result = render(args["payload"], inputs, root / "output")
-        else:
-            sources = {key: root / safe_name(name) for key, name in request.get("zip_inputs", {}).items()}
-            result = export_file(args["format"], args["payload"], root / "output", staged_sources=sources)
+        sources = {key: root / safe_name(name) for key, name in request.get("zip_inputs", {}).items()}
+        result = export_file(args["format"], args["payload"], root / "output", staged_sources=sources)
     else:
         source = root / safe_name(request["input_name"])
         if operation == "inspect":

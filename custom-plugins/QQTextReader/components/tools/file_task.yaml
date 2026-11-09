@@ -25,7 +25,7 @@ spec:
         default: 10
     additionalProperties: false
   llm_prompt: |
-    list accepts only action. status/cancel require task_id from file_workspace, gif_animation or
+    list accepts only action. status/cancel require task_id from file_workspace or
     this tool's list. status optionally waits 0–15 seconds (default 10).
     Continue pending work using status, without requiring a new user confirmation.
     Cancellation is only for a user's stop/cancel request. Completed processing

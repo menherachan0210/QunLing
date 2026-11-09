@@ -87,8 +87,6 @@ def continuation_tool_allowed(name, parameters=None):
     if name == "file_task":
         return (set(parameters) <= {"action", "task_id", "wait_seconds"}
                 and parameters.get("action") in {"list", "status"})
-    if name == "gif_animation":
-        return set(parameters) == {"action", "base_ref"} and parameters.get("action") == "inspect"
     if name == "browse_group_files":
         return (set(parameters) <= {"action", "folder_ref", "search_text", "offset", "limit", "file_ref"}
                 and parameters.get("action", "list") in {"list", "import"})

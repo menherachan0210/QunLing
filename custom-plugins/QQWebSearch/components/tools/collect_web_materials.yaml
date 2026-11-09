@@ -28,7 +28,7 @@ spec:
     as shared asset_refs with a source manifest. Search results are summaries; page exports
     contain retrieved body text and explicitly mark truncation. It does not execute downloaded content.
     Next use file_workspace inspect/read/search or create (ZIP, document, spreadsheet),
-    edit_image with asset_refs, gif_animation with image assets, or send_attachment to QQ.
+    edit_image with asset_refs (output_format=gif for animation), or send_attachment to QQ.
     These are examples of a shared input/output contract; compose the installed tools as
     needed for the user's actual goal. Preserve source and intermediate asset_refs.
     To make ZIP: file_workspace create, format=zip, payload={files:[{name:suggested_member,

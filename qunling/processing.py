@@ -21,9 +21,6 @@ OPERATIONS = {
     "create": ({"format", "payload", "filename"}, {"format", "payload", "filename"}),
 }
 
-_GIF_SLOT = asyncio.Semaphore(1)
-
-
 async def _disk(function, *args, **kwargs):
     """Finish bounded disk work before its temporary directory can be removed."""
     task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
@@ -60,22 +57,16 @@ def validate_operation(operation, args):
         raise AssetError("input_limit", "单次生成或处理参数不能超过 512 KiB，请分批处理。")
     if operation == "create":
         name = safe_name(args["filename"])
-        if args["format"] not in {"txt", "md", "csv", "json", "docx", "xlsx", "pptx", "zip", "gif"}:
+        if args["format"] not in {"txt", "md", "csv", "json", "docx", "xlsx", "pptx", "zip"}:
             raise AssetError("unsupported_export", "暂不支持该生成格式。")
         if not name.lower().endswith("." + args["format"]):
             raise AssetError("invalid_name", "文件扩展名应与生成格式一致。")
-        if args["format"] == "gif":
-            from qunling.animation import validate_recipe
-            validate_recipe(args["payload"])
 
 
 async def run_operation(store: AssetStore, scope: Scope, operation: str, args: dict) -> dict:
     from qunling.resource_gate import ResourceBusy, resource_slot
     try:
         async with resource_slot("file"):
-            if operation == "create" and isinstance(args, dict) and args.get("format") == "gif":
-                async with _GIF_SLOT:
-                    return await _run_operation(store, scope, operation, args)
             return await _run_operation(store, scope, operation, args)
     except ResourceBusy:
         raise AssetError("resource_busy", "文件任务排队超时，尚未开始处理；稍后再试。") from None
@@ -109,18 +100,6 @@ async def _run_operation(store: AssetStore, scope: Scope, operation: str, args: 
                     await _disk((root / "parsed-input.json").write_text,
                                 json.dumps(candidate, ensure_ascii=False), encoding="utf-8")
                 request["parsed_cache"] = True
-        elif args["format"] == "gif":
-            from qunling.animation import source_refs, validate_recipe
-            args["payload"] = validate_recipe(args["payload"])
-            staged, total = {}, 0
-            for index, ref in enumerate(source_refs(args["payload"])):
-                name = f"image-{index}.input"
-                item = await _disk(store.copy_to, scope, ref, root / name)
-                total += item["size"]
-                if total > 32 * 1024 * 1024:
-                    raise AssetError("input_limit", "动画素材总量不能超过 32 MiB。")
-                staged[ref] = name
-            request["animation_inputs"] = staged
         elif args["format"] == "zip":
             # Pass private staging names, not an additional Base64/JSON copy.
             payload = args["payload"]
@@ -200,10 +179,8 @@ async def _run_operation(store: AssetStore, scope: Scope, operation: str, args: 
             filename = args.get("filename")
             if operation == "extract" and not filename:
                 filename = args["member"].replace("\\", "/").rsplit("/", 1)[-1]
-            metadata = ({"gif_recipe": args["payload"]}
-                        if operation == "create" and args["format"] == "gif" else None)
             content = await _disk(output.read_bytes)
             item = await _disk(store.put, scope, safe_name(filename), content,
-                               origin="generated" if operation == "create" else "archive", metadata=metadata)
+                               origin="generated" if operation == "create" else "archive")
             result = {**result, "artifact": item, "result_refs": [item["asset_ref"]]}
         return {"status": "ok", **result}

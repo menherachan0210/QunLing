@@ -101,7 +101,7 @@ new file mode 100644
 +
 +TRUSTED_TOOLS = {
 +    "langbot-team/AIImagePlugin": frozenset({"generate_image", "edit_image"}),
-+    "local/QQTextReader": frozenset({"file_workspace", "send_attachment", "file_task", "read_text_attachment", "gif_animation"}),
++    "local/QQTextReader": frozenset({"file_workspace", "send_attachment", "file_task", "read_text_attachment"}),
 +    "local/QQGroupContext": frozenset({"import_group_context_images"}),
 +    "local/QQWebSearch": frozenset({
 +        "search_web", "read_web_page", "search_web_images", "send_web_images",

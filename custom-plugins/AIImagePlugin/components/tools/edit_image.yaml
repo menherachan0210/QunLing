@@ -85,9 +85,8 @@ spec:
     For requested AI motion, use output_format=gif and describe the subject, motion,
     camera and loop in prompt. One paid edit returns a complete native GIF; never
     request a grid or separate frame images. Use administrator frame/speed defaults
-    unless the user explicitly requests a change. For simple shake/bounce/spin/text
-    applied to existing images use gif_animation. No @ or command is needed.
-    Reuse asset_ref with gif_animation for speed or caption changes. Only
+    unless the user explicitly requests a change. Describe requested effects,
+    captions and timing in that prompt. No @ or command is needed. Only
     delivery_status=sent confirms sending. Partial results do not authorize another
     paid request or fallback generation; preserve the saved asset.
     Generate and edit tools together allow at most one paid request per user message.

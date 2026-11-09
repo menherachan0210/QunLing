@@ -18,7 +18,7 @@
 
 `collect_web_materials` 混合接收已返回的 `search_ref`、`page_ref`、`image_ref`、`file_ref`，把实际搜索摘要、网页正文、图片和文件保存为统一的 `asset_ref`，同时生成来源清单。搜图和文件下载也直接返回共享引用。
 
-后续可以交给 `file_workspace` 阅读、整理、制作文档或 ZIP；图片交给 `edit_image(asset_refs)` 改图或 `gif_animation` 制作动画；`send_attachment` 负责实际 QQ 交付。这里是通用的素材接口，不是只支持“搜图打包”的专用流程。当前身份和会话隔离继续生效。
+后续可以交给 `file_workspace` 阅读、整理、制作文档或 ZIP；图片交给 `edit_image(asset_refs)` 改图，设置 `output_format=gif` 生成原生动图；`send_attachment` 负责实际 QQ 交付。这里是通用的素材接口，不是只支持“搜图打包”的专用流程。当前身份和会话隔离继续生效。
 
 例如“搜集图片和介绍，整理打包发群里”：搜索/读取 → 收集实际素材 → `file_workspace create(format=zip, deliver=true)`。ZIP 成员使用实际素材引用，可加入来源清单，不把图片链接当成图片文件。用户只要成品时，中间素材不发群。搜图 `purpose=send` 提示继续发送实际图片，`purpose=collect` 提示继续加工。素材保存不等于发送成功，失败或正文截断会单独标记。
 

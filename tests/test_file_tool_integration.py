@@ -54,6 +54,17 @@ def env(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_workspace_rejects_removed_local_gif_generation_without_creating_job(env):
+    with pytest.raises(AssetError) as error:
+        await env.module.workspace(env.plugin, env.api, env.context, env.scope, env.store, {
+            "operation": "create", "deliver": True,
+            "arguments": {"format": "gif", "filename": "old.gif", "payload": {"layers": []}},
+        })
+    assert error.value.code == "unsupported_export"
+    assert not JobService(env.root).list(env.scope, before=10**12, request_key=env.context["request_key"])
+
+
+@pytest.mark.asyncio
 async def test_upload_read_correct_export_and_send_real_bytes(env):
     module = env.module
     listing = await module.workspace(env.plugin, env.api, env.context, env.scope, env.store, {"operation": "list"})

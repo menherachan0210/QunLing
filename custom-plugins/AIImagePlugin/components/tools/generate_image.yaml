@@ -57,10 +57,10 @@ spec:
     motion, camera and desired loop. One paid request returns a complete native GIF.
     Do not ask for a grid, contact sheet or separate frame images. Frame count and
     speed use administrator defaults; override only for a user's explicit preference.
-    For simple shake/bounce/spin/text or stitching supplied images, use gif_animation;
-    no paid generation is needed. For an existing character use edit_image with
-    output_format=gif and selected references. Reuse the returned asset_ref for
-    speed, captions or packaging. A partial/unconfirmed result never authorizes
+    For an existing character use edit_image with output_format=gif and selected
+    references. Describe requested effects, captions and timing in that prompt.
+    Reuse the returned asset_ref for inspection, sending or packaging.
+    A partial/unconfirmed result never authorizes
     another paid request or a different generation method. Only delivery_status=sent
     confirms delivery; deliver=false saves an intermediate without sending it.
     The tool creates one image request per user message and delivers to its own chat.

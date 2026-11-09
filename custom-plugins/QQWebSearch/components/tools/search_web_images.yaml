@@ -36,7 +36,7 @@ spec:
     This searches source pages and checks real downloaded pixels; it does not generate images.
     Use purpose=send when asked to show/send pictures, then send_web_images for actual QQ images.
     Use purpose=collect when gathering assets for other tools, e.g. a ZIP, edit or GIF.
-    Returned asset_refs work with file_workspace, edit_image(asset_refs), gif_animation,
+    Returned asset_refs work with file_workspace, edit_image(asset_refs),
     and send_attachment. collect_web_materials can gather mixed references with a source manifest.
     Animated GIFs keep their original frames; visual checks use chronological sampled frames.
     Reuse source_urls from existing search/page results when available. Never invent an image URL.
