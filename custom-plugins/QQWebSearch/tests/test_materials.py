@@ -44,7 +44,13 @@ def picture():
 
 
 @pytest.mark.asyncio
-async def test_mixed_web_materials_become_real_zip_bytes_not_links(env):
+async def test_mixed_web_materials_become_real_zip_bytes_not_links(env, monkeypatch):
+    # This verifies real archive bytes and delivery, independently of ambient
+    # host pressure. The child parser still enforces its actual resource limits.
+    from qunling import resource_gate
+    gate = resource_gate.ResourceGate
+    monkeypatch.setattr(resource_gate, "ResourceGate", lambda root: gate(root, sample=lambda:
+        resource_gate.Pressure(2048, 1800, local_available_mib=1024)))
     raw = picture()
     image = media.prepare_image(raw)
     image.update(source_title="Synthetic gallery", source_url="https://example.com/gallery")
