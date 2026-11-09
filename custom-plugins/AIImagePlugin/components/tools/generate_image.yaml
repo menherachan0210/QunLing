@@ -64,6 +64,9 @@ spec:
     another paid request or a different generation method. Only delivery_status=sent
     confirms delivery; deliver=false saves an intermediate without sending it.
     The tool creates one image request per user message and delivers to its own chat.
+    member_image_blocked is an administrator restriction for the real sender.
+    Follow the returned reply instruction using the current persona; do not apologize,
+    retry, switch format/provider or call edit_image to bypass the restriction.
     Call at most once for the same user message. Do not retry on failure, timeout,
     an unconfirmed result, or delivery failure: another generation could be billed again.
     On success, the image is already delivered. Use the current group communication

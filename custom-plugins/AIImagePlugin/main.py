@@ -289,6 +289,8 @@ class AIImagePlugin(BasePlugin):
         self, prompt: str, image: GeneratedImage | list[GeneratedImage] | None = None,
         *, output: dict | None = None
     ) -> GeneratedImage:
+        from qunling.image_access import ImageAccessError, require_current
+        require_current()
         prompt = validate_prompt(prompt)
         references = None
         if image is not None:
@@ -350,6 +352,7 @@ class AIImagePlugin(BasePlugin):
                 from openai.types import ImagesResponse
                 if references is None:
                     async with resource_slot("image_transfer", wait_seconds=15):
+                        require_current()
                         if extra:
                             return _image_result(await client.post(
                                 "/images/generations", cast_to=ImagesResponse, body=body
@@ -366,6 +369,7 @@ class AIImagePlugin(BasePlugin):
                             # 10 MiB sources could expand concurrently in RAM.
                             retained = sum(len(value) for value in data_urls)
                             async with resource_slot(image_transfer_kind(retained), wait_seconds=5):
+                                require_current()
                                 data_urls.append(await image_data_url(reference))
                 except TimeoutError:
                     raise ImageGenerationError(
@@ -394,6 +398,7 @@ class AIImagePlugin(BasePlugin):
                                        "输出原生动图时根据这些动作生成连贯动画，成品不包含采样拼图或时间标签。")
                 body["images"] = [{"image_url": value} for value in data_urls]
                 async with resource_slot(image_transfer_kind(sum(map(len, data_urls))), wait_seconds=15):
+                    require_current()
                     return _image_result(await client.post(
                         "/images/edits", cast_to=ImagesResponse, body=body
                     ))
@@ -403,7 +408,7 @@ class AIImagePlugin(BasePlugin):
                 return await asyncio.wait_for(request(), timeout=timeout)
             except ResourceBusy:
                 raise ImageGenerationError("服务器可用内存暂时不足，图片处理尚未开始或未能继续，尚未提交生成请求；稍后再试。") from None
-        except ImageGenerationError:
+        except (ImageGenerationError, ImageAccessError):
             raise
         except Exception as exc:
             raise _provider_error(exc) from None

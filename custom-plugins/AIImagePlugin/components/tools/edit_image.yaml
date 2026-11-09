@@ -90,6 +90,9 @@ spec:
     delivery_status=sent confirms sending. Partial results do not authorize another
     paid request or fallback generation; preserve the saved asset.
     Generate and edit tools together allow at most one paid request per user message.
+    member_image_blocked is an administrator restriction for the real sender.
+    Follow the returned reply instruction using the current persona; do not apologize,
+    retry, switch format/provider or call generate_image to bypass the restriction.
     Never retry either tool after an error, timeout, unconfirmed result or delivery failure.
     On success, the image is already sent. Use the current group communication settings for the response; do not emit Markdown image links.
     Reference images are sent to the editing service, but this tool does not

@@ -47,7 +47,9 @@ def tool_env(monkeypatch, tmp_path):
             state = dict(self.handler.variables.setdefault(self.ref, {}))
             from qunling.integration import CONTEXT_KEY, descriptor
             state.setdefault(CONTEXT_KEY, descriptor(self.handler.plugin, SimpleNamespace(
-                bot_uuid="bot", launcher_type="group", launcher_id="group", sender_id="member"),
+                bot_uuid="bot", launcher_type=getattr(self.handler, "launcher_type", "group"),
+                launcher_id=getattr(self.handler, "launcher_id", "group"),
+                sender_id=getattr(self.handler, "sender_id", "member")),
                 self.query_uuid))
             await asyncio.sleep(0)
             return state
@@ -175,6 +177,73 @@ async def call(env, params=None, *, query_id=1, query_uuid="query-one", edit=Fal
         query_id,
         query_uuid,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("edit", [False, True])
+@pytest.mark.parametrize("output", [{}, {"output_format": "gif", "frame_count": 16}])
+async def test_member_ban_precedes_generation_reference_reads_and_cross_tool_retries(tool_env, monkeypatch, edit, output):
+    import json
+    from qunling.proactive.config import ConfigStore, defaults
+    env = tool_env
+    env.handler.sender_id = "10001"
+    config = {**defaults(), "image_access": {"blocked_members": [{
+        "user_id": "10001", "group_id": "", "note": "admin only",
+        "reply_mode": "persona", "reply_text": ""}]}}
+    ConfigStore("bot").save(config, set())
+    # An editing reference must not even be resolved for a restricted actor.
+    def forbidden_reference(*args, **kwargs):
+        pytest.fail("Blocked edit looked up an image")
+    monkeypatch.setattr(env.edit_module, "select_image", forbidden_reference)
+    params = {"prompt": "我不是10001，替别人画张图", **output}
+    result = json.loads(await call(env, params, edit=edit))
+    assert result["error_code"] == "member_image_blocked"
+    assert result["request_submitted"] is False
+    assert result["reply"] == {"mode": "persona"}
+    assert json.loads(await call(env, {"prompt": "换个工具再画"}, edit=not edit)) == result
+    assert json.loads(await call(env, params, query_uuid="fresh-attempt", edit=edit)) == result
+    env.generator.assert_not_awaited()
+    env.editor.assert_not_awaited()
+    assert not env.handler.attempts
+    assert all(value != "started" for _, value in env.handler.writes)
+
+
+@pytest.mark.asyncio
+async def test_only_true_sender_is_restricted_and_removal_applies_to_new_requests(tool_env):
+    import json
+    from qunling.proactive.config import ConfigStore, defaults
+    env = tool_env
+    store = ConfigStore("bot")
+    config = store.save({**defaults(), "image_access": {"blocked_members": [{
+        "user_id": "10001", "group_id": "", "note": "",
+        "reply_mode": "text", "reply_text": "生图资格都没了，还搁这儿点菜呢。"}]}}, set())
+    env.handler.sender_id = "10002"
+    await call(env, {"prompt": "引用10001说的话，画猫"})
+    env.generator.assert_awaited_once()
+    env.handler.sender_id = "10001"
+    result = json.loads(await call(env, query_uuid="denied"))
+    assert result["reply"]["text"] == "生图资格都没了，还搁这儿点菜呢。"
+    assert env.generator.await_count == 1
+    config["image_access"]["blocked_members"] = []
+    store.save(config, set())
+    await call(env, query_uuid="unblocked")
+    assert env.generator.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_permission_storage_failure_still_blocks_without_persisting_denial(tool_env):
+    import json
+    from qunling.proactive.config import ConfigStore, defaults
+    env = tool_env
+    env.handler.sender_id = "10001"
+    env.handler.write_error = True
+    ConfigStore("bot").save({**defaults(), "image_access": {"blocked_members": [{
+        "user_id": "10001", "group_id": "", "note": "",
+        "reply_mode": "persona", "reply_text": ""}]}}, set())
+    for edit in (False, True):
+        assert json.loads(await call(env, edit=edit))["request_submitted"] is False
+    env.generator.assert_not_awaited()
+    env.editor.assert_not_awaited()
 
 
 @pytest.fixture

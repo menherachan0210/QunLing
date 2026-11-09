@@ -13,6 +13,10 @@ from langbot_plugin.api.entities.builtin.platform.message import Image, MessageC
 
 from main import ImageGenerationError
 from pkg.image_context import remember_output
+from qunling.assets import AssetError
+from qunling.integration import query_context
+from qunling.image_access import ImageAccessDenied, ImageAccessError, require_allowed, request_scope
+from qunling.scope import Scope
 
 
 class Draw(Command):
@@ -24,10 +28,19 @@ class Draw(Command):
                 text="用法: !draw <描述>\n示例: !draw 一只坐在彩虹上的猫"
             )
             return
-        yield CommandReturn(text="正在生成图片，请稍候。")
         try:
-            result = await self.plugin.generate_image(" ".join(context.params))
-        except ImageGenerationError as exc:
+            trusted = await query_context(self.plugin, context)
+            require_allowed(Scope(**trusted["scope"]))
+            yield CommandReturn(text="正在生成图片，请稍候。")
+            # Commands bypass the chat model, but must share the same live ban
+            # and recheck it after any upstream resource queue wait.
+            with request_scope(trusted):
+                result = await self.plugin.generate_image(" ".join(context.params))
+        except ImageAccessDenied as exc:
+            reply = exc.result["reply"]
+            yield CommandReturn(text=reply.get("text", "生图资格都没了，还搁这儿点菜呢。"))
+            return
+        except (ImageGenerationError, ImageAccessError, AssetError) as exc:
             yield CommandReturn(text=str(exc))
             return
         try:

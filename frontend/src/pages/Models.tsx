@@ -14,6 +14,7 @@ import {
 import { api, client, errorText, uid, useData } from "../api";
 import { Reasoning } from "./Reasoning";
 import { Voice } from "./Voice";
+import { ImageAccess } from "./ImageAccess";
 import {
   Badge,
   Button,
@@ -153,6 +154,7 @@ export function Models({ active }: { active: boolean }) {
           ["models", "模型分工"],
           ["reasoning", "推理等级"],
           ["voice", "语音"],
+          ["image-access", "生图权限"],
           ["features", "功能能力"],
           ["parameters", "工具与上下文"],
           ["test", "连接测试"],
@@ -169,6 +171,8 @@ export function Models({ active }: { active: boolean }) {
       </div>
       {tab === "voice" ? (
         <Voice active={active} />
+      ) : tab === "image-access" ? (
+        <ImageAccess active={active} />
       ) : tab === "reasoning" ? (
         <>
           {(draft.dirty || keyDirty) && (

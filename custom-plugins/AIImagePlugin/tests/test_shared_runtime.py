@@ -57,9 +57,13 @@ def _binding(installation: str) -> InstallationBinding:
     )
 
 
-def _ctx(params: list[str]) -> SimpleNamespace:
+def _ctx(params: list[str], plugin, *, sender="10001") -> SimpleNamespace:
+    from qunling.integration import CONTEXT_KEY, descriptor
+    trusted = descriptor(plugin, SimpleNamespace(bot_uuid="bot", launcher_type="group",
+                         launcher_id="30001", sender_id=sender), "command-query")
     return SimpleNamespace(
-        params=params, reply=AsyncMock(), get_query_vars=AsyncMock(return_value={})
+        params=params, reply=AsyncMock(), query_uuid="command-query", get_bot_uuid=AsyncMock(return_value="bot"),
+        get_query_vars=AsyncMock(return_value={CONTEXT_KEY: trusted})
     )
 
 
@@ -102,7 +106,15 @@ def fake_openai(monkeypatch):
     module = types.ModuleType("openai")
     module.AsyncOpenAI = _AsyncOpenAI
     monkeypatch.setitem(sys.modules, "openai", module)
+    response_types = types.ModuleType("openai.types")
+    response_types.ImagesResponse = SimpleNamespace
+    monkeypatch.setitem(sys.modules, "openai.types", response_types)
     return created
+
+
+@pytest.fixture(autouse=True)
+def isolated_image_permissions(tmp_path, monkeypatch):
+    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path))
 
 
 @pytest.mark.asyncio
@@ -116,10 +128,10 @@ async def test_each_installation_uses_its_own_key_base_url_model_and_size(
     draw.plugin = plugin
 
     with bind_invocation(handler, config=CONFIG_A, binding=_binding("installation-a")):
-        ctx_a = _ctx(["a", "cat"])
+        ctx_a = _ctx(["a", "cat"], plugin)
         results_a = [item async for item in draw._execute(ctx_a)]
     with bind_invocation(handler, config=CONFIG_B, binding=_binding("installation-b")):
-        ctx_b = _ctx(["b", "dog"])
+        ctx_b = _ctx(["b", "dog"], plugin)
         results_b = [item async for item in draw._execute(ctx_b)]
 
     assert [(entry["api_key"], entry["base_url"]) for entry in fake_openai] == [
@@ -166,11 +178,47 @@ async def test_missing_key_reports_without_building_a_client(fake_openai) -> Non
 
     config = {"openai_api_key": "", "api_base_url": "https://a.example/v1"}
     with bind_invocation(handler, config=config, binding=_binding("installation-a")):
-        results = [item async for item in draw._execute(_ctx(["a", "cat"]))]
+        results = [item async for item in draw._execute(_ctx(["a", "cat"], plugin))]
 
     assert fake_openai == []
     assert "API Key" in results[-1].text
     assert results[-1].image_url is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode,text", [("persona", ""), ("text", "生图权限还没排到你呢。")])
+async def test_draw_command_cannot_bypass_member_bans(fake_openai, mode, text):
+    from qunling.proactive.config import ConfigStore, defaults
+    ConfigStore("bot").save({**defaults(), "image_access": {"blocked_members": [{
+        "user_id": "10001", "group_id": "30001", "note": "", "reply_mode": mode, "reply_text": text}]}}, set())
+    handler = SimpleNamespace()
+    plugin = AIImagePlugin()
+    plugin.plugin_runtime_handler = handler
+    draw = Draw()
+    draw.plugin = plugin
+    with bind_invocation(handler, config=CONFIG_A, binding=_binding("installation-a")):
+        ctx = _ctx(["a", "cat"], plugin)
+        results = [item async for item in draw._execute(ctx)]
+    assert fake_openai == []
+    ctx.reply.assert_not_awaited()
+    assert len(results) == 1
+    assert results[0].text == (text or "生图资格都没了，还搁这儿点菜呢。")
+
+
+@pytest.mark.asyncio
+async def test_draw_command_without_trusted_sender_never_submits(fake_openai):
+    handler = SimpleNamespace()
+    plugin = AIImagePlugin()
+    plugin.plugin_runtime_handler = handler
+    draw = Draw()
+    draw.plugin = plugin
+    with bind_invocation(handler, config=CONFIG_A, binding=_binding("installation-a")):
+        ctx = _ctx(["a", "cat"], plugin)
+        ctx.get_query_vars.return_value = {}
+        results = [item async for item in draw._execute(ctx)]
+    assert fake_openai == []
+    ctx.reply.assert_not_awaited()
+    assert "上下文" in results[-1].text
 
 
 def test_dedicated_config_without_an_invocation_is_still_used(fake_openai) -> None:

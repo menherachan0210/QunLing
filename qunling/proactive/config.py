@@ -49,13 +49,19 @@ def _text(value, limit, name, *, multiline=False):
 
 
 def validate(values: object) -> dict:
-    if (not isinstance(values, dict) or set(values) - {"default_style", "default_examples", "qq_actions"} != {"version", "revision", "enabled", "groups"}
+    if (not isinstance(values, dict) or set(values) - {"default_style", "default_examples", "qq_actions", "image_access"} != {"version", "revision", "enabled", "groups"}
             or type(values["version"]) is not int or values["version"] != 1
             or type(values["enabled"]) is not bool
             or not isinstance(values["revision"], str) or not REVISION.fullmatch(values["revision"])
             or not isinstance(values["groups"], dict) or len(values["groups"]) > MAX_GROUPS):
         raise ConfigError("invalid_config", "自由对话配置无效，最多保存 100 个群的设置。")
     result = {**values, "groups": {}}
+    if "image_access" in values:
+        from qunling.image_access import validate as validate_image_access
+        try:
+            result["image_access"] = validate_image_access(values["image_access"])
+        except ValueError as exc:
+            raise ConfigError("invalid_config", str(exc)) from None
     if "qq_actions" in values:
         actions = values["qq_actions"]
         if (not isinstance(actions, dict) or set(actions) != {"enabled", "owner_ids", "transcription_model"}
@@ -186,6 +192,8 @@ class ConfigStore:
                 # from one must not erase an administrator's default style.
                 if "default_style" not in candidate and "default_style" in current:
                     candidate["default_style"] = current["default_style"]
+                if "image_access" not in candidate and "image_access" in current:
+                    candidate["image_access"] = current["image_access"]
                 if "default_examples" not in candidate and "default_examples" in current:
                     candidate["default_examples"] = current["default_examples"]
                 if "qq_actions" not in candidate and "qq_actions" in current:

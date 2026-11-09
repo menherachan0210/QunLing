@@ -46,6 +46,41 @@ def response(**kwargs):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("edit", [False, True])
+@pytest.mark.parametrize("output", [None, {"output_format": "gif"}])
+async def test_ban_added_during_queue_wait_prevents_the_paid_post(monkeypatch, tmp_path, edit, output):
+    from contextlib import asynccontextmanager
+    from qunling.image_access import ImageAccessDenied, request_scope, require_current
+    from qunling.proactive.config import ConfigStore, defaults
+    from qunling.scope import Scope
+    import qunling.resource_gate as gate
+    monkeypatch.setenv("QUNLING_DATA_DIR", str(tmp_path))
+    plugin, client = plugin_with_client(monkeypatch, response(b64_json=PAYLOAD))
+    entered = []
+    @asynccontextmanager
+    async def queue(kind, **kwargs):
+        entered.append(kind)
+        # Edits have a download slot first, then the actual submission slot.
+        if len(entered) == (2 if edit else 1):
+            ConfigStore("bot").save({**defaults(), "image_access": {"blocked_members": [{
+                "user_id": "10001", "group_id": "", "note": "",
+                "reply_mode": "persona", "reply_text": ""}]}}, set())
+        yield
+    monkeypatch.setattr(gate, "resource_slot", queue)
+    with request_scope({"scope": Scope("workspace", "bot", "group:30001", "10001").as_dict()}):
+        with pytest.raises(ImageAccessDenied):
+            if edit:
+                await plugin.edit_image("make it blue", GeneratedImage(base64=DATA_URL), output=output)
+            else:
+                await plugin.generate_image("a cat", output=output)
+    assert len(entered) == (2 if edit else 1)
+    client.post.assert_not_awaited()
+    client.images.generate.assert_not_awaited()
+    client.close.assert_awaited_once()
+    require_current()
+
+
+@pytest.mark.asyncio
 async def test_generate_uses_exact_model_single_image_and_base64_contract(monkeypatch):
     plugin, client = plugin_with_client(monkeypatch, response(b64_json=PAYLOAD))
     result = await plugin.generate_image(" draw a cat ")

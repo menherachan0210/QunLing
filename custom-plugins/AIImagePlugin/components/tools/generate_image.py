@@ -12,6 +12,8 @@ from pkg.image_context import query_claim_lock, remember_output
 from pkg.media_output import prepare_context, finish_native, finish_asset, finish_static
 from pkg.output_options import output_options
 from qunling.assets import AssetError
+from qunling.image_access import ImageAccessDenied, ImageAccessError, require_allowed, request_scope
+from qunling.scope import Scope
 
 
 QUERY_STATE_KEY = "ai_image_plugin.generate_image.v1"
@@ -39,6 +41,8 @@ _STATE_MESSAGES = {
 
 def state_message(variables):
     state = variables.get(QUERY_STATE_KEY)
+    if state == "access_denied":
+        return variables.get(QUERY_STATE_KEY + ".denial", "本轮绘图已被管理员限制，未提交图片请求；不要改用其他生成工具。")
     message = _STATE_MESSAGES.get(state, GENERATING) if isinstance(state, str) else GENERATING
     ref = variables.get(QUERY_STATE_KEY + ".asset")
     if state in {"send_failed", "asset_saved"} and isinstance(ref, str):
@@ -86,17 +90,28 @@ class GenerateImage(Tool):
                 if QUERY_STATE_KEY in variables:
                     return state_message(variables)
                 context = await prepare_context(self.plugin, reply_api)
+                require_allowed(Scope(**context["scope"]))
                 # Persist before any billable request, including possible timeouts.
                 await reply_api.set_query_var(QUERY_STATE_KEY, "started")
+        except ImageAccessDenied as exc:
+            return await self._deny(reply_api, exc)
+        except ImageAccessError as exc:
+            return str(exc)
         except AssetError as exc:
             return str(exc)
         except Exception:
             return GUARD_UNAVAILABLE
 
         try:
-            result = await self.plugin.generate_image(prompt.strip(), **({"output": output} if output else {}))
+            with request_scope(context):
+                result = await self.plugin.generate_image(prompt.strip(), **({"output": output} if output else {}))
             if not result.base64 and not result.url:
                 raise ImageGenerationError("绘图服务未返回可发送的图片。")
+        except ImageAccessDenied as exc:
+            return await self._deny(reply_api, exc)
+        except ImageAccessError as exc:
+            await self._record_state(reply_api, "generation_failed")
+            return str(exc)
         except ImageGenerationError as exc:
             await self._record_state(reply_api, "generation_failed")
             return f"{exc} 请勿重复调用本工具。"
@@ -114,6 +129,16 @@ class GenerateImage(Tool):
         return await finish_static(self.plugin, reply_api, context, result, QUERY_STATE_KEY,
                                    sent_message=SENT, failed_message=SEND_FAILED,
                                    timeout=REPLY_TIMEOUT_SECONDS)
+
+    @staticmethod
+    async def _deny(reply_api, error):
+        response = error.response()
+        try:
+            await reply_api.set_query_var(QUERY_STATE_KEY + ".denial", response)
+            await reply_api.set_query_var(QUERY_STATE_KEY, "access_denied")
+        except Exception:
+            pass  # The live permission check still blocks every subsequent call.
+        return response
 
     @staticmethod
     async def _record_state(reply_api: QueryBasedAPIProxy, state: str) -> None:

@@ -26,6 +26,8 @@ from pkg.image_context import query_claim_lock, remember_output, select_image
 from pkg.media_output import prepare_context, finish_native, finish_asset, finish_static
 from pkg.output_options import output_options
 from qunling.assets import AssetError
+from qunling.image_access import ImageAccessDenied, ImageAccessError, require_allowed, request_scope
+from qunling.scope import Scope
 
 
 class EditImage(Tool):
@@ -68,6 +70,8 @@ class EditImage(Tool):
                     return GUARD_UNAVAILABLE
                 if QUERY_STATE_KEY in variables:
                     return state_message(variables)
+                context = await prepare_context(self.plugin, reply_api)
+                require_allowed(Scope(**context["scope"]))
                 if "asset_refs" in params:
                     from pkg.asset_input import select_assets
                     image = await select_assets(self.plugin, reply_api, params["asset_refs"])
@@ -84,8 +88,11 @@ class EditImage(Tool):
                     )
                 else:
                     image = select_image(self.plugin, variables)
-                context = await prepare_context(self.plugin, reply_api)
                 await reply_api.set_query_var(QUERY_STATE_KEY, "started")
+        except ImageAccessDenied as exc:
+            return await GenerateImage._deny(reply_api, exc)
+        except ImageAccessError as exc:
+            return str(exc)
         except ImageGenerationError as exc:
             return str(exc)
         except AssetError as exc:
@@ -94,9 +101,15 @@ class EditImage(Tool):
             return GUARD_UNAVAILABLE
 
         try:
-            result = await self.plugin.edit_image(prompt.strip(), image, **({"output": output} if output else {}))
+            with request_scope(context):
+                result = await self.plugin.edit_image(prompt.strip(), image, **({"output": output} if output else {}))
             if not result.base64 and not result.url:
                 raise ImageGenerationError("绘图服务未返回可发送的图片。")
+        except ImageAccessDenied as exc:
+            return await GenerateImage._deny(reply_api, exc)
+        except ImageAccessError as exc:
+            await GenerateImage._record_state(reply_api, "generation_failed")
+            return str(exc)
         except ImageGenerationError as exc:
             await GenerateImage._record_state(reply_api, "generation_failed")
             return f"{exc} 请勿重复调用本工具。"
