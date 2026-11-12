@@ -6,6 +6,8 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
+import re
 import time
 import uuid
 
@@ -52,6 +54,11 @@ class JobManager:
             PREFIX + job["scope"] + ".json",
             json.dumps(job, ensure_ascii=False).encode(),
         )
+        try:
+            from qunling.plugin_task_progress import publish_comic
+            await asyncio.to_thread(publish_comic, self.plugin, job)
+        except Exception:
+            logging.getLogger(__name__).warning('Comic task console snapshot unavailable')
 
     async def load(self, scope):
         if scope in self.jobs:
@@ -78,21 +85,43 @@ class JobManager:
         if time.time() - job["created"] > RETENTION:
             await self.delete(job)
             return None
-        if job["status"] in {"queued", "running"}:
+        if job["status"] in {"queued", "running", "downloading"}:
             job["status"] = "interrupted"
+            job["error_code"] = "service_interrupted"
             job["error"] = (
                 "服务重启或任务中断；已完成页保留，明确要求继续后再处理未完成页。"
             )
         if job.get("delivery") == "sending":
             job["delivery"] = "unknown"
         self.jobs[scope] = job
+        await self.save(job)
         return job
+
+    def download_path(self, job):
+        from qunling.assets import data_root
+        owner = job.get('download_owner', '')
+        if not re.fullmatch('[a-f0-9]{64}', owner) or not re.fullmatch('[a-f0-9]{32}', job['id']):
+            raise JobError('漫画下载缓存归属无效。')
+        root = data_root() / 'comic-downloads'
+        folder = root / owner
+        if root.is_symlink() or folder.is_symlink():
+            raise JobError('漫画下载缓存目录不可用。')
+        return folder / (job['id'] + '.part')
+
+    def clear_download(self, job):
+        if not job.get('download_owner'):
+            return
+        path = self.download_path(job)
+        for target in (path, path.with_suffix('.json'), path.with_suffix('.tmp')):
+            target.unlink(missing_ok=True)
 
     async def delete_archive(self, job):
         for i in range(job.get("chunks", 0)):
             await self.plugin.delete_plugin_storage(PREFIX + job["id"] + f".zip.{i}")
         job["chunks"] = 0
         job["archive_bytes"] = 0
+        job['reserved_bytes'] = 0
+        self.clear_download(job)
 
     async def delete(self, job):
         await self.delete_archive(job)
@@ -122,6 +151,7 @@ class JobManager:
         completed = sum(page.get("result") is not None for page in job["pages"])
         failed = sum(bool(page.get("error")) for page in job["pages"])
         return {
+            "task_id": job['id'],
             "status": job["status"],
             "archive": job["name"],
             "total_pages": len(job["pages"]),
@@ -129,28 +159,138 @@ class JobManager:
             "failed_pages": failed,
             "pending_pages": len(job["pages"]) - completed - failed,
             "format": "LabelPlus",
+            "downloaded_bytes": job.get('download', {}).get('received', 0),
+            "total_bytes": job.get('download', {}).get('total', 0),
             "delivery": job.get("delivery", "pending"),
             "error_code": job.get("error_code", ""),
             "error": "\n".join(
                 filter(None, [job.get("error", ""), job.get("delivery_error", "")])
             ),
-            "message": "请在本会话提供压缩包密码，随后使用 resume_comic_translation 的 password 参数继续；无需重新上传。"
+            "message": "已登记后台任务，正在下载压缩包，完成后自动翻译并发送 TXT。可查询下载进度或取消；不要重复导入、重传或另建翻译任务。"
+            if job['status'] == 'downloading' else
+            "请在本会话提供压缩包密码，随后使用 resume_comic_translation 的 password 参数继续；无需重新上传。"
             if job["status"] == "awaiting_password" else
             "任务在后台运行，完成后会回传 TXT。可随时询问翻译进度或取消。"
             if job["status"] in {"queued", "running"}
             else "",
         }
 
-    def launch(self, job, password=None):
+    async def start_download(self, session, attachment, model_uuid, *, password=None):
+        from pkg.attachment_context import _owner
+        from qunling.attachment_download import MAX_BYTES
+        password = validate_password(password)
+        identity = hashlib.sha256(json.dumps([attachment.file_id or attachment.url,
+            attachment.name, attachment.size], ensure_ascii=True).encode()).hexdigest()
+        scope = scope_key(session)
+        async with self.lock:
+            existing = await self.load(scope)
+            if scope in self.tasks and not self.tasks[scope].done():
+                return self.snapshot(existing)
+            if existing and existing.get('source_identity') == identity:
+                if existing['status'] in {'failed', 'interrupted', 'cancelled'} or (
+                        existing['status'] == 'awaiting_password' and password is not None):
+                    existing['source'] = {'file_id': attachment.file_id, 'url': attachment.url, 'size': attachment.size}
+                    return await self._resume(existing, password)
+                return self.snapshot(existing)
+            if sum(not t.done() for t in self.tasks.values()) >= MAX_ACTIVE:
+                raise JobError('已有两个漫画翻译任务运行，请稍后再试。')
+            inventory = await self.inventory()
+            if not existing and len(inventory) >= MAX_JOBS:
+                raise JobError('近期漫画任务已达到存储上限，请清理任务或等待七天到期。')
+            reservation = attachment.size or MAX_BYTES
+            if (sum(max(j.get('archive_bytes', 0), j.get('reserved_bytes', 0)) for j in inventory if j is not existing)
+                    + reservation > MAX_ARCHIVE_STORAGE):
+                raise JobError('漫画任务压缩包缓存已满，请删除不再需要的任务后重试。')
+            if existing:
+                await self.delete(existing)
+            target = {k: str(getattr(session, k)) for k in ('bot_uuid', 'chat_type', 'chat_id', 'sender_id')}
+            job = {'id': uuid.uuid4().hex, 'scope': scope, 'target': target,
+                   'name': attachment.name, 'created': time.time(), 'status': 'downloading', 'pages': [],
+                   'model_uuid': model_uuid, 'chunks': 0, 'archive_bytes': 0, 'reserved_bytes': reservation,
+                   'delivery': 'pending', 'delivery_error': '', 'error': '', 'error_code': '',
+                   'source_identity': identity, 'download_owner': _owner(self.plugin),
+                   'source': {'file_id': attachment.file_id, 'url': attachment.url, 'size': attachment.size},
+                   'download': {'received': 0, 'total': attachment.size}}
+            self.download_path(job)  # Validate persistent storage before promising a job.
+            await self.save(job)
+            self.jobs[scope] = job
+            self.launch(job, password, download=True)
+            return self.snapshot(job)
+
+    def launch(self, job, password=None, *, download=False):
         # The local SDK supplies a fresh, revocable installation-level lifetime.
         # Never use a finished QueryBasedAPIProxy in this task.
-        task = self.plugin.spawn_background(lambda: self.run(job, password), timeout=7200)
+        task = self.plugin.spawn_background(
+            lambda: self.download_and_run(job, password) if download else self.run(job, password), timeout=7200)
         self.tasks[job["scope"]] = task
         task.add_done_callback(
             lambda done: self.tasks.pop(job["scope"], None)
             if self.tasks.get(job["scope"]) is done
             else None
         )
+
+    async def download_and_run(self, job, password=None):
+        from qunling.attachment_download import download_file, DownloadError
+        try:
+            source = job['source']
+            url = source.get('url')
+            if source.get('file_id'):
+                target = job['target']
+                params = {'file_id': source['file_id']}
+                if target['chat_type'] == 'group':
+                    params['group_id'] = target['chat_id']
+                try:
+                    async with asyncio.timeout(15):
+                        value = await self.plugin.call_platform_api(target['bot_uuid'], 'call_platform_api', {
+                            'action': 'get_group_file_url' if target['chat_type'] == 'group' else 'get_private_file_url',
+                            'params': params})
+                    if isinstance(value, dict) and isinstance(value.get('url'), str) and value['url']:
+                        url = value['url']
+                except Exception:
+                    if not url:
+                        raise JobError('暂时无法取得 QQ 文件下载地址，请重新引用原文件后继续。') from None
+            if not url:
+                raise JobError('QQ 文件缺少下载地址，请重新引用原文件后继续。')
+
+            async def progress(received, total):
+                job['download'] = {'received': received, 'total': total}
+                await self.save(job)
+
+            path = await download_file(url, self.download_path(job), expected_size=source['size'], progress=progress,
+                                       immutable_id=source.get('file_id', ''))
+            raw = await asyncio.to_thread(path.read_bytes)
+            job['digest'] = hashlib.sha256(raw).hexdigest()
+            job['chunks'] = (len(raw) + CHUNK_SIZE - 1) // CHUNK_SIZE
+            job['archive_bytes'] = len(raw)
+            await self.save(job)
+            for i, offset in enumerate(range(0, len(raw), CHUNK_SIZE)):
+                await self.plugin.set_plugin_storage(PREFIX + job['id'] + f'.zip.{i}', raw[offset:offset + CHUNK_SIZE])
+            self.clear_download(job)
+            job['pages'] = await self._pages(raw, password)
+            del raw
+            job['status'] = 'queued'
+            await self.save(job)
+            await self.run(job, password)
+        except ArchivePasswordError as exc:
+            job.update(status='awaiting_password', error=str(exc), error_code=exc.code)
+            await self.save(job)
+            await self._download_notice(job, '漫画压缩包已下载，需要有效密码才能继续翻译；无需重新上传。')
+        except asyncio.CancelledError:
+            job.update(status='interrupted', error='任务已停止，下载进度已保留；可明确要求继续。', error_code='cancelled')
+            await self.save(job)
+            raise
+        except Exception as exc:
+            job.update(status='failed', error=str(exc) if isinstance(exc, (JobError, DownloadError, ArchiveError))
+                       else '漫画下载或读取失败，已保留任务，可查询进度后继续。',
+                       error_code=getattr(exc, 'code', 'download_failed'))
+            await self.save(job)
+            await self._download_notice(job, job['error'])
+
+    async def _download_notice(self, job, text):
+        try:
+            await self.send_notice(job, text)
+        except Exception:
+            pass
 
     async def start(self, session, attachment, raw, model_uuid, *, page_names=None, password=None):
         password = validate_password(password)
@@ -174,7 +314,7 @@ class JobManager:
             if not existing and len(jobs) >= MAX_JOBS:
                 raise JobError("近期漫画任务已达到存储上限，请清理任务或等待七天到期。")
             stored = sum(
-                item.get("archive_bytes", 0) for item in jobs if item is not existing
+                max(item.get("archive_bytes", 0), item.get('reserved_bytes', 0)) for item in jobs if item is not existing
             )
             if stored + len(raw) > MAX_ARCHIVE_STORAGE:
                 raise JobError("漫画任务压缩包缓存已满，请删除不再需要的任务后重试。")
@@ -246,6 +386,11 @@ class JobManager:
     async def _resume(self, job, password=None):
         if sum(not task.done() for task in self.tasks.values()) >= MAX_ACTIVE:
             raise JobError("已有两个漫画翻译任务运行，请稍后再试。")
+        if job.get('source') and (not job.get('chunks') or not job.get('pages') and job['status'] != 'awaiting_password'):
+            job.update(status='downloading', error='', error_code='', delivery='pending', delivery_error='')
+            await self.save(job)
+            self.launch(job, password, download=True)
+            return self.snapshot(job)
         raw = await self.raw_archive(job)
         try:
             pages = await self._pages(raw, password)

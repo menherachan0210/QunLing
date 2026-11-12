@@ -56,7 +56,24 @@ const phases: any = {
   sending: "发送回复",
   delivered: "发送已确认",
   ended: "处理结束",
+  downloading: "下载压缩包",
+  translating: "翻译漫画",
+  awaiting_password: "等待压缩包密码",
+  processing: "处理文件",
+  processed: "文件处理完成",
 };
+function taskProgress(r: any) {
+  if (r.stage === "downloading") {
+    const received = ((r.downloaded_bytes || 0) / 1048576).toFixed(1);
+    const total = r.total_bytes ? ` / ${(r.total_bytes / 1048576).toFixed(1)}` : "";
+    return `下载中 · ${received}${total} MiB`;
+  }
+  if (r.stage === "translating") return `翻译中 · ${r.completed_pages || 0} / ${r.total_pages || 0} 页`;
+  if (r.stage === "awaiting_password") return "文件已下载 · 等待密码";
+  if (r.delivery === "sent") return "文件已发送";
+  if (r.delivery === "unconfirmed") return "发送结果未确认";
+  return phases[r.stage] || statuses[r.status] || "等待处理";
+}
 export function Records({ active }: { active: boolean }) {
   const [tab, setTab] = useState("requests"),
     [group, setGroup] = useState(""),
@@ -80,10 +97,11 @@ export function Records({ active }: { active: boolean }) {
     selected && tab === "requests"
       ? "/api/requests?request_id=" + selected.request_id
       : "/api/tasks?task_id=" + (selected?.id || ""),
-    0,
+    selected ? 5000 : 0,
     active && !!selected,
   );
   const rows = records.data?.[tab] || [];
+  const detailStatus = (tab === "tasks" ? details.data?.tasks?.[0]?.status : details.data?.requests?.[0]?.status) || selected?.status;
   const change = (fn: () => void) => {
     fn();
     setCursor("");
@@ -225,11 +243,7 @@ export function Records({ active }: { active: boolean }) {
                   </td>
                   <td>
                     {tab === "tasks"
-                      ? r.delivery === "sent"
-                        ? "文件已发送"
-                        : r.delivery === "unconfirmed"
-                          ? "发送结果未确认"
-                          : "交付：" + (r.delivery || "尚未调度")
+                      ? taskProgress(r)
                       : phases[r.phase] || r.reason || "查看处理详情"}
                   </td>
                   <td>
@@ -281,8 +295,8 @@ export function Records({ active }: { active: boolean }) {
           <Notice>{errorText(details.error)}</Notice>
         ) : (
           <>
-            <Badge tone={selected?.status === "failed" ? "error" : "neutral"}>
-              {statuses[selected?.status] || selected?.status}
+            <Badge tone={detailStatus === "failed" ? "error" : "neutral"}>
+              {statuses[detailStatus] || detailStatus}
             </Badge>
             {tab === "requests" ? (
               <ol className="timeline">
@@ -310,6 +324,7 @@ export function Records({ active }: { active: boolean }) {
               </ol>
             ) : (
               <div className="detail-rows">
+                <div><span>当前进度</span><strong>{taskProgress(details.data?.tasks?.[0] || selected || {})}</strong></div>
                 {Object.entries(details.data?.tasks?.[0] || selected || {})
                   .filter(([k, v]) =>
                     [
@@ -337,7 +352,7 @@ export function Records({ active }: { active: boolean }) {
                           )[key]
                         }
                       </span>
-                      <strong>{String(value ?? "—")}</strong>
+                      <strong>{key === "status" ? statuses[String(value)] || String(value) : String(value ?? "—")}</strong>
                     </div>
                   ))}
               </div>

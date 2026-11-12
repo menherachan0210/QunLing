@@ -26,6 +26,10 @@ def env(monkeypatch):
             return "bot"
 
     class Manager:
+        async def start_download(self, session, attachment, model, *, password=None):
+            operations.append(('download', session, attachment, model))
+            return {'status': 'downloading', 'task_id': 'synthetic-task'}
+
         async def start(self, session, attachment, raw, model):
             operations.append(("start", session, attachment, raw, model))
             return {"status": "queued"}
@@ -70,6 +74,17 @@ async def test_start_binds_current_zip_and_no_model_supplied_scope(env):
     assert received == raw and model == "vision"
     assert session.sender_id == "456" and session.chat_id == "123"
     assert attachment.name == "fixture.zip"
+
+
+@pytest.mark.asyncio
+async def test_remote_archive_returns_registered_job_without_waiting_for_bytes(env):
+    tool, capture, operations = env
+    capture(File(id='trusted-file', name='fixture.zip', size=25124189, url='https://public.example/file'))
+    result = json.loads(await tools.execute(tool, 'start', {}, 1, None))
+    assert result['status'] == 'downloading' and result['task_id']
+    action, session, attachment, model = operations[0]
+    assert action == 'download' and session.sender_id == '456'
+    assert attachment.file_id == 'trusted-file' and model == 'vision'
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,11 @@
+diff --git a/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py b/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py
+--- a/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py
++++ b/src/langbot/pkg/platform/adapters/aiocqhttp/adapter.py
+@@ -107,5 +107,7 @@
+     async def _receive_event(self, payload):
+         from qunling.qq_recall import observe_native
++        from qunling.qq_mentions import normalize
++        payload = await normalize(self, payload)
+         observe_native(self, payload)
+         if payload.get('post_type') in {'notice', 'request'}:
+             from qunling.qq_operation_store import record_native

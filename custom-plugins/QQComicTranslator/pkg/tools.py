@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from langbot_plugin.api.proxies.query_based_api import QueryBasedAPIProxy
 
 from pkg.attachment_context import select_attachment, select_session
-from pkg.download import decode_inline, download
+from pkg.download import decode_inline
 from pkg.jobs import JobError
 from pkg.archive import validate_password
 
@@ -88,29 +88,10 @@ async def execute(tool, action, params, query_id, query_uuid):
                     "后台任务支持尚未安装，请应用本项目的 SDK 后台任务补丁。"
                 )
             attachment = select_attachment(tool.plugin, variables)
-            async with asyncio.timeout(75):
-                if attachment.inline:
-                    raw = decode_inline(attachment.inline)
-                else:
-                    url = attachment.url
-                    if not url:
-                        action_name = (
-                            "get_group_file_url"
-                            if attachment.chat_type == "group"
-                            else "get_private_file_url"
-                        )
-                        arguments = {"file_id": attachment.file_id}
-                        if attachment.chat_type == "group":
-                            arguments["group_id"] = attachment.chat_id
-                        result = await tool.plugin.call_platform_api(
-                            attachment.bot_uuid,
-                            "call_platform_api",
-                            {"action": action_name, "params": arguments},
-                        )
-                        url = result.get("url") if isinstance(result, dict) else None
-                        if not url:
-                            raise JobError("无法取得压缩包下载地址，请重新上传或引用。")
-                    raw = await download(url)
+            if not attachment.inline:
+                return json.dumps(await tool.plugin.jobs.start_download(
+                    session, attachment, model, password=password), ensure_ascii=False)
+            raw = decode_inline(attachment.inline)
             if attachment.size and len(raw) != attachment.size:
                 raise JobError("压缩包下载大小与附件信息不一致，请重新上传。")
             options = {"password": password} if password is not None else {}

@@ -6,6 +6,7 @@ class QQComicTranslator(BasePlugin):
         from pkg.jobs import JobManager
 
         self.jobs = JobManager(self)
+        await self.jobs.inventory()
 
     def capture_group_upload(self, bot_uuid, group_id, sender_id, file, **scope):
         from pkg.attachment_context import capture_group_upload

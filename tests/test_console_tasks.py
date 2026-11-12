@@ -42,6 +42,25 @@ def test_missing_store_read_does_not_create_database(tmp_path):
     assert not path.exists()
 
 
+def test_comic_download_is_visible_without_entering_file_scheduler(tmp_path):
+    from qunling.plugin_task_progress import publish
+    path = tmp_path / 'tasks.sqlite'
+    scope = Scope('workspace', 'bot', 'group:123', '456')
+    job = dict(id='a' * 32, status='downloading', created=1234, updated=1235, pages=[],
+               download={'received': 7000000, 'total': 25124189}, source={'url': 'private-signed-url'})
+    publish(path, scope, job)
+    result = listing(path, 'workspace', 'bot', parse_filters({}))
+    assert result['counts'] == {'running': 1}
+    assert result['tasks'][0]['stage'] == 'downloading'
+    assert result['tasks'][0]['downloaded_bytes'] == 7000000
+    assert 'private' not in json.dumps(result)
+    assert not listing(path, 'workspace', 'other', parse_filters({}))['tasks']
+    store = TaskStore(path)
+    assert store.scopes() == []
+    store.create(scope, 'processing', 'private-goal', 'request')
+    assert len(listing(path, 'workspace', 'bot', parse_filters({}))['tasks']) == 2
+
+
 @pytest.mark.asyncio
 async def test_host_requires_resource_permission_before_read(monkeypatch):
     from langbot.pkg.api.http import authz

@@ -44,14 +44,22 @@ def listing(path, workspace, bot, filters, *, now=None):
     with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=1)) as db:
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA query_only=ON')
-        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ql_tasks'").fetchone():
+        sources = []
+        columns = 'id,scope_key,scope_json,kind,status,created_at,updated_at,attempts,max_attempts,deadline_at,retry_at,error_code,checkpoint,result_refs'
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ql_tasks'").fetchone():
+            sources.append('SELECT ' + columns + ' FROM ql_tasks')
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ql_plugin_jobs'").fetchone():
+            sources.append("SELECT id,scope_key,scope_json,kind,status,created_at,updated_at,1 AS attempts,"
+                           "1 AS max_attempts,NULL AS deadline_at,NULL AS retry_at,error_code,checkpoint,'[]' AS result_refs FROM ql_plugin_jobs")
+        if not sources:
             return empty
+        source = '(' + ' UNION ALL '.join(sources) + ')'
         base = "json_extract(scope_json,'$.workspace_id')=? AND json_extract(scope_json,'$.bot_id')=?"
         args = [workspace, bot]
         if filters.get('group'):
             base += " AND json_extract(scope_json,'$.conversation_id')=?"
             args.append('group:' + filters['group'])
-        counts = {row[0]: row[1] for row in db.execute(f'SELECT status,count(*) FROM ql_tasks WHERE {base} GROUP BY status', args)}
+        counts = {row[0]: row[1] for row in db.execute(f'SELECT status,count(*) FROM {source} WHERE {base} GROUP BY status', args)}
         where, params = base, list(args)
         for field, column in [('status', 'status'), ('task_id', 'id')]:
             if filters.get(field):
@@ -61,7 +69,7 @@ def listing(path, workspace, bot, filters, *, now=None):
             timestamp, identifier = _cursor(filters['before'])
             where += ' AND (created_at<? OR (created_at=? AND id<?))'
             params += [timestamp, timestamp, identifier]
-        rows = db.execute(f'SELECT * FROM ql_tasks WHERE {where} ORDER BY created_at DESC,id DESC LIMIT ?',
+        rows = db.execute(f'SELECT * FROM {source} WHERE {where} ORDER BY created_at DESC,id DESC LIMIT ?',
                           [*params, filters['limit'] + 1]).fetchall()
         more, rows = len(rows) > filters['limit'], rows[:filters['limit']]
         has_outbox = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ql_file_outbox'").fetchone()
@@ -72,12 +80,19 @@ def listing(path, workspace, bot, filters, *, now=None):
             delivery = db.execute('SELECT state,error_code,updated FROM ql_file_outbox WHERE task_id=? AND scope_key=? ORDER BY created DESC,id DESC LIMIT 1',
                                   (row['id'], row['scope_key'])).fetchone() if has_outbox else None
             item = {key: row[key] for key in ('id', 'status', 'created_at', 'updated_at', 'attempts', 'max_attempts', 'deadline_at', 'retry_at', 'error_code')}
-            item.update(conversation=scope['conversation_id'], actor=scope['actor_id'],
-                        stage=checkpoint.get('stage') if checkpoint.get('stage') in {'processing', 'processed'} else '',
+            item.update(conversation=scope['conversation_id'], actor=scope['actor_id'], kind=row['kind'],
+                        stage=checkpoint.get('stage') if checkpoint.get('stage') in {
+                            'processing', 'processed', 'downloading', 'translating', 'awaiting_password',
+                            'queued', 'interrupted', 'completed', 'failed', 'partial', 'cancelled'} else '',
                         result_count=len(json.loads(row['result_refs'])),
-                        delivery=delivery['state'] if delivery else 'not_scheduled',
+                        delivery=delivery['state'] if delivery else checkpoint.get('delivery', 'not_scheduled')
+                            if checkpoint.get('delivery') in {'pending', 'sending', 'sent', 'unconfirmed'} else 'not_scheduled',
                         delivery_error=delivery['error_code'] if delivery else None,
                         elapsed_seconds=round(max(0, (row['updated_at'] if row['status'] in {'completed', 'failed', 'cancelled'} else now) - row['created_at']), 1))
+            if row['kind'] == 'comic_translation':
+                for field in ('downloaded_bytes', 'total_bytes', 'completed_pages', 'total_pages'):
+                    value = checkpoint.get(field, 0)
+                    item[field] = value if type(value) is int and 0 <= value <= 40 * 1024 * 1024 else 0
             tasks.append(item)
         return dict(available=True, tasks=tasks, counts=counts, sampled_at=now,
                     next_before=f"{rows[-1]['created_at']}:{rows[-1]['id']}" if more else None)

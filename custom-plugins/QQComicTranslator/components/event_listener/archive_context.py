@@ -24,6 +24,8 @@ TOOL_GUIDANCE = (
     "再用 start_comic_from_assets({asset_refs:[...]}) 开始生成 LabelPlus；共享压缩包资产也可用此入口。"
     "引用未解析时先用群聊图片/上下文工具定位确切原图，不能猜测或用其他近期图片替代。"
     "查询进度使用 comic_translation_status({})；续做使用 resume_comic_translation({})；"
+    "downloading 表示任务已登记并正在后台下载，会自动开始翻译；不能当作未触发或失败，不能另开导入或要求重传。"
+    "慢速下载可能需要数分钟，按实际字节进度回答；下载中断后可续传，不需要重新上传。"
     "取消使用 cancel_comic_translation({})。不需要固定触发措辞。"
     "ZIP（含 AES）、RAR、7z 支持提供密码解压：开始或续做时可传 password，不能声称工具不支持加密包。"
     "用户只补充‘密码是…’时，先查看其本会话任务状态；若等待密码，用 resume_comic_translation({password:用户提供的密码}) 继续，"

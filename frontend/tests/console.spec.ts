@@ -3,6 +3,26 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/#token=offline-console-test");
   await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
 });
+
+test("comic download progress is visible and the open task follows completion", async ({ page }) => {
+  let complete = false;
+  await page.route("**/api/tasks?*", async (route) => {
+    await route.fulfill({ json: { tasks: [{
+      id: "c".repeat(32), kind: "comic_translation", conversation: "group:30001", actor: "10001",
+      status: complete ? "completed" : "running", stage: complete ? "completed" : "downloading",
+      downloaded_bytes: 8 * 1048576, total_bytes: 24 * 1048576,
+      delivery: complete ? "sent" : "pending", created_at: Date.now() / 1000 - 65,
+    }], next_before: null } });
+  });
+  await page.getByRole("link", { name: "任务与记录" }).click();
+  await page.getByRole("button", { name: "后台文件任务", exact: true }).click();
+  await expect(page.locator("tbody")).toContainText("下载中 · 8.0 / 24.0 MiB");
+  await page.locator("tbody tr").first().click();
+  await expect(page.getByRole("dialog")).toContainText("下载中 · 8.0 / 24.0 MiB");
+  complete = true;
+  await expect(page.getByRole("dialog").getByText("已完成", { exact: true }).first()).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole("dialog").getByText("文件已发送", { exact: true })).toBeVisible();
+});
 test("login exchanges the link, persists a cookie and supports explicit logout", async ({
   page,
   context,

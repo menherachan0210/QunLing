@@ -66,6 +66,7 @@ PATCHES = (
     ("host-message-recall.patch", "host", False),
     ("host-qq-task-isolation.patch", "host", False),
     ("host-voice.patch", "host", False),
+    ("host-qq-display-mention.patch", "host", False),
     ("sdk-image-tool-timeout.patch", "sdk", False),
     ("sdk-dedicated-background.patch", "sdk", False),
     ("sdk-windows-dependency-temp.patch", "sdk", True),

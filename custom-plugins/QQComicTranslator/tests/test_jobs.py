@@ -164,6 +164,97 @@ async def test_background_output_preserves_sender_target_and_no_duplicate_billin
 
 
 @pytest.mark.asyncio
+async def test_download_registers_before_network_deduplicates_and_finishes(env, monkeypatch, tmp_path):
+    from qunling import attachment_download
+    from pkg.attachment_context import Attachment
+    plugin, manager, session, translated = env
+    monkeypatch.setenv('QUNLING_DATA_DIR', str(tmp_path))
+    started, release = asyncio.Event(), asyncio.Event()
+    raw = archive_bytes()
+    downloads = []
+
+    async def download(url, path, *, expected_size, progress, immutable_id):
+        downloads.append(url)
+        await progress(7, expected_size)
+        started.set()
+        await release.wait()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        await progress(len(raw), len(raw))
+        return path
+
+    monkeypatch.setattr(attachment_download, 'download_file', download)
+    source = Attachment('bot', 'group', '123', '456', 'file-id', 'original.zip', len(raw), 'https://public.example/file')
+    result = await manager.start_download(session, source, 'vision')
+    assert result['status'] == 'downloading' and result['task_id']
+    await started.wait()
+    status = await manager.operate(session, 'status')
+    assert status['downloaded_bytes'] == 7 and not translated
+    again = await manager.start_download(session, source, 'vision')
+    assert again['task_id'] == result['task_id'] and len(downloads) == 1
+    release.set()
+    await manager.tasks[scope_key(session)]
+    assert (await manager.operate(session, 'status'))['status'] == 'completed'
+    assert translated == [0, 1] and len(plugin.sends) == 1
+    assert (await manager.start_download(session, source, 'vision'))['status'] == 'completed'
+    assert len(downloads) == 1 and not list(tmp_path.glob('comic-downloads/**/*.part'))
+
+
+@pytest.mark.asyncio
+async def test_cancelled_download_is_owned_and_resumes_after_restart(env, monkeypatch, tmp_path):
+    from qunling import attachment_download
+    from pkg.attachment_context import Attachment
+    plugin, manager, session, translated = env
+    monkeypatch.setenv('QUNLING_DATA_DIR', str(tmp_path))
+    started = asyncio.Event()
+    raw = archive_bytes()
+    attempts = []
+
+    async def download(url, path, *, expected_size, progress, immutable_id):
+        attempts.append(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if len(attempts) == 1:
+            path.write_bytes(raw[:7])
+            await progress(7, expected_size)
+            started.set()
+            await asyncio.Event().wait()
+        assert path.read_bytes() == raw[:7]
+        path.write_bytes(raw)
+        return path
+
+    monkeypatch.setattr(attachment_download, 'download_file', download)
+    source = Attachment('bot', 'group', '123', '456', 'file-id', 'original.zip', len(raw), 'https://public.example/file')
+    await manager.start_download(session, source, 'vision')
+    await started.wait()
+    stopped = await manager.operate(session, 'cancel')
+    assert stopped['status'] == 'interrupted' and not translated
+    fresh = JobManager(plugin)
+    other = SimpleNamespace(**{**vars(session), 'sender_id': '789'})
+    assert (await fresh.operate(other, 'resume'))['status'] == 'missing'
+    result = await fresh.operate(session, 'resume')
+    assert result['status'] == 'downloading'
+    await fresh.tasks[scope_key(session)]
+    assert attempts[0] == attempts[1] and translated == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_download_failure_keeps_visible_job_without_translation(env, monkeypatch, tmp_path):
+    from qunling import attachment_download
+    from pkg.attachment_context import Attachment
+    plugin, manager, session, translated = env
+    monkeypatch.setenv('QUNLING_DATA_DIR', str(tmp_path))
+    async def fail(*args, **kwargs):
+        raise attachment_download.DownloadError('download_timeout', '下载进度已保留')
+    monkeypatch.setattr(attachment_download, 'download_file', fail)
+    source = Attachment('bot', 'group', '123', '456', 'file-id', 'original.zip', 100, 'https://public.example/file')
+    result = await manager.start_download(session, source, 'vision')
+    await manager.tasks[scope_key(session)]
+    status = await manager.operate(session, 'status')
+    assert status['status'] == 'failed' and status['task_id'] == result['task_id']
+    assert status['error_code'] == 'download_timeout' and not translated
+
+
+@pytest.mark.asyncio
 async def test_partial_resume_only_failed_pages(env, monkeypatch):
     plugin, manager, session, calls = env
     original = jobs.translate_page

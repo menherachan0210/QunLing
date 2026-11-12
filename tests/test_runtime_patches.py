@@ -344,7 +344,8 @@ def test_patch_allowlist_excludes_plugin_source_patches():
     assert ("sdk-quote-text.patch", "sdk", False) in patcher.PATCHES
     assert ("host-model-media-budget.patch", "host", False) in patcher.PATCHES
     assert ("host-thinking-visibility.patch", "host", False) in patcher.PATCHES
-    assert len(names) == 50
+    assert ("host-qq-display-mention.patch", "host", False) in patcher.PATCHES
+    assert len(names) == 51
     assert 'host-voice.patch' in names
     assert "host-qq-task-isolation.patch" in names
     assert "host-model-usage.patch" in names
